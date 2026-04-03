@@ -186,48 +186,103 @@ function saveTerminalPref(val) {
   localStorage.setItem('codedash-terminal', val);
 }
 
+// ── Trigram search ─────────────────────────────────────────────
+
+function trigrams(str) {
+  var s = '  ' + str.toLowerCase() + '  ';
+  var t = {};
+  for (var i = 0; i < s.length - 2; i++) {
+    var tri = s.substring(i, i + 3);
+    t[tri] = (t[tri] || 0) + 1;
+  }
+  return t;
+}
+
+function trigramScore(query, text) {
+  if (!query || !text) return 0;
+  var qt = trigrams(query);
+  var tt = trigrams(text);
+  var matches = 0;
+  var total = 0;
+  for (var k in qt) {
+    total += qt[k];
+    if (tt[k]) matches += Math.min(qt[k], tt[k]);
+  }
+  return total > 0 ? matches / total : 0;
+}
+
+function searchScore(query, session) {
+  var q = query.toLowerCase();
+  var fields = [
+    session.first_message || '',
+    session.project_short || '',
+    session.project || '',
+    session.id || '',
+    session.tool || ''
+  ];
+  var haystack = fields.join(' ').toLowerCase();
+
+  // Exact substring match = highest score
+  if (haystack.indexOf(q) >= 0) return 1;
+
+  // Trigram fuzzy match
+  var best = 0;
+  for (var i = 0; i < fields.length; i++) {
+    var score = trigramScore(q, fields[i]);
+    if (score > best) best = score;
+  }
+  // Also score against full haystack
+  var fullScore = trigramScore(q, haystack);
+  if (fullScore > best) best = fullScore;
+
+  return best;
+}
+
 // ── Filtering ──────────────────────────────────────────────────
 
-function applyFilters() {
-  filteredSessions = allSessions.filter(function(s) {
-    // Tool filter
-    if (toolFilter && s.tool !== toolFilter) return false;
+var SEARCH_THRESHOLD = 0.3;
 
-    // Search
-    if (searchQuery) {
-      var q = searchQuery.toLowerCase();
-      var haystack = (
-        (s.first_message || '') + ' ' +
-        (s.project || '') + ' ' +
-        (s.project_short || '') + ' ' +
-        (s.id || '') + ' ' +
-        (s.tool || '')
-      ).toLowerCase();
-      if (haystack.indexOf(q) === -1) return false;
-    }
+function applyFilters() {
+  var scored = [];
+  for (var i = 0; i < allSessions.length; i++) {
+    var s = allSessions[i];
+
+    // Tool filter
+    if (toolFilter && s.tool !== toolFilter) continue;
 
     // Tag filter
     if (tagFilter) {
       var sessionTags = tags[s.id] || [];
-      if (sessionTags.indexOf(tagFilter) === -1) return false;
+      if (sessionTags.indexOf(tagFilter) === -1) continue;
     }
 
     // Date range
-    if (dateFrom && s.date < dateFrom) return false;
-    if (dateTo && s.date > dateTo) return false;
+    if (dateFrom && s.date < dateFrom) continue;
+    if (dateTo && s.date > dateTo) continue;
 
-    return true;
-  });
+    // Search with trigram scoring
+    var score = 1;
+    if (searchQuery) {
+      score = searchScore(searchQuery, s);
+      if (score < SEARCH_THRESHOLD) continue;
+    }
 
-  // Starred sessions first
-  filteredSessions.sort(function(a, b) {
-    var aStarred = stars.indexOf(a.id) >= 0 ? 1 : 0;
-    var bStarred = stars.indexOf(b.id) >= 0 ? 1 : 0;
+    scored.push({ session: s, score: score });
+  }
+
+  // Sort: starred first, then by search score (if searching), then by time
+  scored.sort(function(a, b) {
+    var aStarred = stars.indexOf(a.session.id) >= 0 ? 1 : 0;
+    var bStarred = stars.indexOf(b.session.id) >= 0 ? 1 : 0;
     if (aStarred !== bStarred) return bStarred - aStarred;
-    return b.last_ts - a.last_ts;
+    if (searchQuery && a.score !== b.score) return b.score - a.score;
+    return b.session.last_ts - a.session.last_ts;
   });
+
+  filteredSessions = scored.map(function(x) { return x.session; });
 
   render();
+
 }
 
 function onSearch(val) {

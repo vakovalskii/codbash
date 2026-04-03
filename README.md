@@ -1,64 +1,71 @@
-# claude-sessions-dash
+# CodeDash
 
-Termius-style browser dashboard for your Claude Code (and Codex) sessions.
-
+Browser dashboard for Claude Code & Codex sessions. View, search, resume, and manage all your AI coding sessions.
 
 https://github.com/user-attachments/assets/15c45659-365b-49f8-86a3-9005fa155ca6
 
-
-![Dashboard](https://img.shields.io/badge/UI-Dark%20Theme-1a1d23?style=flat-square) ![Node](https://img.shields.io/badge/node-%3E%3D16-green?style=flat-square) ![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)
+![npm](https://img.shields.io/npm/v/codedash-app?style=flat-square) ![Node](https://img.shields.io/badge/node-%3E%3D16-green?style=flat-square) ![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)
 
 ## Quick Start
 
 ```bash
-npx claude-sessions-dash
+npx codedash-app run
 ```
 
-Opens `http://localhost:3847` with your sessions dashboard.
-
-Custom port:
+Opens `http://localhost:3847` in your browser.
 
 ```bash
-npx claude-sessions-dash 4000
+npx codedash-app run --port=4000    # custom port
+npx codedash-app run --no-browser   # don't auto-open
+npx codedash-app list               # list sessions in terminal
+npx codedash-app stats              # show statistics
 ```
 
 ## Features
 
 **Sessions**
-- View all Claude Code and Codex sessions in a card grid
-- Group by project, view as timeline, or filter by tool
-- Full-text search across session names and projects
-- Preview conversation history in a side panel
+- Grid and List view with project grouping
+- Trigram fuzzy search across session content and projects
+- Filter by tool (Claude/Codex), tags, date range
+- Star/pin important sessions (always shown first)
+- Tag sessions: bug, feature, research, infra, deploy, review
+- Activity heatmap (GitHub-style)
+- Cost estimation per session
 
 **Launch**
-- Resume any session directly in your terminal (iTerm2, Terminal.app, Warp, Kitty, Alacritty)
-- One-click launch with `--dangerously-skip-permissions` option
+- Resume sessions in iTerm2, Terminal.app, Warp, Kitty, Alacritty
 - Auto `cd` into the correct project directory
 - Copy resume command to clipboard
 - Terminal preference saved between sessions
 
 **Manage**
 - Delete sessions (file + history + env cleanup)
-- Confirmation dialog to prevent accidents
-- Refresh data without restarting
+- Bulk select and delete
+- Export conversations as Markdown
+- Related git commits shown per session
+- Auto-update notifications
+
+**Themes**
+- Dark (default), Light, System
 
 **Keyboard Shortcuts**
-- `/` — Focus search
-- `Escape` — Close panels
+- `/` focus search, `j/k` navigate, `Enter` open
+- `x` star, `d` delete, `s` select mode, `g` toggle groups
+- `r` refresh, `Escape` close panels
 
 ## How It Works
 
-Reads session data from `~/.claude/`:
-- `history.jsonl` — session index with timestamps and projects
-- `projects/*/\<session-id\>.jsonl` — full conversation data
-- `session-env/` — session environment files
+Reads session data from `~/.claude/` and `~/.codex/`:
+- `history.jsonl` — session index
+- `projects/*/<session-id>.jsonl` — conversation data
+- `sessions/` — Codex session files
 
-Zero dependencies. Single Node.js file. Everything runs on `localhost`.
+Zero dependencies. Everything runs on `localhost`.
 
 ## Requirements
 
 - Node.js >= 16
-- Claude Code installed (`~/.claude/` directory exists)
+- Claude Code or Codex CLI installed
 - macOS / Linux / Windows
 
 ## License
