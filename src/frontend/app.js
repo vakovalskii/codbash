@@ -1744,6 +1744,59 @@ function focusSession(sessionId) {
   });
 }
 
+// ── Install agents ────────────────────────────────────────────
+
+var AGENT_INSTALL = {
+  claude: {
+    name: 'Claude Code',
+    cmd: 'curl -fsSL https://claude.ai/install.sh | bash',
+    alt: 'npm i -g @anthropic-ai/claude-code',
+    url: 'https://code.claude.com',
+  },
+  codex: {
+    name: 'Codex CLI',
+    cmd: 'npm i -g @openai/codex',
+    alt: 'brew install --cask codex',
+    url: 'https://github.com/openai/codex',
+  },
+  kiro: {
+    name: 'Kiro CLI',
+    cmd: 'curl -fsSL https://kiro.dev/install.sh | bash',
+    alt: null,
+    url: 'https://kiro.dev/cli/',
+  },
+  opencode: {
+    name: 'OpenCode',
+    cmd: 'curl -fsSL https://opencode.ai/install | bash',
+    alt: 'npm i -g opencode-ai@latest',
+    url: 'https://opencode.ai',
+  },
+};
+
+function installAgent(agent) {
+  var info = AGENT_INSTALL[agent];
+  if (!info) return;
+
+  var overlay = document.getElementById('confirmOverlay');
+  document.getElementById('confirmTitle').textContent = 'Install ' + info.name;
+  var html = '<code style="display:block;margin:8px 0;padding:10px;background:var(--bg-card);border-radius:6px;font-size:13px;cursor:pointer" onclick="navigator.clipboard.writeText(\'' + info.cmd.replace(/'/g, "\\'") + '\');document.querySelector(\'#toast\').textContent=\'Copied!\';document.querySelector(\'#toast\').classList.add(\'show\');setTimeout(function(){document.querySelector(\'#toast\').classList.remove(\'show\')},1500)">' + escHtml(info.cmd) + '</code>';
+  if (info.alt) {
+    html += '<span style="font-size:11px;color:var(--text-muted)">or: <code>' + escHtml(info.alt) + '</code></span><br>';
+  }
+  html += '<br><a href="' + info.url + '" target="_blank" style="color:var(--accent-blue);font-size:12px">' + info.url + '</a>';
+  document.getElementById('confirmText').innerHTML = html;
+  document.getElementById('confirmId').textContent = '';
+  document.getElementById('confirmAction').textContent = 'Copy Install Command';
+  document.getElementById('confirmAction').className = 'launch-btn btn-primary';
+  document.getElementById('confirmAction').onclick = function() {
+    navigator.clipboard.writeText(info.cmd).then(function() {
+      showToast('Copied: ' + info.cmd);
+    });
+    closeConfirm();
+  };
+  if (overlay) overlay.style.display = 'flex';
+}
+
 // ── Export/Import dialog ──────────────────────────────────────
 
 function showExportDialog() {
