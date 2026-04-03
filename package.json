@@ -1,6 +1,6 @@
 {
   "name": "codedash-app",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "description": "Termius-style browser dashboard for Claude Code sessions. View, search, resume, and delete sessions with a dark-themed UI.",
   "bin": {
     "codedash": "./bin/cli.js"

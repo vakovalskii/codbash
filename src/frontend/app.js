@@ -209,19 +209,46 @@ async function pollActiveSessions() {
         activeSessions[a.sessionId] = a;
       }
     });
-    // Update badges without full re-render
+    // Update badges + animated border wrappers
     document.querySelectorAll('.card').forEach(function(card) {
       var id = card.getAttribute('data-id');
+
+      // Remove old badge
       var existing = card.querySelector('.live-badge');
       if (existing) existing.remove();
+
+      // Remove old wrapper if session no longer active
+      var parent = card.parentElement;
+      if (parent && parent.classList.contains('card-live-wrap') && !activeSessions[id]) {
+        parent.replaceWith(card);
+        card.style.border = '';
+        return;
+      }
+
       if (activeSessions[id]) {
         var a = activeSessions[id];
+
+        // Add badge
         var badge = document.createElement('span');
         badge.className = 'live-badge live-' + a.status;
         badge.textContent = a.status === 'waiting' ? 'WAITING' : 'LIVE';
         badge.title = 'PID ' + a.pid + ' | CPU ' + a.cpu.toFixed(1) + '% | ' + a.memoryMB + 'MB';
         var top = card.querySelector('.card-top');
         if (top) top.insertBefore(badge, top.firstChild);
+
+        // Add animated border wrapper if not already wrapped
+        if (!parent || !parent.classList.contains('card-live-wrap')) {
+          var wrap = document.createElement('div');
+          wrap.className = 'card-live-wrap' + (a.status === 'waiting' ? ' live-waiting' : '');
+          wrap.style.setProperty('--live-color', a.status === 'waiting'
+            ? 'rgba(251, 191, 36, 0.5)'
+            : 'rgba(74, 222, 128, 0.7)');
+          var borderDiv = document.createElement('div');
+          borderDiv.className = 'live-border';
+          card.parentNode.insertBefore(wrap, card);
+          wrap.appendChild(borderDiv);
+          wrap.appendChild(card);
+        }
       }
     });
   } catch {}
