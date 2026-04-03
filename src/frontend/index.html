@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>codedash</title>
+<style>{{STYLES}}</style>
+</head>
+<body>
+
+<div class="sidebar">
+    <div class="sidebar-brand">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+        codedash
+    </div>
+    <div class="sidebar-item active" data-view="sessions">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        All Sessions
+    </div>
+    <div class="sidebar-item" data-view="projects">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
+        Projects
+    </div>
+    <div class="sidebar-item" data-view="timeline">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        Timeline
+    </div>
+    <div class="sidebar-item" data-view="activity">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><rect x="7" y="7" width="3" height="3"/><rect x="14" y="7" width="3" height="3"/><rect x="7" y="14" width="3" height="3"/><rect x="14" y="14" width="3" height="3"/></svg>
+        Activity
+    </div>
+    <div class="sidebar-item" data-view="starred">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+        Starred
+    </div>
+    <div class="sidebar-divider"></div>
+    <div class="sidebar-section">Tools</div>
+    <div class="sidebar-item" data-view="claude-only">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+        Claude Code
+    </div>
+    <div class="sidebar-item" data-view="codex-only">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+        Codex
+    </div>
+    <div class="sidebar-settings">
+        <label>Terminal</label>
+        <select id="terminalSelect" onchange="saveTerminalPref(this.value)">
+            <option value="">Loading...</option>
+        </select>
+        <label>Theme</label>
+        <select id="themeSelect" onchange="saveThemePref(this.value)">
+            <option value="dark">Dark</option>
+            <option value="light">Light</option>
+            <option value="system">System</option>
+        </select>
+    </div>
+</div>
+
+<div class="main">
+    <div class="toolbar">
+        <input type="text" class="search-box" placeholder="Search sessions, projects... (press /)" oninput="onSearch(this.value)">
+        <select id="tagFilter" class="toolbar-btn" onchange="onTagFilter(this.value)">
+            <option value="">All Tags</option>
+            <option value="bug">bug</option>
+            <option value="feature">feature</option>
+            <option value="research">research</option>
+            <option value="infra">infra</option>
+            <option value="deploy">deploy</option>
+            <option value="review">review</option>
+        </select>
+        <input type="date" class="date-input" id="dateFrom" onchange="onDateFilter()" title="From date">
+        <input type="date" class="date-input" id="dateTo" onchange="onDateFilter()" title="To date">
+        <button class="toolbar-btn" onclick="toggleGroup()" id="groupBtn">Group</button>
+        <button class="toolbar-btn" onclick="toggleSelectMode()" id="selectBtn">Select</button>
+        <button class="toolbar-btn" onclick="refreshData()">Refresh</button>
+        <span class="stats" id="stats"></span>
+    </div>
+    <div class="content" id="content"></div>
+</div>
+
+<div class="overlay" id="overlay" onclick="closeDetail()"></div>
+<div class="detail-panel" id="detailPanel">
+    <div class="detail-header">
+        <strong id="detailTitle">Session Detail</strong>
+        <button class="detail-close" onclick="closeDetail()">&times;</button>
+    </div>
+    <div class="detail-body" id="detailBody"></div>
+</div>
+
+<div class="confirm-overlay" id="confirmOverlay">
+    <div class="confirm-box">
+        <h3 id="confirmTitle">Delete Session?</h3>
+        <p id="confirmText">This will permanently delete the session file and remove it from history.</p>
+        <div class="confirm-id" id="confirmId"></div>
+        <div class="confirm-btns">
+            <button class="btn-cancel" onclick="closeConfirm()">Cancel</button>
+            <button class="btn-delete" id="confirmAction" onclick="confirmDelete()">Delete</button>
+        </div>
+    </div>
+</div>
+
+<div class="bulk-bar" id="bulkBar" style="display:none">
+    <span id="bulkCount">0 selected</span>
+    <button class="launch-btn btn-delete" onclick="bulkDelete()">Delete Selected</button>
+    <button class="launch-btn btn-secondary" onclick="clearSelection()">Cancel</button>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>{{SCRIPT}}</script>
+</body>
+</html>
