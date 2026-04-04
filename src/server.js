@@ -27,17 +27,19 @@ function startServer(port, openBrowser = true) {
     else if (req.method === 'GET' && pathname.startsWith('/api/session/') && !pathname.includes('/export')) {
       const sessionId = pathname.split('/').pop();
       const project = parsed.searchParams.get('project') || '';
-      const data = loadSessionDetail(sessionId, project);
+      const tool = parsed.searchParams.get('tool') || '';
+      const data = loadSessionDetail(sessionId, project, tool);
       json(res, data);
     }
 
     // ── Export Markdown ─────────────────────
     else if (req.method === 'GET' && pathname.includes('/export')) {
-      // /api/session/<id>/export?project=...
+      // /api/session/<id>/export?project=...&tool=...
       const parts = pathname.split('/');
       const sessionId = parts[parts.indexOf('session') + 1];
       const project = parsed.searchParams.get('project') || '';
-      const md = exportSessionMarkdown(sessionId, project);
+      const tool = parsed.searchParams.get('tool') || '';
+      const md = exportSessionMarkdown(sessionId, project, tool);
       res.writeHead(200, {
         'Content-Type': 'text/markdown; charset=utf-8',
         'Content-Disposition': `attachment; filename="session-${sessionId.slice(0, 8)}.md"`,
@@ -69,8 +71,8 @@ function startServer(port, openBrowser = true) {
       const sessionId = pathname.split('/').pop();
       readBody(req, body => {
         try {
-          const { project } = JSON.parse(body || '{}');
-          const deleted = deleteSession(sessionId, project || '');
+          const { project, tool } = JSON.parse(body || '{}');
+          const deleted = deleteSession(sessionId, project || '', tool || '');
           json(res, { ok: true, deleted });
         } catch (e) {
           json(res, { ok: false, error: e.message }, 400);
@@ -85,7 +87,7 @@ function startServer(port, openBrowser = true) {
           const { sessions } = JSON.parse(body); // [{id, project}, ...]
           const results = [];
           for (const s of sessions) {
-            const deleted = deleteSession(s.id, s.project || '');
+            const deleted = deleteSession(s.id, s.project || '', s.tool || '');
             results.push({ id: s.id, deleted });
           }
           json(res, { ok: true, results });
@@ -127,8 +129,9 @@ function startServer(port, openBrowser = true) {
     else if (req.method === 'GET' && pathname.startsWith('/api/preview/')) {
       const sessionId = pathname.split('/').pop();
       const project = parsed.searchParams.get('project') || '';
+      const tool = parsed.searchParams.get('tool') || '';
       const limit = parseInt(parsed.searchParams.get('limit') || '10');
-      const messages = getSessionPreview(sessionId, project, limit);
+      const messages = getSessionPreview(sessionId, project, limit, tool);
       json(res, messages);
     }
 
@@ -152,7 +155,8 @@ function startServer(port, openBrowser = true) {
     else if (req.method === 'GET' && pathname.startsWith('/api/replay/')) {
       const sessionId = pathname.split('/').pop();
       const project = parsed.searchParams.get('project') || '';
-      const data = getSessionReplay(sessionId, project);
+      const tool = parsed.searchParams.get('tool') || '';
+      const data = getSessionReplay(sessionId, project, tool);
       json(res, data);
     }
 
@@ -184,7 +188,7 @@ function startServer(port, openBrowser = true) {
 
   server.listen(port, '127.0.0.1', () => {
     console.log('');
-    console.log('  \x1b[36m\x1b[1mcodedash\x1b[0m — Claude & Codex Sessions Dashboard');
+    console.log('  \x1b[36m\x1b[1mcodedash\x1b[0m — Claude, Codex, OpenCode & Kilo Sessions Dashboard');
     console.log(`  \x1b[2mhttp://localhost:${port}\x1b[0m`);
     console.log('  \x1b[2mPress Ctrl+C to stop\x1b[0m');
     console.log('');

@@ -24,7 +24,13 @@ switch (command) {
     const limit = parseInt(args[1]) || 20;
     console.log(`\n  \x1b[36m\x1b[1m${sessions.length} sessions\x1b[0m across ${new Set(sessions.map(s => s.project)).size} projects\n`);
     for (const s of sessions.slice(0, limit)) {
-      const tool = s.tool === 'codex' ? '\x1b[36mcodex\x1b[0m' : '\x1b[34mclaude\x1b[0m';
+      const tool = s.tool === 'codex'
+        ? '\x1b[36mcodex\x1b[0m'
+        : s.tool === 'opencode'
+          ? '\x1b[35mopencode\x1b[0m'
+          : s.tool === 'kilo'
+            ? '\x1b[33mkilo\x1b[0m'
+            : '\x1b[34mclaude\x1b[0m';
       const msg = (s.first_message || '').slice(0, 50).padEnd(50);
       const proj = s.project_short || '';
       console.log(`  ${tool}  ${s.id.slice(0, 12)}  ${s.last_time}  ${msg}  \x1b[2m${proj}\x1b[0m`);
@@ -48,6 +54,8 @@ switch (command) {
     console.log(`  Total projects:  ${Object.keys(projects).length}`);
     console.log(`  Claude sessions: ${sessions.filter(s => s.tool === 'claude').length}`);
     console.log(`  Codex sessions:  ${sessions.filter(s => s.tool === 'codex').length}`);
+    console.log(`  OpenCode sessions: ${sessions.filter(s => s.tool === 'opencode').length}`);
+    console.log(`  Kilo sessions:    ${sessions.filter(s => s.tool === 'kilo').length}`);
     console.log(`\n  \x1b[1mTop projects:\x1b[0m`);
     const sorted = Object.entries(projects).sort((a, b) => b[1].count - a[1].count).slice(0, 10);
     for (const [name, info] of sorted) {
@@ -133,7 +141,7 @@ switch (command) {
   case '--help':
   default:
     console.log(`
-  \x1b[36m\x1b[1mcodedash\x1b[0m — Claude & Codex Sessions Dashboard
+  \x1b[36m\x1b[1mcodedash\x1b[0m — Claude, Codex, OpenCode & Kilo Sessions Dashboard
 
   \x1b[1mUsage:\x1b[0m
     codedash run [port] [--no-browser]   Start the dashboard server

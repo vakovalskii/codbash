@@ -1041,6 +1041,16 @@ body {
     color: var(--accent-cyan);
 }
 
+.tool-opencode {
+    background: rgba(192, 132, 252, 0.16);
+    color: var(--accent-purple);
+}
+
+.tool-kilo {
+    background: rgba(251, 146, 60, 0.16);
+    color: var(--accent-orange);
+}
+
 /* ── Groups ─────────────────────────────────────────────────── */
 
 .group {

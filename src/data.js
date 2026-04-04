@@ -2,15 +2,337 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { execSync } = require('child_process');
+const { DatabaseSync } = require('node:sqlite');
 
 // ── Constants ──────────────────────────────────────────────
 
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const CODEX_DIR = path.join(os.homedir(), '.codex');
+const OPENCODE_DB = path.join(os.homedir(), '.local', 'share', 'opencode', 'opencode.db');
+const KILO_DIR = path.join(os.homedir(), '.local', 'share', 'kilo');
+const KILO_STORAGE_DIR = path.join(KILO_DIR, 'storage');
 const HISTORY_FILE = path.join(CLAUDE_DIR, 'history.jsonl');
 const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
 
+let searchIndex = null;
+let searchIndexBuiltAt = 0;
+let searchIndexSignature = '';
+const INDEX_TTL = 60000;
+
 // ── Helpers ────────────────────────────────────────────────
+
+function readJsonFile(filePath) {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function getProjectKey(project) {
+  return (project || '').replace(/[\/\.]/g, '-');
+}
+
+function collectJsonFiles(dir) {
+  const files = [];
+  if (!dir || !fs.existsSync(dir)) return files;
+
+  const walk = current => {
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+      } else if (entry.isFile() && entry.name.endsWith('.json')) {
+        files.push(full);
+      }
+    }
+  };
+
+  walk(dir);
+  return files;
+}
+
+function runSqliteJson(dbPath, sql, params = []) {
+  if (!dbPath || !fs.existsSync(dbPath)) return [];
+  try {
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      return db.prepare(sql).all(...params);
+    } finally {
+      db.close();
+    }
+  } catch {
+    return [];
+  }
+}
+
+function inferOpenCodeTool(version, sourceHint) {
+  if (sourceHint === 'kilo') return 'kilo';
+  if (typeof version === 'string' && version.toLowerCase().includes('kilo')) return 'kilo';
+  return 'opencode';
+}
+
+function loadOpenCodeSessionsFromDb(dbPath, sourceHint) {
+  const rows = runSqliteJson(dbPath, `
+    select
+      s.id as id,
+      s.title as title,
+      s.directory as directory,
+      s.version as version,
+      s.time_created as first_ts,
+      s.time_updated as last_ts,
+      coalesce(p.worktree, s.directory) as project,
+      coalesce(p.name, '') as project_name,
+      (
+        select coalesce(group_concat(text, char(10)), '')
+        from (
+          select coalesce(json_extract(p2.data, '$.text'), '') as text
+          from message m2
+          join part p2 on p2.message_id = m2.id
+          where m2.session_id = s.id
+            and json_extract(m2.data, '$.role') = 'user'
+            and m2.id = (
+              select id
+              from message
+              where session_id = s.id and json_extract(data, '$.role') = 'user'
+              order by time_created asc
+              limit 1
+            )
+            and json_extract(p2.data, '$.type') = 'text'
+          order by p2.time_created asc, p2.id asc
+        )
+      ) as first_message,
+      (
+        select count(*)
+        from message m
+        where m.session_id = s.id and json_extract(m.data, '$.role') in ('user', 'assistant')
+      ) as messages,
+      (
+        (select coalesce(sum(length(m.data)), 0) from message m where m.session_id = s.id)
+        +
+        (select coalesce(sum(length(pt.data)), 0) from message m join part pt on pt.message_id = m.id where m.session_id = s.id)
+      ) as file_size
+    from session s
+    left join project p on p.id = s.project_id
+    order by s.time_updated desc;
+  `);
+
+  return rows.map(row => ({
+    id: row.id,
+    tool: inferOpenCodeTool(row.version, sourceHint),
+    project: row.project || row.directory || '',
+    project_short: (row.project || row.directory || '').replace(os.homedir(), '~'),
+    first_ts: row.first_ts || 0,
+    last_ts: row.last_ts || row.first_ts || 0,
+    messages: row.messages || 0,
+    first_message: (row.first_message || row.title || '').slice(0, 200),
+    has_detail: true,
+    file_size: row.file_size || 0,
+    detail_messages: row.messages || 0,
+    title: row.title || '',
+    app_version: row.version || '',
+    source: sourceHint,
+  }));
+}
+
+function loadOpenCodeDetailFromDb(dbPath, sessionId) {
+  const rows = runSqliteJson(dbPath, `
+    select
+      m.id as id,
+      m.time_created as time_created,
+      json_extract(m.data, '$.role') as role,
+      coalesce((
+        select group_concat(text, char(10))
+        from (
+          select coalesce(json_extract(p.data, '$.text'), '') as text
+          from part p
+          where p.message_id = m.id and json_extract(p.data, '$.type') in ('text', 'reasoning')
+          order by p.time_created asc, p.id asc
+        )
+      ), '') as content
+    from message m
+    where m.session_id = ?
+    order by m.time_created asc;
+  `, [sessionId]);
+
+  const messages = [];
+  for (const row of rows) {
+    if (row.role === 'user' || row.role === 'assistant') {
+      messages.push({
+        role: row.role,
+        content: (row.content || '').slice(0, 2000),
+        uuid: row.id || '',
+        timestamp: row.time_created || '',
+      });
+    }
+  }
+  return messages;
+}
+
+function deleteOpenCodeSessionFromDb(dbPath, sessionId) {
+  if (!dbPath || !fs.existsSync(dbPath)) return [];
+  const db = new DatabaseSync(dbPath, { readOnly: false });
+  try {
+    db.exec('PRAGMA foreign_keys = ON');
+    const result = db.prepare('DELETE FROM session WHERE id = ?').run(sessionId);
+    if (result.changes > 0) return ['session record'];
+  } finally {
+    db.close();
+  }
+  return [];
+}
+
+function loadKiloSessionMessages(sessionId) {
+  const messageDir = path.join(KILO_STORAGE_DIR, 'message', sessionId);
+  if (!fs.existsSync(messageDir)) {
+    return { messages: [], fileSize: 0 };
+  }
+
+  const entries = [];
+  let fileSize = 0;
+
+  for (const entry of fs.readdirSync(messageDir, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+    const filePath = path.join(messageDir, entry.name);
+    const meta = readJsonFile(filePath);
+    if (!meta) continue;
+    const stat = fs.statSync(filePath);
+    fileSize += stat.size;
+    entries.push({ filePath, meta, created: meta.time?.created || stat.mtimeMs });
+  }
+
+  entries.sort((a, b) => a.created - b.created);
+
+  const messages = [];
+  for (const entry of entries) {
+    if (entry.meta.role !== 'user' && entry.meta.role !== 'assistant') continue;
+
+    let content = '';
+    const partDir = path.join(KILO_STORAGE_DIR, 'part', entry.meta.id);
+    if (fs.existsSync(partDir)) {
+      const partEntries = [];
+      for (const partEntry of fs.readdirSync(partDir, { withFileTypes: true })) {
+        if (!partEntry.isFile() || !partEntry.name.endsWith('.json')) continue;
+        const partPath = path.join(partDir, partEntry.name);
+        const part = readJsonFile(partPath);
+        if (!part) continue;
+        const stat = fs.statSync(partPath);
+        fileSize += stat.size;
+        partEntries.push({ partPath, part });
+      }
+
+      partEntries.sort((a, b) => a.partPath.localeCompare(b.partPath));
+      for (const { part } of partEntries) {
+        if (part.type !== 'text' && part.type !== 'reasoning') continue;
+        const text = typeof part.text === 'string' ? part.text : '';
+        if (text) {
+          content += (content ? '\n' : '') + text;
+        }
+      }
+    }
+
+    messages.push({
+      role: entry.meta.role,
+      content: content.slice(0, 2000),
+      uuid: entry.meta.id || '',
+      timestamp: entry.meta.time?.created || '',
+    });
+  }
+
+  return { messages, fileSize };
+}
+
+function loadKiloProjectMap() {
+  const projects = new Map();
+  const projectDir = path.join(KILO_STORAGE_DIR, 'project');
+  for (const filePath of collectJsonFiles(projectDir)) {
+    const project = readJsonFile(filePath);
+    if (project && project.id) {
+      projects.set(project.id, project);
+    }
+  }
+  return projects;
+}
+
+function loadKiloSessions() {
+  const sessions = [];
+  const sessionDir = path.join(KILO_STORAGE_DIR, 'session');
+  if (!fs.existsSync(sessionDir)) return sessions;
+
+  const projectMap = loadKiloProjectMap();
+
+  for (const filePath of collectJsonFiles(sessionDir)) {
+    const session = readJsonFile(filePath);
+    if (!session || !session.id) continue;
+
+    const stat = fs.statSync(filePath);
+    const projectMeta = session.projectID ? projectMap.get(session.projectID) : null;
+    const project = (projectMeta && projectMeta.worktree && projectMeta.worktree !== '/')
+      ? projectMeta.worktree
+      : (session.directory || projectMeta?.worktree || '');
+    const { messages, fileSize } = loadKiloSessionMessages(session.id);
+    const firstMessage = messages.find(m => m.role === 'user') || messages[0] || null;
+
+    sessions.push({
+      id: session.id,
+      tool: 'kilo',
+      project: project || '',
+      project_short: (project || '').replace(os.homedir(), '~'),
+      first_ts: session.time?.created || stat.mtimeMs,
+      last_ts: session.time?.updated || session.time?.created || stat.mtimeMs,
+      messages: messages.length,
+      first_message: (firstMessage?.content || session.title || session.slug || '').slice(0, 200),
+      has_detail: messages.length > 0,
+      file_size: stat.size + fileSize,
+      detail_messages: messages.length,
+      title: session.title || '',
+      app_version: session.version || '',
+      source: 'kilo',
+    });
+  }
+
+  return sessions;
+}
+
+function deleteKiloSessionFromStore(sessionId) {
+  const deleted = [];
+  const sessionDir = path.join(KILO_STORAGE_DIR, 'session');
+  const messageDir = path.join(KILO_STORAGE_DIR, 'message', sessionId);
+  const partDir = path.join(KILO_STORAGE_DIR, 'part');
+  const diffDir = path.join(KILO_STORAGE_DIR, 'session_diff');
+
+  for (const filePath of collectJsonFiles(sessionDir)) {
+    const session = readJsonFile(filePath);
+    if (session && session.id === sessionId) {
+      fs.unlinkSync(filePath);
+      deleted.push('session file');
+      break;
+    }
+  }
+
+  if (fs.existsSync(messageDir)) {
+    for (const entry of fs.readdirSync(messageDir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+      const message = readJsonFile(path.join(messageDir, entry.name));
+      if (!message) continue;
+      const messagePartDir = path.join(partDir, message.id || '');
+      if (fs.existsSync(messagePartDir)) {
+        fs.rmSync(messagePartDir, { recursive: true, force: true });
+        deleted.push('message parts');
+      }
+    }
+    fs.rmSync(messageDir, { recursive: true, force: true });
+    deleted.push('message files');
+  }
+
+  const diffFile = path.join(diffDir, `${sessionId}.json`);
+  if (fs.existsSync(diffFile)) {
+    fs.unlinkSync(diffFile);
+    deleted.push('session diff');
+  }
+
+  return deleted;
+}
 
 function scanCodexSessions() {
   const sessions = [];
@@ -154,29 +476,75 @@ function loadSessions() {
     } catch {}
   }
 
-  // Enrich Claude sessions with detail file info
-  for (const [sid, s] of Object.entries(sessions)) {
-    if (s.tool !== 'claude') continue;
-    const projectKey = s.project.replace(/[\/\.]/g, '-');
-    const sessionFile = path.join(PROJECTS_DIR, projectKey, `${sid}.jsonl`);
-    if (fs.existsSync(sessionFile)) {
-      s.has_detail = true;
-      s.file_size = fs.statSync(sessionFile).size;
-      try {
-        let msgCount = 0;
-        const sLines = fs.readFileSync(sessionFile, 'utf8').split('\n').filter(Boolean);
-        for (const sl of sLines) {
-          try {
-            const entry = JSON.parse(sl);
-            if (entry.type === 'user' || entry.type === 'assistant') msgCount++;
-          } catch {}
+  // Load OpenCode sessions from the shared SQLite store.
+  if (fs.existsSync(OPENCODE_DB)) {
+    try {
+      const openCodeSessions = loadOpenCodeSessionsFromDb(OPENCODE_DB, 'opencode');
+      for (const oc of openCodeSessions) {
+        const existing = sessions[oc.id];
+        if (!existing || (oc.last_ts || 0) > (existing.last_ts || 0)) {
+          sessions[oc.id] = oc;
         }
-        s.detail_messages = msgCount;
-      } catch { s.detail_messages = 0; }
-    } else {
-      s.has_detail = false;
-      s.file_size = 0;
-      s.detail_messages = 0;
+      }
+    } catch {}
+  }
+
+  // Load Kilo sessions from its file-based storage.
+  try {
+    const kiloSessions = loadKiloSessions();
+    for (const ks of kiloSessions) {
+      const existing = sessions[ks.id];
+      if (!existing || (ks.last_ts || 0) > (existing.last_ts || 0)) {
+        sessions[ks.id] = ks;
+      }
+    }
+  } catch {}
+
+  // Enrich sessions with detail file info for the relevant storage format.
+  for (const [sid, s] of Object.entries(sessions)) {
+    if (s.tool === 'claude') {
+      const projectKey = getProjectKey(s.project);
+      const sessionFile = path.join(PROJECTS_DIR, projectKey, `${sid}.jsonl`);
+      if (fs.existsSync(sessionFile)) {
+        s.has_detail = true;
+        s.file_size = fs.statSync(sessionFile).size;
+        try {
+          let msgCount = 0;
+          const sLines = fs.readFileSync(sessionFile, 'utf8').split('\n').filter(Boolean);
+          for (const sl of sLines) {
+            try {
+              const entry = JSON.parse(sl);
+              if (entry.type === 'user' || entry.type === 'assistant') msgCount++;
+            } catch {}
+          }
+          s.detail_messages = msgCount;
+        } catch { s.detail_messages = 0; }
+      } else {
+        s.has_detail = false;
+        s.file_size = 0;
+        s.detail_messages = 0;
+      }
+      continue;
+    }
+
+    if (s.tool === 'opencode' || s.tool === 'kilo') {
+      try {
+        const messages = s.tool === 'kilo'
+          ? (() => {
+              const loaded = loadKiloSessionMessages(sid);
+              if (loaded.messages.length > 0) return loaded.messages;
+              if (fs.existsSync(OPENCODE_DB)) return loadOpenCodeDetailFromDb(OPENCODE_DB, sid);
+              return [];
+            })()
+          : (fs.existsSync(OPENCODE_DB) ? loadOpenCodeDetailFromDb(OPENCODE_DB, sid) : []);
+        s.has_detail = messages.length > 0;
+        s.file_size = s.file_size || 0;
+        s.detail_messages = messages.length;
+      } catch {
+        s.has_detail = false;
+        s.file_size = 0;
+        s.detail_messages = 0;
+      }
     }
   }
 
@@ -191,7 +559,25 @@ function loadSessions() {
   return result;
 }
 
-function loadSessionDetail(sessionId, project) {
+function loadSessionDetail(sessionId, project, tool) {
+  if (tool === 'opencode') {
+    if (!fs.existsSync(OPENCODE_DB)) {
+      return { error: 'Session store not found', messages: [] };
+    }
+    return { messages: loadOpenCodeDetailFromDb(OPENCODE_DB, sessionId).slice(0, 200) };
+  }
+
+  if (tool === 'kilo') {
+    const { messages } = loadKiloSessionMessages(sessionId);
+    if (messages.length > 0) {
+      return { messages: messages.slice(0, 200) };
+    }
+    if (fs.existsSync(OPENCODE_DB)) {
+      return { messages: loadOpenCodeDetailFromDb(OPENCODE_DB, sessionId).slice(0, 200) };
+    }
+    return { error: 'Session file not found', messages: [] };
+  }
+
   const found = findSessionFile(sessionId, project);
   if (!found) return { error: 'Session file not found', messages: [] };
 
@@ -226,11 +612,30 @@ function loadSessionDetail(sessionId, project) {
   return { messages: messages.slice(0, 200) };
 }
 
-function deleteSession(sessionId, project) {
+function deleteSession(sessionId, project, tool) {
   const deleted = [];
 
+  if (tool === 'opencode') {
+    if (fs.existsSync(OPENCODE_DB)) {
+      try {
+        deleted.push(...deleteOpenCodeSessionFromDb(OPENCODE_DB, sessionId));
+      } catch {}
+    }
+    return deleted;
+  }
+
+  if (tool === 'kilo') {
+    try {
+      deleted.push(...deleteKiloSessionFromStore(sessionId));
+      if (deleted.length === 0 && fs.existsSync(OPENCODE_DB)) {
+        deleted.push(...deleteOpenCodeSessionFromDb(OPENCODE_DB, sessionId));
+      }
+    } catch {}
+    return deleted;
+  }
+
   // 1. Remove session JSONL file from project dir
-  const projectKey = project.replace(/[\/\.]/g, '-');
+  const projectKey = getProjectKey(project);
   const sessionFile = path.join(PROJECTS_DIR, projectKey, `${sessionId}.jsonl`);
   if (fs.existsSync(sessionFile)) {
     fs.unlinkSync(sessionFile);
@@ -298,8 +703,39 @@ function getGitCommits(projectDir, fromTs, toTs) {
   }
 }
 
-function exportSessionMarkdown(sessionId, project) {
-  const projectKey = project.replace(/[\/\.]/g, '-');
+function exportSessionMarkdown(sessionId, project, tool) {
+  if (tool === 'opencode') {
+    if (!fs.existsSync(OPENCODE_DB)) {
+      return `# Session ${sessionId}\n\nSession store not found.\n`;
+    }
+
+    const messages = loadOpenCodeDetailFromDb(OPENCODE_DB, sessionId);
+    const currentSessions = loadSessions();
+    const session = currentSessions.find(s => s.id === sessionId);
+    const parts = [`# Session ${sessionId}\n\n**Project:** ${session?.project || project || ''}\n`];
+    for (const msg of messages) {
+      const header = msg.role === 'user' ? '## User' : '## Assistant';
+      parts.push(`\n${header}\n\n${msg.content}\n`);
+    }
+    return parts.join('');
+  }
+
+  if (tool === 'kilo') {
+    let { messages } = loadKiloSessionMessages(sessionId);
+    if (messages.length === 0 && fs.existsSync(OPENCODE_DB)) {
+      messages = loadOpenCodeDetailFromDb(OPENCODE_DB, sessionId);
+    }
+    const currentSessions = loadSessions();
+    const session = currentSessions.find(s => s.id === sessionId);
+    const parts = [`# Session ${sessionId}\n\n**Project:** ${session?.project || project || ''}\n`];
+    for (const msg of messages) {
+      const header = msg.role === 'user' ? '## User' : '## Assistant';
+      parts.push(`\n${header}\n\n${msg.content}\n`);
+    }
+    return parts.join('');
+  }
+
+  const projectKey = getProjectKey(project);
   const sessionFile = path.join(PROJECTS_DIR, projectKey, `${sessionId}.jsonl`);
 
   if (!fs.existsSync(sessionFile)) {
@@ -335,7 +771,7 @@ function exportSessionMarkdown(sessionId, project) {
 function findSessionFile(sessionId, project) {
   // Try Claude projects dir
   if (project) {
-    const projectKey = project.replace(/[\/\.]/g, '-');
+    const projectKey = getProjectKey(project);
     const claudeFile = path.join(PROJECTS_DIR, projectKey, `${sessionId}.jsonl`);
     if (fs.existsSync(claudeFile)) return { file: claudeFile, format: 'claude' };
   }
@@ -397,98 +833,41 @@ function extractContent(raw) {
   return String(raw);
 }
 
-function getSessionPreview(sessionId, project, limit) {
-  limit = limit || 10;
-  const found = findSessionFile(sessionId, project);
-  if (!found) return [];
-
-  const messages = [];
-  const lines = fs.readFileSync(found.file, 'utf8').split('\n').filter(Boolean);
-
-  for (const line of lines) {
-    if (messages.length >= limit) break;
-    try {
-      const entry = JSON.parse(line);
-
-      if (found.format === 'claude') {
-        // Claude: {type: "user"|"assistant", message: {content: ...}}
-        if (entry.type === 'user' || entry.type === 'assistant') {
-          const content = extractContent((entry.message || {}).content);
-          if (content) {
-            messages.push({ role: entry.type, content: content.slice(0, 300) });
-          }
-        }
-      } else {
-        // Codex: {type: "response_item", payload: {role: "user"|"assistant", content: [...]}}
-        if (entry.type === 'response_item' && entry.payload) {
-          const role = entry.payload.role;
-          if (role === 'user' || role === 'assistant') {
-            const content = extractContent(entry.payload.content);
-            // Skip system-like messages
-            if (content && !isSystemMessage(content)) {
-              messages.push({ role: role, content: content.slice(0, 300) });
-            }
-          }
-        }
-      }
-    } catch {}
-  }
-
-  return messages;
+function getSessionPreview(sessionId, project, limit, tool) {
+  const data = loadSessionDetail(sessionId, project || '', tool || '');
+  if (!data || !data.messages) return [];
+  return data.messages.slice(0, limit || 10).map(m => ({
+    role: m.role,
+    content: (m.content || '').slice(0, 300),
+  }));
 }
-
-// ── Full-text search index ─────────────────────────────────
-//
-// Built once on first search, then cached in memory.
-// Each entry: { sessionId, texts: [{role, content}] }
-// Total text is kept lowercase for fast substring matching.
-
-let searchIndex = null;
-let searchIndexBuiltAt = 0;
-const INDEX_TTL = 60000; // rebuild every 60s
 
 function buildSearchIndex(sessions) {
   const startMs = Date.now();
   const index = [];
 
-  for (const s of sessions) {
-    if (!s.has_detail) continue;
+  for (const s of sessions || []) {
+    if (!s || !s.id) continue;
 
-    const found = findSessionFile(s.id, s.project);
-    if (!found) continue;
+    const detail = loadSessionDetail(s.id, s.project || '', s.tool || '');
+    const messages = (detail && detail.messages && detail.messages.length > 0)
+      ? detail.messages
+      : [{ role: 'session', content: `${s.first_message || ''} ${s.project || ''} ${s.id || ''}`.trim() }];
 
-    try {
-      const lines = fs.readFileSync(found.file, 'utf8').split('\n').filter(Boolean);
-      const texts = [];
+    const texts = [];
+    for (const message of messages) {
+      const content = String(message.content || '').trim();
+      if (!content) continue;
+      texts.push({ role: message.role || 'session', content: content.slice(0, 500) });
+    }
 
-      for (const line of lines) {
-        try {
-          const entry = JSON.parse(line);
-          let role, content;
-
-          if (found.format === 'claude') {
-            if (entry.type !== 'user' && entry.type !== 'assistant') continue;
-            role = entry.type;
-            content = extractContent((entry.message || {}).content);
-          } else {
-            if (entry.type !== 'response_item' || !entry.payload) continue;
-            role = entry.payload.role;
-            if (role !== 'user' && role !== 'assistant') continue;
-            content = extractContent(entry.payload.content);
-          }
-
-          if (content && !isSystemMessage(content)) {
-            texts.push({ role, content: content.slice(0, 500) });
-          }
-        } catch {}
-      }
-
-      if (texts.length > 0) {
-        // Pre-compute lowercase full text for fast matching
-        const fullText = texts.map(t => t.content).join(' ').toLowerCase();
-        index.push({ sessionId: s.id, texts, fullText });
-      }
-    } catch {}
+    if (texts.length > 0) {
+      index.push({
+        sessionId: s.id,
+        texts,
+        fullText: texts.map(t => t.content).join(' ').toLowerCase(),
+      });
+    }
   }
 
   const elapsed = Date.now() - startMs;
@@ -498,9 +877,14 @@ function buildSearchIndex(sessions) {
 
 function getSearchIndex(sessions) {
   const now = Date.now();
-  if (!searchIndex || (now - searchIndexBuiltAt) > INDEX_TTL) {
+  const signature = (sessions || [])
+    .map(s => `${s.id}:${s.last_ts || 0}:${s.tool || ''}:${s.project || ''}`)
+    .join('|');
+
+  if (!searchIndex || (now - searchIndexBuiltAt) > INDEX_TTL || signature !== searchIndexSignature) {
     searchIndex = buildSearchIndex(sessions);
     searchIndexBuiltAt = now;
+    searchIndexSignature = signature;
   }
   return searchIndex;
 }
@@ -539,45 +923,67 @@ function searchFullText(query, sessions) {
 
 // ── Exports ────────────────────────────────────────────────
 
-// ── Session replay data (with timestamps) ─────────────────
+function getSessionReplay(sessionId, project, tool) {
+  let messages = [];
 
-function getSessionReplay(sessionId, project) {
-  const found = findSessionFile(sessionId, project);
-  if (!found) return { messages: [], duration: 0 };
+  if (tool === 'opencode') {
+    messages = loadOpenCodeDetailFromDb(OPENCODE_DB, sessionId).map(m => ({
+      role: m.role,
+      content: m.content,
+      timestamp: m.timestamp || '',
+      ms: m.timestamp ? new Date(m.timestamp).getTime() : 0,
+    }));
+  } else if (tool === 'kilo') {
+    const loaded = loadKiloSessionMessages(sessionId);
+    messages = loaded.messages.map(m => ({
+      role: m.role,
+      content: m.content,
+      timestamp: m.timestamp || '',
+      ms: m.timestamp ? new Date(m.timestamp).getTime() : 0,
+    }));
+    if (messages.length === 0 && fs.existsSync(OPENCODE_DB)) {
+      messages = loadOpenCodeDetailFromDb(OPENCODE_DB, sessionId).map(m => ({
+        role: m.role,
+        content: m.content,
+        timestamp: m.timestamp || '',
+        ms: m.timestamp ? new Date(m.timestamp).getTime() : 0,
+      }));
+    }
+  } else {
+    const found = findSessionFile(sessionId, project);
+    if (!found) return { messages: [], duration: 0 };
 
-  const messages = [];
-  const lines = fs.readFileSync(found.file, 'utf8').split('\n').filter(Boolean);
+    const lines = fs.readFileSync(found.file, 'utf8').split('\n').filter(Boolean);
+    for (const line of lines) {
+      try {
+        const entry = JSON.parse(line);
+        let role, content, ts;
 
-  for (const line of lines) {
-    try {
-      const entry = JSON.parse(line);
-      let role, content, ts;
+        if (found.format === 'claude') {
+          if (entry.type !== 'user' && entry.type !== 'assistant') continue;
+          role = entry.type;
+          content = extractContent((entry.message || {}).content);
+          ts = entry.timestamp || '';
+        } else {
+          if (entry.type !== 'response_item' || !entry.payload) continue;
+          role = entry.payload.role;
+          if (role !== 'user' && role !== 'assistant') continue;
+          content = extractContent(entry.payload.content);
+          ts = entry.timestamp || '';
+        }
 
-      if (found.format === 'claude') {
-        if (entry.type !== 'user' && entry.type !== 'assistant') continue;
-        role = entry.type;
-        content = extractContent((entry.message || {}).content);
-        ts = entry.timestamp || '';
-      } else {
-        if (entry.type !== 'response_item' || !entry.payload) continue;
-        role = entry.payload.role;
-        if (role !== 'user' && role !== 'assistant') continue;
-        content = extractContent(entry.payload.content);
-        ts = entry.timestamp || '';
-      }
+        if (!content || isSystemMessage(content)) continue;
 
-      if (!content || isSystemMessage(content)) continue;
-
-      messages.push({
-        role,
-        content: content.slice(0, 3000),
-        timestamp: ts,
-        ms: ts ? new Date(ts).getTime() : 0,
-      });
-    } catch {}
+        messages.push({
+          role,
+          content: content.slice(0, 3000),
+          timestamp: ts,
+          ms: ts ? new Date(ts).getTime() : 0,
+        });
+      } catch {}
+    }
   }
 
-  // Calculate duration
   const startMs = messages.length > 0 ? messages[0].ms : 0;
   const endMs = messages.length > 0 ? messages[messages.length - 1].ms : 0;
 
@@ -831,6 +1237,9 @@ module.exports = {
   MODEL_PRICING,
   CLAUDE_DIR,
   CODEX_DIR,
+  OPENCODE_DB,
+  KILO_DIR,
+  KILO_STORAGE_DIR,
   HISTORY_FILE,
   PROJECTS_DIR,
 };

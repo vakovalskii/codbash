@@ -7,6 +7,8 @@ const { execSync } = require('child_process');
 
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const CODEX_DIR = path.join(os.homedir(), '.codex');
+const OPENCODE_DIR = path.join(os.homedir(), '.local', 'share', 'opencode');
+const KILO_DIR = path.join(os.homedir(), '.local', 'share', 'kilo');
 
 function exportArchive(outPath) {
   const absOut = path.resolve(outPath);
@@ -65,8 +67,24 @@ function exportArchive(outPath) {
     }
   }
 
+  // OpenCode data
+  if (fs.existsSync(OPENCODE_DIR)) {
+    const dbFile = path.join(OPENCODE_DIR, 'opencode.db');
+    if (fs.existsSync(dbFile)) {
+      paths.push('.local/share/opencode/opencode.db');
+    }
+  }
+
+  // Kilo data
+  if (fs.existsSync(KILO_DIR)) {
+    const storageDir = path.join(KILO_DIR, 'storage');
+    if (fs.existsSync(storageDir)) {
+      paths.push('.local/share/kilo/storage');
+    }
+  }
+
   if (paths.length === 0) {
-    console.log('  Nothing to export. No ~/.claude or ~/.codex data found.');
+    console.log('  Nothing to export. No ~/.claude, ~/.codex, ~/.local/share/opencode, or ~/.local/share/kilo data found.');
     return;
   }
 
@@ -139,7 +157,9 @@ function importArchive(archivePath) {
 
   // Check for existing data
   const hasExisting = fs.existsSync(path.join(CLAUDE_DIR, 'history.jsonl')) ||
-                      fs.existsSync(path.join(CODEX_DIR, 'history.jsonl'));
+                      fs.existsSync(path.join(CODEX_DIR, 'history.jsonl')) ||
+                      fs.existsSync(path.join(OPENCODE_DIR, 'opencode.db')) ||
+                      fs.existsSync(path.join(KILO_DIR, 'storage'));
 
   if (hasExisting) {
     console.log('  \x1b[33mWarning:\x1b[0m Existing session data found.');

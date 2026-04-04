@@ -9,7 +9,7 @@ let currentView = 'sessions';  // sessions, projects, timeline, activity, starre
 let grouped = true;
 let layout = localStorage.getItem('codedash-layout') || 'grid'; // 'grid' or 'list'
 let searchQuery = '';
-let toolFilter = null;  // null, 'claude', 'codex'
+let toolFilter = null;  // null, 'claude', 'codex', 'opencode', 'kilo'
 let tagFilter = '';
 let dateFrom = '';
 let dateTo = '';
@@ -49,6 +49,13 @@ function getProjectName(fullPath) {
   const cleaned = fullPath.replace(/\/+$/, '');
   const parts = cleaned.split('/');
   return parts[parts.length - 1] || 'unknown';
+}
+
+function getToolClass(tool) {
+  if (tool === 'codex') return 'tool-codex';
+  if (tool === 'opencode') return 'tool-opencode';
+  if (tool === 'kilo') return 'tool-kilo';
+  return 'tool-claude';
 }
 
 // ── Utilities ──────────────────────────────────────────────────
@@ -413,6 +420,12 @@ function setView(view) {
   } else if (view === 'codex-only') {
     toolFilter = toolFilter === 'codex' ? null : 'codex';
     currentView = 'sessions';
+  } else if (view === 'opencode-only') {
+    toolFilter = toolFilter === 'opencode' ? null : 'opencode';
+    currentView = 'sessions';
+  } else if (view === 'kilo-only') {
+    toolFilter = toolFilter === 'kilo' ? null : 'kilo';
+    currentView = 'sessions';
   } else {
     toolFilter = null;
     currentView = view;
@@ -428,8 +441,10 @@ function setView(view) {
 
 // Wire up sidebar clicks
 document.querySelectorAll('.sidebar-item').forEach(function(el) {
+  var view = el.getAttribute('data-view');
+  if (!view) return;
   el.addEventListener('click', function() {
-    setView(el.getAttribute('data-view'));
+    setView(view);
   });
 });
 
@@ -444,7 +459,7 @@ function renderCard(s, idx) {
   var costStr = cost > 0 ? '~$' + cost.toFixed(2) : '';
   var projName = getProjectName(s.project);
   var projColor = getProjectColor(projName);
-  var toolClass = s.tool === 'codex' ? 'tool-codex' : 'tool-claude';
+  var toolClass = getToolClass(s.tool);
 
   var classes = 'card';
   if (isSelected) classes += ' selected';
@@ -515,7 +530,7 @@ function renderListCard(s, idx) {
   if (isFocused) classes += ' focused';
 
   var html = '<div class="' + classes + '" data-id="' + s.id + '" onclick="onCardClick(\'' + s.id + '\', event)">';
-  html += '<span class="tool-badge tool-' + s.tool + '">' + escHtml(s.tool) + '</span>';
+  html += '<span class="tool-badge ' + getToolClass(s.tool) + '">' + escHtml(s.tool) + '</span>';
   html += '<span class="list-project" style="color:' + projColor + '">' + escHtml(projName) + '</span>';
   html += '<span class="list-msg">' + escHtml((s.first_message || '').slice(0, 80)) + '</span>';
   html += '<span class="list-meta">' + s.messages + ' msgs</span>';
@@ -530,6 +545,7 @@ function renderListCard(s, idx) {
 async function toggleExpand(sessionId, project, btn) {
   var area = document.getElementById('preview-' + sessionId);
   if (!area) return;
+  var s = allSessions.find(function(x) { return x.id === sessionId; });
 
   if (area.classList.contains('open')) {
     area.classList.remove('open');
@@ -543,7 +559,7 @@ async function toggleExpand(sessionId, project, btn) {
   area.classList.add('open');
 
   try {
-    var resp = await fetch('/api/preview/' + sessionId + '?project=' + encodeURIComponent(project) + '&limit=10');
+    var resp = await fetch('/api/preview/' + sessionId + '?project=' + encodeURIComponent(project) + '&tool=' + encodeURIComponent(s ? s.tool : '') + '&limit=10');
     var messages = await resp.json();
 
     if (messages.length === 0) {
@@ -598,7 +614,7 @@ async function showHoverTooltip(card, session) {
   hideHoverTooltip();
 
   try {
-    var resp = await fetch('/api/preview/' + session.id + '?project=' + encodeURIComponent(session.project || '') + '&limit=6');
+    var resp = await fetch('/api/preview/' + session.id + '?project=' + encodeURIComponent(session.project || '') + '&tool=' + encodeURIComponent(session.tool || '') + '&limit=6');
     var messages = await resp.json();
     if (messages.length === 0) return;
 
@@ -1049,7 +1065,7 @@ async function openDetail(s) {
   var terminal = localStorage.getItem('codedash-terminal') || '';
 
   var infoHtml = '<div class="detail-info">';
-  infoHtml += '<div class="detail-row"><span class="detail-label">Tool</span><span class="tool-badge tool-' + s.tool + '">' + escHtml(s.tool) + '</span></div>';
+  infoHtml += '<div class="detail-row"><span class="detail-label">Tool</span><span class="tool-badge ' + getToolClass(s.tool) + '">' + escHtml(s.tool) + '</span></div>';
   infoHtml += '<div class="detail-row"><span class="detail-label">Project</span><span>' + escHtml(s.project_short || s.project || '') + '</span></div>';
   infoHtml += '<div class="detail-row"><span class="detail-label">Session ID</span><span class="mono">' + escHtml(s.id) + '</span></div>';
   infoHtml += '<div class="detail-row"><span class="detail-label">First seen</span><span>' + escHtml(s.first_time || '') + '</span></div>';
@@ -1079,7 +1095,7 @@ async function openDetail(s) {
   }
   infoHtml += '<button class="launch-btn btn-secondary" onclick="copyResume(\'' + s.id + '\',\'' + escHtml(s.tool) + '\')">Copy Command</button>';
   if (s.has_detail) {
-    infoHtml += '<button class="launch-btn btn-secondary" onclick="closeDetail();openReplay(\'' + s.id + '\',\'' + escHtml(s.project || '') + '\')">Replay</button>';
+    infoHtml += '<button class="launch-btn btn-secondary" onclick="closeDetail();openReplay(\'' + s.id + '\',\'' + escHtml(s.project || '') + '\',\'' + escHtml(s.tool || '') + '\')">Replay</button>';
     infoHtml += '<button class="launch-btn btn-secondary" onclick="exportMd(\'' + s.id + '\',\'' + escHtml(s.project || '') + '\')">Export MD</button>';
   }
   infoHtml += '<button class="star-btn detail-star' + (isStarred ? ' active' : '') + '" onclick="toggleStar(\'' + s.id + '\')">&#9733; ' + (isStarred ? 'Starred' : 'Star') + '</button>';
@@ -1094,7 +1110,7 @@ async function openDetail(s) {
   // Load messages
   if (s.has_detail) {
     try {
-      var resp = await fetch('/api/session/' + s.id + '?project=' + encodeURIComponent(s.project || ''));
+      var resp = await fetch('/api/session/' + s.id + '?project=' + encodeURIComponent(s.project || '') + '&tool=' + encodeURIComponent(s.tool || ''));
       var data = await resp.json();
       var msgContainer = body.querySelector('.detail-messages');
       if (data.messages && data.messages.length > 0) {
@@ -1194,7 +1210,11 @@ function launchSession(sessionId, tool, project) {
 function copyResume(sessionId, tool) {
   var cmd = tool === 'codex'
     ? 'codex resume ' + sessionId
-    : 'claude --resume ' + sessionId;
+    : tool === 'opencode'
+      ? 'opencode --session ' + sessionId
+      : tool === 'kilo'
+        ? 'kilo --session ' + sessionId
+        : 'claude --resume ' + sessionId;
   navigator.clipboard.writeText(cmd).then(function() {
     showToast('Copied: ' + cmd);
   }).catch(function() {
@@ -1204,13 +1224,15 @@ function copyResume(sessionId, tool) {
 }
 
 function exportMd(sessionId, project) {
-  window.open('/api/session/' + sessionId + '/export?project=' + encodeURIComponent(project));
+  var s = allSessions.find(function(x) { return x.id === sessionId; });
+  window.open('/api/session/' + sessionId + '/export?project=' + encodeURIComponent(project) + '&tool=' + encodeURIComponent(s ? s.tool : ''));
 }
 
 // ── Delete ─────────────────────────────────────────────────────
 
 function showDeleteConfirm(sessionId, project) {
-  pendingDelete = { id: sessionId, project: project };
+  var s = allSessions.find(function(x) { return x.id === sessionId; });
+  pendingDelete = { id: sessionId, project: project, tool: s ? s.tool : '' };
   var overlay = document.getElementById('confirmOverlay');
   var idEl = document.getElementById('confirmId');
   if (overlay) overlay.style.display = 'flex';
@@ -1229,7 +1251,7 @@ async function confirmDelete() {
     var resp = await fetch('/api/session/' + pendingDelete.id, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ project: pendingDelete.project })
+      body: JSON.stringify({ project: pendingDelete.project, tool: pendingDelete.tool || '' })
     });
     var data = await resp.json();
     if (data.ok) {
@@ -1302,7 +1324,7 @@ async function bulkDelete() {
   var sessions = [];
   selectedIds.forEach(function(id) {
     var s = allSessions.find(function(x) { return x.id === id; });
-    sessions.push({ id: id, project: s ? s.project : '' });
+    sessions.push({ id: id, project: s ? s.project : '', tool: s ? s.tool : '' });
   });
   try {
     var resp = await fetch('/api/bulk-delete', {
@@ -1469,7 +1491,7 @@ function renderRunning(container, sessions) {
   var activeIds = Object.keys(activeSessions);
 
   if (activeIds.length === 0) {
-    container.innerHTML = '<div class="empty-state">No running sessions detected.<br><span style="font-size:12px;color:var(--text-muted)">Start a Claude Code or Codex session and it will appear here.</span></div>';
+    container.innerHTML = '<div class="empty-state">No running sessions detected.<br><span style="font-size:12px;color:var(--text-muted)">Start a Claude Code, Codex, OpenCode, or Kilo session and it will appear here.</span></div>';
     return;
   }
 
@@ -1510,7 +1532,7 @@ function renderRunning(container, sessions) {
     html += '<button class="launch-btn" style="background:var(--accent-green);color:#000" onclick="focusSession(\'' + sid + '\')">Focus</button>';
     if (s) {
       html += '<button class="launch-btn btn-secondary" onclick="var ss=allSessions.find(function(x){return x.id===\'' + sid + '\'});if(ss)openDetail(ss);">Details</button>';
-      html += '<button class="launch-btn btn-secondary" onclick="closeDetail();openReplay(\'' + sid + '\',\'' + escHtml((s.project || '').replace(/'/g, "\\'")) + '\')">Replay</button>';
+      html += '<button class="launch-btn btn-secondary" onclick="closeDetail();openReplay(\'' + sid + '\',\'' + escHtml((s.project || '').replace(/'/g, "\\'")) + '\',\'' + escHtml(s.tool || '') + '\')">Replay</button>';
     }
     html += '</div>';
     html += '</div>';
@@ -1534,12 +1556,13 @@ function renderRunning(container, sessions) {
 
 // ── Session Replay ────────────────────────────────────────────
 
-async function openReplay(sessionId, project) {
+async function openReplay(sessionId, project, tool) {
   var content = document.getElementById('content');
   content.innerHTML = '<div class="loading">Loading replay...</div>';
 
   try {
-    var resp = await fetch('/api/replay/' + sessionId + '?project=' + encodeURIComponent(project));
+    var s = allSessions.find(function(x) { return x.id === sessionId; });
+    var resp = await fetch('/api/replay/' + sessionId + '?project=' + encodeURIComponent(project) + '&tool=' + encodeURIComponent(tool || (s ? s.tool : '')));
     var data = await resp.json();
 
     if (!data.messages || data.messages.length === 0) {
@@ -1805,7 +1828,7 @@ function showExportDialog() {
   document.getElementById('confirmText').innerHTML =
     '<strong>Export</strong> all sessions to migrate to another PC:<br>' +
     '<code style="display:block;margin:8px 0;padding:8px;background:var(--bg-card);border-radius:6px;font-size:12px">codedash export</code>' +
-    'Creates a tar.gz with all Claude &amp; Codex session data.<br><br>' +
+    'Creates a tar.gz with all Claude, Codex, OpenCode, and Kilo session data.<br><br>' +
     '<strong>Import</strong> on the new machine:<br>' +
     '<code style="display:block;margin:8px 0;padding:8px;background:var(--bg-card);border-radius:6px;font-size:12px">codedash import &lt;file.tar.gz&gt;</code>' +
     '<br><em style="color:var(--text-muted);font-size:12px">Don\'t forget to clone your git repos separately.</em>';

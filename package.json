@@ -1,7 +1,7 @@
 {
   "name": "codedash-app",
   "version": "3.3.1",
-  "description": "Termius-style browser dashboard for Claude Code sessions. View, search, resume, and delete sessions with a dark-themed UI.",
+  "description": "Termius-style browser dashboard for Claude Code, Codex, OpenCode, and Kilo CLI sessions. View, search, resume, and delete sessions with a dark-themed UI.",
   "bin": {
     "codedash": "./bin/cli.js"
   },
@@ -13,6 +13,8 @@
     "claude",
     "claude-code",
     "codex",
+    "opencode",
+    "kilo",
     "sessions",
     "dashboard",
     "terminal",
@@ -31,6 +33,6 @@
   "author": "Valerii Kovalskii",
   "license": "MIT",
   "engines": {
-    "node": ">=16"
+    "node": ">=24"
   }
 }
