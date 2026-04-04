@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-const { loadSessions } = require('../src/data');
+const { loadSessions, searchFullText, getSessionPreview, computeSessionCost } = require('../src/data');
 const { startServer } = require('../src/server');
 const { exportArchive, importArchive } = require('../src/migrate');
 
@@ -53,6 +53,79 @@ switch (command) {
     for (const [name, info] of sorted) {
       console.log(`    ${String(info.count).padStart(3)} sessions  ${name}`);
     }
+    console.log('');
+    break;
+  }
+
+  case 'search':
+  case 'find': {
+    const query = args.slice(1).join(' ');
+    if (!query) {
+      console.error('  Usage: codedash search <query>');
+      process.exit(1);
+    }
+    const sessions = loadSessions();
+    const results = searchFullText(query, sessions);
+    if (results.length === 0) {
+      console.log(`\n  No results for "${query}"\n`);
+    } else {
+      console.log(`\n  \x1b[36m\x1b[1m${results.length} sessions\x1b[0m matching "${query}"\n`);
+      for (const r of results.slice(0, 15)) {
+        const s = sessions.find(x => x.id === r.sessionId);
+        const proj = s ? (s.project_short || '') : '';
+        const tool = s ? s.tool : '?';
+        const date = s ? s.last_time : '';
+        console.log(`  \x1b[1m${r.sessionId.slice(0, 12)}\x1b[0m  ${tool}  ${date}  \x1b[2m${proj}\x1b[0m`);
+        for (const m of r.matches.slice(0, 2)) {
+          const role = m.role === 'user' ? '\x1b[34mYOU\x1b[0m' : '\x1b[32mAI \x1b[0m';
+          console.log(`    ${role} ${m.snippet.replace(/\n/g, ' ').slice(0, 100)}`);
+        }
+      }
+      if (results.length > 15) console.log(`\n  \x1b[2m... and ${results.length - 15} more\x1b[0m`);
+      console.log('');
+    }
+    break;
+  }
+
+  case 'show': {
+    const sid = args[1];
+    if (!sid) {
+      console.error('  Usage: codedash show <session-id>');
+      process.exit(1);
+    }
+    const allS = loadSessions();
+    const session = allS.find(s => s.id === sid || s.id.startsWith(sid));
+    if (!session) {
+      console.error(`  Session not found: ${sid}`);
+      process.exit(1);
+    }
+    const preview = getSessionPreview(session.id, session.project, 20);
+    const cost = computeSessionCost(session.id, session.project);
+
+    console.log('');
+    console.log(`  \x1b[36m\x1b[1mSession ${session.id}\x1b[0m`);
+    console.log(`  Tool:    ${session.tool}`);
+    console.log(`  Project: ${session.project_short || session.project || 'unknown'}`);
+    console.log(`  Started: ${session.first_time}`);
+    console.log(`  Last:    ${session.last_time}`);
+    console.log(`  Msgs:    ${session.messages} inputs, ${session.detail_messages || 0} total`);
+    if (cost.cost > 0) {
+      console.log(`  Cost:    $${cost.cost.toFixed(2)} (${cost.model || 'unknown'})`);
+      console.log(`  Tokens:  ${(cost.inputTokens/1000).toFixed(0)}K in / ${(cost.outputTokens/1000).toFixed(0)}K out`);
+    }
+    console.log('');
+
+    if (preview.length > 0) {
+      console.log('  \x1b[1mConversation:\x1b[0m');
+      for (const m of preview) {
+        const role = m.role === 'user' ? '\x1b[34mYOU\x1b[0m' : '\x1b[32mAI \x1b[0m';
+        const text = m.content.replace(/\n/g, ' ').slice(0, 120);
+        console.log(`  ${role} ${text}`);
+      }
+      console.log('');
+    }
+
+    console.log(`  Resume: \x1b[2m${session.tool === 'codex' ? 'codex resume' : 'claude --resume'} ${session.id}\x1b[0m`);
     console.log('');
     break;
   }
@@ -137,13 +210,15 @@ switch (command) {
 
   \x1b[1mUsage:\x1b[0m
     codedash run [port] [--no-browser]   Start the dashboard server
-    codedash update                      Update to latest version
-    codedash restart [--port=N]          Restart the server
-    codedash stop [--port=N]             Stop the server
+    codedash search <query>              Search across all session messages
+    codedash show <session-id>           Show session details + messages
     codedash list [limit]                List sessions in terminal
     codedash stats                       Show session statistics
     codedash export [file.tar.gz]        Export all sessions to archive
     codedash import <file.tar.gz>        Import sessions from archive
+    codedash update                      Update to latest version
+    codedash restart [--port=N]          Restart the server
+    codedash stop [--port=N]             Stop the server
     codedash help                        Show this help
     codedash version                     Show version
 
