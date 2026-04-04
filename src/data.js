@@ -7,10 +7,119 @@ const { execSync } = require('child_process');
 
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const CODEX_DIR = path.join(os.homedir(), '.codex');
+const OPENCODE_DB = path.join(os.homedir(), '.local', 'share', 'opencode', 'opencode.db');
 const HISTORY_FILE = path.join(CLAUDE_DIR, 'history.jsonl');
 const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
 
 // ── Helpers ────────────────────────────────────────────────
+
+function scanOpenCodeSessions() {
+  const sessions = [];
+  if (!fs.existsSync(OPENCODE_DB)) return sessions;
+
+  try {
+    // Use sqlite3 CLI to avoid Node version dependency
+    const rows = execSync(
+      `sqlite3 "${OPENCODE_DB}" "SELECT s.id, s.title, s.directory, s.time_created, s.time_updated, COUNT(m.id) as msg_count FROM session s LEFT JOIN message m ON m.session_id = s.id GROUP BY s.id ORDER BY s.time_updated DESC"`,
+      { encoding: 'utf8', timeout: 5000 }
+    ).trim();
+
+    if (!rows) return sessions;
+
+    for (const row of rows.split('\n')) {
+      const parts = row.split('|');
+      if (parts.length < 6) continue;
+      const [id, title, directory, timeCreated, timeUpdated, msgCount] = parts;
+
+      sessions.push({
+        id: id,
+        tool: 'opencode',
+        project: directory || '',
+        project_short: (directory || '').replace(os.homedir(), '~'),
+        first_ts: parseInt(timeCreated) || Date.now(),
+        last_ts: parseInt(timeUpdated) || Date.now(),
+        messages: parseInt(msgCount) || 0,
+        first_message: title || '',
+        has_detail: true,
+        file_size: 0,
+        detail_messages: parseInt(msgCount) || 0,
+      });
+    }
+  } catch {}
+
+  return sessions;
+}
+
+function loadOpenCodeDetail(sessionId) {
+  if (!fs.existsSync(OPENCODE_DB)) return { messages: [] };
+
+  try {
+    // Get messages with parts joined
+    const rows = execSync(
+      `sqlite3 "${OPENCODE_DB}" "SELECT m.data, GROUP_CONCAT(p.data, '|||') FROM message m LEFT JOIN part p ON p.message_id = m.id WHERE m.session_id = '${sessionId.replace(/'/g, "''")}' GROUP BY m.id ORDER BY m.time_created"`,
+      { encoding: 'utf8', timeout: 10000 }
+    ).trim();
+
+    if (!rows) return { messages: [] };
+
+    const messages = [];
+    for (const row of rows.split('\n')) {
+      const sepIdx = row.indexOf('|');
+      if (sepIdx < 0) continue;
+
+      // Parse message data (first column)
+      // Find the JSON boundary - message data ends where part data starts
+      let msgJson, partsRaw;
+      try {
+        // Try to find where message JSON ends
+        let braceCount = 0;
+        let jsonEnd = 0;
+        for (let i = 0; i < row.length; i++) {
+          if (row[i] === '{') braceCount++;
+          if (row[i] === '}') { braceCount--; if (braceCount === 0) { jsonEnd = i + 1; break; } }
+        }
+        msgJson = row.slice(0, jsonEnd);
+        partsRaw = row.slice(jsonEnd + 1); // skip |
+      } catch { continue; }
+
+      let msgData;
+      try { msgData = JSON.parse(msgJson); } catch { continue; }
+
+      const role = msgData.role;
+      if (role !== 'user' && role !== 'assistant') continue;
+
+      // Extract text from parts
+      let content = '';
+      if (partsRaw) {
+        for (const partStr of partsRaw.split('|||')) {
+          try {
+            const part = JSON.parse(partStr);
+            if (part.type === 'text' && part.text) {
+              content += part.text + '\n';
+            }
+          } catch {}
+        }
+      }
+
+      content = content.trim();
+      if (!content) continue;
+
+      const tokens = msgData.tokens || {};
+
+      messages.push({
+        role: role,
+        content: content.slice(0, 2000),
+        uuid: '',
+        model: msgData.modelID || msgData.model?.modelID || '',
+        tokens: tokens,
+      });
+    }
+
+    return { messages: messages.slice(0, 200) };
+  } catch {
+    return { messages: [] };
+  }
+}
 
 function scanCodexSessions() {
   const sessions = [];
@@ -154,6 +263,14 @@ function loadSessions() {
     } catch {}
   }
 
+  // Load OpenCode sessions
+  try {
+    const opencodeSessions = scanOpenCodeSessions();
+    for (const ocs of opencodeSessions) {
+      sessions[ocs.id] = ocs;
+    }
+  } catch {}
+
   // Enrich Claude sessions with detail file info
   for (const [sid, s] of Object.entries(sessions)) {
     if (s.tool !== 'claude') continue;
@@ -194,6 +311,11 @@ function loadSessions() {
 function loadSessionDetail(sessionId, project) {
   const found = findSessionFile(sessionId, project);
   if (!found) return { error: 'Session file not found', messages: [] };
+
+  // OpenCode uses SQLite
+  if (found.format === 'opencode') {
+    return loadOpenCodeDetail(sessionId);
+  }
 
   const messages = [];
   const lines = fs.readFileSync(found.file, 'utf8').split('\n').filter(Boolean);
@@ -367,6 +489,11 @@ function findSessionFile(sessionId, project) {
     if (codexFile) return { file: codexFile, format: 'codex' };
   }
 
+  // Try OpenCode (SQLite — return special marker)
+  if (fs.existsSync(OPENCODE_DB) && sessionId.startsWith('ses_')) {
+    return { file: OPENCODE_DB, format: 'opencode', sessionId: sessionId };
+  }
+
   return null;
 }
 
@@ -401,6 +528,14 @@ function getSessionPreview(sessionId, project, limit) {
   limit = limit || 10;
   const found = findSessionFile(sessionId, project);
   if (!found) return [];
+
+  // OpenCode: use loadOpenCodeDetail and slice
+  if (found.format === 'opencode') {
+    const detail = loadOpenCodeDetail(sessionId);
+    return detail.messages.slice(0, limit).map(function(m) {
+      return { role: m.role, content: m.content.slice(0, 300) };
+    });
+  }
 
   const messages = [];
   const lines = fs.readFileSync(found.file, 'utf8').split('\n').filter(Boolean);
@@ -832,8 +967,10 @@ module.exports = {
   findSessionFile,
   extractContent,
   isSystemMessage,
+  loadOpenCodeDetail,
   CLAUDE_DIR,
   CODEX_DIR,
+  OPENCODE_DB,
   HISTORY_FILE,
   PROJECTS_DIR,
 };

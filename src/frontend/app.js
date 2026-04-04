@@ -413,6 +413,9 @@ function setView(view) {
   } else if (view === 'codex-only') {
     toolFilter = toolFilter === 'codex' ? null : 'codex';
     currentView = 'sessions';
+  } else if (view === 'opencode-only') {
+    toolFilter = toolFilter === 'opencode' ? null : 'opencode';
+    currentView = 'sessions';
   } else {
     toolFilter = null;
     currentView = view;
@@ -444,7 +447,7 @@ function renderCard(s, idx) {
   var costStr = cost > 0 ? '~$' + cost.toFixed(2) : '';
   var projName = getProjectName(s.project);
   var projColor = getProjectColor(projName);
-  var toolClass = s.tool === 'codex' ? 'tool-codex' : 'tool-claude';
+  var toolClass = s.tool === 'codex' ? 'tool-codex' : s.tool === 'opencode' ? 'tool-opencode' : 'tool-claude';
 
   var classes = 'card';
   if (isSelected) classes += ' selected';
