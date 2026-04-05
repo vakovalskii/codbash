@@ -466,16 +466,6 @@ function renderCard(s, idx) {
   html += '<div class="card-top">';
   html += '<input type="checkbox" class="card-checkbox" style="' + checkboxStyle + '" ' + (isSelected ? 'checked' : '') + ' onclick="toggleSelect(\'' + s.id + '\', event)">';
   html += '<span class="tool-badge ' + toolClass + '">' + escHtml(s.tool) + '</span>';
-  if (s.mcp_servers && s.mcp_servers.length > 0) {
-    s.mcp_servers.forEach(function(m) {
-      html += '<span class="tool-badge badge-mcp">' + escHtml(m) + '</span>';
-    });
-  }
-  if (s.skills && s.skills.length > 0) {
-    s.skills.forEach(function(sk) {
-      html += '<span class="tool-badge badge-skill">' + escHtml(sk) + '</span>';
-    });
-  }
   html += '<span class="card-project" style="color:' + projColor + '">' + escHtml(projName) + '</span>';
   html += '<span class="card-time">' + timeAgo(s.last_ts) + '</span>';
   if (costStr) {
@@ -499,6 +489,21 @@ function renderCard(s, idx) {
     html += '<button class="card-expand-btn" onclick="event.stopPropagation();toggleExpand(\'' + s.id + '\',\'' + escHtml(s.project || '').replace(/'/g, "\\'") + '\',this)" title="Preview messages">&#9662;</button>';
   }
   html += '</div>';
+  // MCP/Skills footer
+  if ((s.mcp_servers && s.mcp_servers.length > 0) || (s.skills && s.skills.length > 0)) {
+    html += '<div class="card-tools">';
+    if (s.mcp_servers) {
+      s.mcp_servers.forEach(function(m) {
+        html += '<span class="tool-badge badge-mcp">' + escHtml(m) + '</span>';
+      });
+    }
+    if (s.skills) {
+      s.skills.forEach(function(sk) {
+        html += '<span class="tool-badge badge-skill">' + escHtml(sk) + '</span>';
+      });
+    }
+    html += '</div>';
+  }
   // Expandable preview area (hidden by default)
   html += '<div class="card-preview-area" id="preview-' + s.id + '"></div>';
   html += '</div>';

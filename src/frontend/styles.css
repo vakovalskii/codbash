@@ -1066,6 +1066,14 @@ body {
     margin-top: 4px;
 }
 
+.card-tools {
+    padding: 8px 16px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
 /* ── Skeleton preloader ─────────────────────────────────────── */
 
 @keyframes skeleton-shimmer {
