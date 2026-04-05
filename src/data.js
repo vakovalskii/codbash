@@ -393,13 +393,32 @@ function loadSessions() {
         let msgCount = 0;
         const mcpSet = new Set();
         const skillSet = new Set();
+        let costTotal = 0, costInput = 0, costOutput = 0, costModel = '';
         const sLines = fs.readFileSync(sessionFile, 'utf8').split('\n').filter(Boolean);
         for (const sl of sLines) {
           try {
             const entry = JSON.parse(sl);
             if (entry.type === 'user' || entry.type === 'assistant') msgCount++;
             if (entry.type === 'assistant') {
-              const content = (entry.message || {}).content;
+              const msg = entry.message || {};
+              // Cost calculation
+              if (!costModel && msg.model) costModel = msg.model;
+              const u = msg.usage;
+              if (u) {
+                const pricing = getModelPricing(msg.model || costModel);
+                const inp = u.input_tokens || 0;
+                const cacheCreate = u.cache_creation_input_tokens || 0;
+                const cacheRead = u.cache_read_input_tokens || 0;
+                const out = u.output_tokens || 0;
+                costInput += inp + cacheCreate + cacheRead;
+                costOutput += out;
+                costTotal += inp * pricing.input
+                           + cacheCreate * pricing.cache_create
+                           + cacheRead * pricing.cache_read
+                           + out * pricing.output;
+              }
+              // MCP/Skills extraction
+              const content = msg.content;
               if (Array.isArray(content)) {
                 for (const block of content) {
                   if (block.type !== 'tool_use') continue;
@@ -419,7 +438,8 @@ function loadSessions() {
         s.detail_messages = msgCount;
         s.mcp_servers = Array.from(mcpSet);
         s.skills = Array.from(skillSet);
-      } catch { s.detail_messages = 0; s.mcp_servers = []; s.skills = []; }
+        s.cost = { cost: costTotal, inputTokens: costInput, outputTokens: costOutput, model: costModel };
+      } catch { s.detail_messages = 0; s.mcp_servers = []; s.skills = []; s.cost = null; }
     } else {
       s.has_detail = false;
       s.file_size = 0;
@@ -1040,7 +1060,7 @@ function getCostAnalytics(sessions) {
   const sessionCosts = [];
 
   for (const s of sessions) {
-    const costData = computeSessionCost(s.id, s.project);
+    const costData = s.cost || computeSessionCost(s.id, s.project);
     const cost = costData.cost;
     const tokens = costData.inputTokens + costData.outputTokens;
     if (cost === 0 && tokens === 0) continue;
