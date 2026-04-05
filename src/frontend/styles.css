@@ -1046,6 +1046,11 @@ body {
     color: var(--accent-purple);
 }
 
+.tool-kiro {
+    background: rgba(251, 146, 60, 0.15);
+    color: var(--accent-orange);
+}
+
 /* ── Groups ─────────────────────────────────────────────────── */
 
 .group {

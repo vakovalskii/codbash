@@ -413,6 +413,9 @@ function setView(view) {
   } else if (view === 'codex-only') {
     toolFilter = toolFilter === 'codex' ? null : 'codex';
     currentView = 'sessions';
+  } else if (view === 'kiro-only') {
+    toolFilter = toolFilter === 'kiro' ? null : 'kiro';
+    currentView = 'sessions';
   } else if (view === 'opencode-only') {
     toolFilter = toolFilter === 'opencode' ? null : 'opencode';
     currentView = 'sessions';
@@ -447,7 +450,7 @@ function renderCard(s, idx) {
   var costStr = cost > 0 ? '~$' + cost.toFixed(2) : '';
   var projName = getProjectName(s.project);
   var projColor = getProjectColor(projName);
-  var toolClass = s.tool === 'codex' ? 'tool-codex' : s.tool === 'opencode' ? 'tool-opencode' : 'tool-claude';
+  var toolClass = s.tool === 'codex' ? 'tool-codex' : s.tool === 'opencode' ? 'tool-opencode' : s.tool === 'kiro' ? 'tool-kiro' : 'tool-claude';
 
   var classes = 'card';
   if (isSelected) classes += ' selected';
@@ -988,12 +991,18 @@ function renderHeatmap(container) {
   }
 
   // Render
+  var cellSize = 12;
+  var gap = 2;
+  var gridWidth = weeks.length * (cellSize + gap) + 40; // 40px for day labels
+
   var html = '<div class="heatmap-container">';
   html += '<h2 class="heatmap-title">Activity</h2>';
+  html += '<div class="heatmap-scroll" style="overflow-x:auto">';
+  html += '<div class="heatmap-grid" style="min-width:' + gridWidth + 'px">';
 
   // Month labels row
   html += '<div class="heatmap-months">';
-  html += '<div class="heatmap-day-label"></div>'; // spacer for day labels
+  html += '<div class="heatmap-day-label"></div>';
   var monthPositions = {};
   monthLabels.forEach(function(ml) { monthPositions[ml.week] = ml.label; });
   for (var wi = 0; wi < weeks.length; wi++) {
@@ -1021,7 +1030,7 @@ function renderHeatmap(container) {
     html += '</div>';
   }
 
-  html += '</div>';
+  html += '</div></div>';
 
   // Summary
   html += '<div class="heatmap-summary">';

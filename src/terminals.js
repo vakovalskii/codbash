@@ -187,7 +187,12 @@ function focusTerminalByPid(pid) {
           if (!ppid || ppid === '0' || ppid === '1') break;
           const parentCmd = execSync(`ps -p ${ppid} -o comm= 2>/dev/null`, { encoding: 'utf8' }).trim();
           if (parentCmd.includes('cmux')) {
+            // Activate cmux app and try to select the right workspace
             execSync(`osascript -e 'tell application "cmux" to activate'`, { stdio: 'pipe', timeout: 2000 });
+            // Try cmux CLI to focus the surface by TTY
+            try {
+              execSync(`cmux trigger-flash --surface ${ttyOut.replace('tty','')} 2>/dev/null`, { stdio: 'pipe', timeout: 2000 });
+            } catch {}
             return { ok: true, terminal: 'cmux' };
           }
           checkPid = ppid;
