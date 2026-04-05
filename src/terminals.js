@@ -179,13 +179,18 @@ function focusTerminalByPid(pid) {
       const ttyOut = execSync(`ps -p ${pid} -o tty= 2>/dev/null`, { encoding: 'utf8' }).trim();
       if (!ttyOut) throw new Error('no tty');
 
-      // Check if the process parent chain includes cmux
+      // Walk parent chain to detect cmux (claude → zsh → login → cmux)
       try {
-        const ppidChain = execSync(`ps -p ${pid} -o ppid= 2>/dev/null`, { encoding: 'utf8' }).trim();
-        const parentCmd = execSync(`ps -p ${ppidChain.trim()} -o comm= 2>/dev/null`, { encoding: 'utf8' }).trim();
-        if (parentCmd.includes('cmux')) {
-          execSync(`osascript -e 'tell application "cmux" to activate'`, { stdio: 'pipe', timeout: 2000 });
-          return true;
+        let checkPid = pid;
+        for (let depth = 0; depth < 6; depth++) {
+          const ppid = execSync(`ps -p ${checkPid} -o ppid= 2>/dev/null`, { encoding: 'utf8' }).trim();
+          if (!ppid || ppid === '0' || ppid === '1') break;
+          const parentCmd = execSync(`ps -p ${ppid} -o comm= 2>/dev/null`, { encoding: 'utf8' }).trim();
+          if (parentCmd.includes('cmux')) {
+            execSync(`osascript -e 'tell application "cmux" to activate'`, { stdio: 'pipe', timeout: 2000 });
+            return true;
+          }
+          checkPid = ppid;
         }
       } catch {}
 
