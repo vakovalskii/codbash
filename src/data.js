@@ -393,32 +393,13 @@ function loadSessions() {
         let msgCount = 0;
         const mcpSet = new Set();
         const skillSet = new Set();
-        let costTotal = 0, costInput = 0, costOutput = 0, costModel = '';
         const sLines = fs.readFileSync(sessionFile, 'utf8').split('\n').filter(Boolean);
         for (const sl of sLines) {
           try {
             const entry = JSON.parse(sl);
             if (entry.type === 'user' || entry.type === 'assistant') msgCount++;
             if (entry.type === 'assistant') {
-              const msg = entry.message || {};
-              // Cost calculation
-              if (!costModel && msg.model) costModel = msg.model;
-              const u = msg.usage;
-              if (u) {
-                const pricing = getModelPricing(msg.model || costModel);
-                const inp = u.input_tokens || 0;
-                const cacheCreate = u.cache_creation_input_tokens || 0;
-                const cacheRead = u.cache_read_input_tokens || 0;
-                const out = u.output_tokens || 0;
-                costInput += inp + cacheCreate + cacheRead;
-                costOutput += out;
-                costTotal += inp * pricing.input
-                           + cacheCreate * pricing.cache_create
-                           + cacheRead * pricing.cache_read
-                           + out * pricing.output;
-              }
-              // MCP/Skills extraction
-              const content = msg.content;
+              const content = (entry.message || {}).content;
               if (Array.isArray(content)) {
                 for (const block of content) {
                   if (block.type !== 'tool_use') continue;
@@ -438,8 +419,7 @@ function loadSessions() {
         s.detail_messages = msgCount;
         s.mcp_servers = Array.from(mcpSet);
         s.skills = Array.from(skillSet);
-        s.cost = { cost: costTotal, inputTokens: costInput, outputTokens: costOutput, model: costModel };
-      } catch { s.detail_messages = 0; s.mcp_servers = []; s.skills = []; s.cost = null; }
+      } catch { s.detail_messages = 0; s.mcp_servers = []; s.skills = []; }
     } else {
       s.has_detail = false;
       s.file_size = 0;
@@ -996,9 +976,24 @@ function getModelPricing(model) {
 
 // ── Compute real cost from session file token usage ────────
 
-function computeSessionCost(sessionId, project) {
+function computeSessionCost(sessionId, project, maxFileSize) {
   const found = findSessionFile(sessionId, project);
   if (!found) return { cost: 0, inputTokens: 0, outputTokens: 0, model: '' };
+
+  // Skip very large files in bulk operations (analytics)
+  if (maxFileSize) {
+    try {
+      const stat = fs.statSync(found.file);
+      if (stat.size > maxFileSize) {
+        // Estimate from file size instead
+        const tokens = stat.size / 4;
+        const pricing = getModelPricing('');
+        const inp = Math.round(tokens * 0.3);
+        const out = Math.round(tokens * 0.7);
+        return { cost: inp * pricing.input + out * pricing.output, inputTokens: inp, outputTokens: out, model: 'estimated' };
+      }
+    } catch {}
+  }
 
   let totalCost = 0;
   let totalInput = 0;
@@ -1051,7 +1046,13 @@ function computeSessionCost(sessionId, project) {
 
 // ── Cost analytics ────────────────────────────────────────
 
+let analyticsCache = null;
+let analyticsCacheAt = 0;
+const ANALYTICS_TTL = 120000; // 2 minutes
+
 function getCostAnalytics(sessions) {
+  const now = Date.now();
+  if (analyticsCache && (now - analyticsCacheAt) < ANALYTICS_TTL) return analyticsCache;
   const byDay = {};
   const byProject = {};
   const byWeek = {};
@@ -1060,7 +1061,7 @@ function getCostAnalytics(sessions) {
   const sessionCosts = [];
 
   for (const s of sessions) {
-    const costData = s.cost || computeSessionCost(s.id, s.project);
+    const costData = computeSessionCost(s.id, s.project, 10 * 1024 * 1024);
     const cost = costData.cost;
     const tokens = costData.inputTokens + costData.outputTokens;
     if (cost === 0 && tokens === 0) continue;
@@ -1098,7 +1099,7 @@ function getCostAnalytics(sessions) {
   // Sort top sessions by cost
   sessionCosts.sort((a, b) => b.cost - a.cost);
 
-  return {
+  analyticsCache = {
     totalCost,
     totalTokens,
     totalSessions: sessions.length,
@@ -1107,6 +1108,8 @@ function getCostAnalytics(sessions) {
     byProject,
     topSessions: sessionCosts.slice(0, 10),
   };
+  analyticsCacheAt = Date.now();
+  return analyticsCache;
 }
 
 // ── Active sessions detection ─────────────────────────────
