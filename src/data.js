@@ -367,19 +367,41 @@ function loadSessions() {
       s.file_size = fs.statSync(sessionFile).size;
       try {
         let msgCount = 0;
+        const mcpSet = new Set();
+        const skillSet = new Set();
         const sLines = fs.readFileSync(sessionFile, 'utf8').split('\n').filter(Boolean);
         for (const sl of sLines) {
           try {
             const entry = JSON.parse(sl);
             if (entry.type === 'user' || entry.type === 'assistant') msgCount++;
+            if (entry.type === 'assistant') {
+              const content = (entry.message || {}).content;
+              if (Array.isArray(content)) {
+                for (const block of content) {
+                  if (block.type !== 'tool_use') continue;
+                  const name = block.name || '';
+                  if (name.startsWith('mcp__')) {
+                    const parts = name.split('__');
+                    if (parts.length >= 3) mcpSet.add(parts[1]);
+                  } else if (name === 'Skill') {
+                    const skill = (block.input || {}).skill;
+                    if (skill) skillSet.add(skill);
+                  }
+                }
+              }
+            }
           } catch {}
         }
         s.detail_messages = msgCount;
-      } catch { s.detail_messages = 0; }
+        s.mcp_servers = Array.from(mcpSet);
+        s.skills = Array.from(skillSet);
+      } catch { s.detail_messages = 0; s.mcp_servers = []; s.skills = []; }
     } else {
       s.has_detail = false;
       s.file_size = 0;
       s.detail_messages = 0;
+      s.mcp_servers = [];
+      s.skills = [];
     }
   }
 
