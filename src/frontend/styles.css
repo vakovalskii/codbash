@@ -642,9 +642,6 @@ body {
 }
 
 .detail-info {
-    display: grid;
-    grid-template-columns: auto 1fr;
-    gap: 8px 16px;
     font-size: 13px;
     margin-bottom: 16px;
 }
@@ -1037,11 +1034,21 @@ body {
     color: var(--accent-purple);
 }
 
+.message.has-tools {
+    padding: 0;
+    overflow: hidden;
+}
+
+.message.has-tools .msg-inner {
+    padding: 10px 14px;
+}
+
 .msg-tools {
     display: flex;
     flex-wrap: wrap;
-    gap: 4px;
-    margin-top: 4px;
+    gap: 6px;
+    padding: 6px 14px;
+    border-top: 1px solid var(--border);
 }
 
 /* ── Settings page ──────────────────────────────────────────── */

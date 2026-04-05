@@ -1117,6 +1117,22 @@ async function openDetail(s) {
   });
   infoHtml += '<button class="tag-add-btn" onclick="showTagDropdown(event, \'' + s.id + '\')">+</button>';
   infoHtml += '</span></div>';
+  // MCP servers
+  if (s.mcp_servers && s.mcp_servers.length > 0) {
+    infoHtml += '<div class="detail-row"><span class="detail-label">MCP</span><span style="display:flex;gap:4px;flex-wrap:wrap">';
+    s.mcp_servers.forEach(function(m) {
+      infoHtml += '<span class="tool-badge badge-mcp">' + escHtml(m) + '</span>';
+    });
+    infoHtml += '</span></div>';
+  }
+  // Skills
+  if (s.skills && s.skills.length > 0) {
+    infoHtml += '<div class="detail-row"><span class="detail-label">Skills</span><span style="display:flex;gap:4px;flex-wrap:wrap">';
+    s.skills.forEach(function(sk) {
+      infoHtml += '<span class="tool-badge badge-skill">' + escHtml(sk) + '</span>';
+    });
+    infoHtml += '</span></div>';
+  }
   infoHtml += '</div>';
 
   // Action buttons
@@ -1158,9 +1174,13 @@ async function openDetail(s) {
         data.messages.forEach(function(m) {
           var roleClass = m.role === 'user' ? 'msg-user' : 'msg-assistant';
           var roleLabel = m.role === 'user' ? 'You' : 'Assistant';
-          msgsHtml += '<div class="message ' + roleClass + '">';
+          var hasTools = m.tools && m.tools.length > 0;
+          msgsHtml += '<div class="message ' + roleClass + (hasTools ? ' has-tools' : '') + '">';
+          msgsHtml += '<div class="msg-inner">';
           msgsHtml += '<div class="msg-role">' + roleLabel + '</div>';
-          if (m.tools && m.tools.length > 0) {
+          msgsHtml += '<div class="msg-content">' + escHtml(m.content) + '</div>';
+          msgsHtml += '</div>';
+          if (hasTools) {
             msgsHtml += '<div class="msg-tools">';
             m.tools.forEach(function(t) {
               if (t.type === 'mcp') {
@@ -1171,7 +1191,6 @@ async function openDetail(s) {
             });
             msgsHtml += '</div>';
           }
-          msgsHtml += '<div class="msg-content">' + escHtml(m.content) + '</div>';
           msgsHtml += '</div>';
         });
         msgContainer.innerHTML = msgsHtml;
