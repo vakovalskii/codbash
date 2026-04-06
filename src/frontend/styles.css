@@ -2073,6 +2073,49 @@ body {
 .top-session-date { color: var(--text-muted); font-size: 12px; }
 .top-session-id { font-family: monospace; font-size: 11px; color: var(--text-muted); }
 
+/* ── Data coverage indicators ──────────────────────────────── */
+
+.analytics-coverage {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin: -8px 0 16px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.coverage-ok { color: var(--accent-green); }
+.coverage-est { color: var(--accent-orange, #f59e0b); }
+.coverage-none { color: var(--text-muted); opacity: 0.6; }
+
+/* ── Token breakdown grid ─────────────────────────────────── */
+
+.token-breakdown-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 10px;
+}
+
+.token-type-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.token-type-val { font-size: 18px; font-weight: 700; color: var(--text); }
+.token-type-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+.token-type-pct { font-size: 12px; color: var(--text-muted); }
+
+.token-cache-read { border-color: rgba(96, 165, 250, 0.3); }
+.token-cache-create { border-color: rgba(251, 191, 36, 0.3); }
+.token-context { border-color: rgba(168, 85, 247, 0.3); }
+
 /* ── Update banner ──────────────────────────────────────────── */
 
 .update-banner {
