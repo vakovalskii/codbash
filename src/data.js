@@ -291,6 +291,8 @@ function scanOpenCodeSessions() {
           if (toolName === 'skill' || toolName === 'skill_mcp') {
             if (skillName) {
               if (!sessionSkills[sid]) sessionSkills[sid] = new Set();
+              // Plugin prefix: "superpowers:writing-plans" -> "superpowers"
+              // For OpenCode keep full name (e.g. "openspec-propose", "chrome-devtools")
               const sk = skillName.includes(':') ? skillName.split(':')[0] : skillName;
               sessionSkills[sid].add(sk);
             }
