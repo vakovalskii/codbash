@@ -834,6 +834,11 @@ function render() {
     return;
   }
 
+  if (currentView === 'settings') {
+    renderSettings(content);
+    return;
+  }
+
   if (currentView === 'running') {
     renderRunning(content, sessions);
     return;
@@ -2071,6 +2076,60 @@ function focusSession(sessionId) {
 }
 
 // ── Changelog view ────────────────────────────────────────────
+
+function renderSettings(container) {
+  var savedTheme = localStorage.getItem('codedash-theme') || 'dark';
+  var savedTerminal = localStorage.getItem('codedash-terminal') || '';
+  var aiTitlesOn = localStorage.getItem('codedash-ai-titles') === 'true';
+
+  var html = '<div class="settings-page">';
+  html += '<h2 style="margin:0 0 24px;font-size:18px;font-weight:600">Settings</h2>';
+
+  // Theme
+  html += '<div class="settings-group">';
+  html += '<label class="settings-label">Theme</label>';
+  html += '<div class="settings-theme-btns">';
+  ['dark', 'light', 'system'].forEach(function(t) {
+    var active = savedTheme === t ? ' active' : '';
+    html += '<button class="theme-btn' + active + '" onclick="saveThemePref(\'' + t + '\');renderSettings(document.getElementById(\'content\'))">' + t.charAt(0).toUpperCase() + t.slice(1) + '</button>';
+  });
+  html += '</div>';
+  html += '</div>';
+
+  // Terminal
+  html += '<div class="settings-group">';
+  html += '<label class="settings-label">Terminal</label>';
+  html += '<select class="settings-select" onchange="saveTerminalPref(this.value)">';
+  if (Array.isArray(availableTerminals)) {
+    availableTerminals.forEach(function(t) {
+      if (!t.available) return;
+      var sel = t.id === savedTerminal ? ' selected' : '';
+      html += '<option value="' + t.id + '"' + sel + '>' + escHtml(t.name) + '</option>';
+    });
+  }
+  html += '</select>';
+  html += '</div>';
+
+  // AI Titles
+  html += '<div class="settings-group">';
+  html += '<label class="settings-label">AI Titles</label>';
+  html += '<div class="settings-checkbox">';
+  html += '<input type="checkbox" id="settingsAiToggle"' + (aiTitlesOn ? ' checked' : '') + ' onchange="toggleAITitles(this.checked)">';
+  html += '<span style="font-size:13px;color:var(--text-secondary)">Show generated titles</span>';
+  html += '</div>';
+  html += '<button class="theme-btn" style="margin-top:8px" onclick="openLLMSettings()">LLM Settings</button>';
+  html += '</div>';
+
+  // Version
+  html += '<div style="margin-top:32px;padding-top:16px;border-top:1px solid var(--border)">';
+  var badge = document.getElementById('versionBadge');
+  var ver = badge ? badge.textContent : '';
+  html += '<span style="color:var(--text-muted);font-size:12px">codedash ' + escHtml(ver) + '</span>';
+  html += '</div>';
+
+  html += '</div>';
+  container.innerHTML = html;
+}
 
 async function renderChangelog(container) {
   container.innerHTML = '<div class="loading">Loading changelog...</div>';
