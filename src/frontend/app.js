@@ -678,7 +678,8 @@ async function toggleExpand(sessionId, project, btn) {
         var label = m.role === 'user' ? 'You' : 'AI';
         html += '<div class="preview-msg ' + cls + '">';
         html += '<span class="preview-role">' + label + '</span> ';
-        html += escHtml(m.content);
+        var text = m.content.length > 500 ? m.content.slice(0, 500) + '...' : m.content;
+        html += escHtml(text);
         html += '</div>';
       });
       area.innerHTML = html;
@@ -715,6 +716,11 @@ function initHoverPreview() {
     var card = e.target.closest('.card');
     if (!card) { clearTimeout(hoverTimer); hideHoverTooltip(); }
   });
+
+  // Hide tooltip on scroll
+  var content = document.querySelector('.content');
+  if (content) content.addEventListener('scroll', function() { clearTimeout(hoverTimer); hideHoverTooltip(); }, { passive: true });
+  window.addEventListener('scroll', function() { clearTimeout(hoverTimer); hideHoverTooltip(); }, { passive: true });
 }
 
 async function showHoverTooltip(card, session) {
@@ -743,9 +749,15 @@ async function showHoverTooltip(card, session) {
     document.body.appendChild(tip);
     hoverTooltip = tip;
 
-    // Position near card
+    // Position near card — clamp to viewport
     var rect = card.getBoundingClientRect();
-    tip.style.top = Math.min(rect.bottom + 4, window.innerHeight - tip.offsetHeight - 8) + 'px';
+    var tipH = tip.offsetHeight;
+    var tipTop = rect.bottom + 4;
+    // If tooltip would go below viewport, show above card instead
+    if (tipTop + tipH > window.innerHeight - 8) {
+      tipTop = Math.max(8, rect.top - tipH - 4);
+    }
+    tip.style.top = tipTop + 'px';
     tip.style.left = Math.max(8, rect.left) + 'px';
     tip.style.maxWidth = Math.min(500, window.innerWidth - rect.left - 20) + 'px';
 
