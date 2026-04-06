@@ -209,6 +209,7 @@ body {
     border-bottom: 1px solid var(--border);
     background: var(--bg-secondary);
     flex-wrap: wrap;
+    position: relative;
 }
 
 .search-box {
@@ -551,24 +552,95 @@ body {
 
 /* ── Date Range Inputs ─────────────────────────────────────────── */
 
-.date-input {
-    background: var(--bg-input);
+/* ── Calendar popup ─────────────────────────────────────────── */
+
+#dateBtn { display: flex; align-items: center; gap: 5px; }
+#dateBtn.has-filter { background: rgba(96,165,250,0.15); color: var(--accent-blue); border-color: rgba(96,165,250,0.3); }
+
+.calendar-popup {
+    display: none;
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 4px;
+    background: var(--bg-card);
     border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 6px 10px;
-    color: var(--text-primary);
-    font-size: 13px;
-    outline: none;
-    transition: border-color 0.2s;
+    border-radius: 10px;
+    padding: 16px;
+    width: 280px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    z-index: 50;
 }
-.date-input:focus { border-color: var(--accent-blue); }
-.date-input::-webkit-calendar-picker-indicator {
-    filter: invert(0.7);
+.calendar-popup.open { display: block; }
+
+.cal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+}
+.cal-header span { color: var(--text-primary); font-size: 13px; font-weight: 600; }
+.cal-nav {
+    background: none; border: none; color: var(--text-muted); font-size: 18px;
+    cursor: pointer; padding: 0 4px; line-height: 1;
+}
+.cal-nav:hover { color: var(--text-primary); }
+
+.cal-weekdays {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 2px;
+    text-align: center;
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+}
+
+.cal-days {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 2px;
+    text-align: center;
+}
+
+.cal-day {
+    padding: 6px 0;
+    font-size: 12px;
+    border-radius: 4px;
     cursor: pointer;
+    color: var(--text-secondary);
+    transition: all 0.1s;
 }
-[data-theme="light"] .date-input::-webkit-calendar-picker-indicator {
-    filter: none;
+.cal-day:hover { background: rgba(255,255,255,0.08); color: var(--text-primary); }
+.cal-day.other-month { color: var(--text-muted); opacity: 0.3; }
+.cal-day.today { font-weight: 700; color: var(--accent-blue); }
+.cal-day.in-range { background: rgba(96,165,250,0.1); }
+.cal-day.range-start, .cal-day.range-end {
+    background: rgba(96,165,250,0.3); color: #fff; font-weight: 600;
 }
+.cal-day.range-start { border-radius: 4px 0 0 4px; }
+.cal-day.range-end { border-radius: 0 4px 4px 0; }
+.cal-day.range-start.range-end { border-radius: 4px; }
+
+.cal-presets {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+.cal-preset {
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 4px;
+    background: rgba(255,255,255,0.04);
+    color: var(--text-muted);
+    border: none;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.cal-preset:hover { background: rgba(255,255,255,0.08); color: var(--text-primary); }
 
 /* ── Terminal Select ───────────────────────────────────────────── */
 
