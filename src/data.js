@@ -202,6 +202,51 @@ function loadKiroDetail(conversationId) {
   }
 }
 
+// Cursor stores each workspace under ~/.cursor/projects/<key>/ where <key> is the
+// absolute path with / and . replaced by -. Hyphens inside a directory name are
+// preserved, so splitting <key> on "-" cannot recover the path. Decode by
+// greedily matching the longest real child directory name at each level.
+function decodeCursorProjectFolderKey(proj) {
+  if (!proj) return '';
+  let enc = proj;
+  let cwd = '';
+  while (enc.length > 0) {
+    const parent = cwd || '/';
+    let dirs;
+    try {
+      dirs = fs.readdirSync(parent, { withFileTypes: true })
+        .filter(function (e) { return e.isDirectory(); })
+        .map(function (e) { return e.name; });
+    } catch {
+      return cwd || ('/' + proj.replace(/-/g, '/'));
+    }
+    dirs.sort(function (a, b) { return b.length - a.length; });
+    var matched = null;
+    for (var j = 0; j < dirs.length; j++) {
+      var d = dirs[j];
+      if (enc === d || (enc.startsWith(d) && (enc.length === d.length || enc[d.length] === '-'))) {
+        matched = d;
+        break;
+      }
+    }
+    if (!matched) {
+      var idx = enc.indexOf('-');
+      var part = idx === -1 ? enc : enc.slice(0, idx);
+      var next = cwd ? path.join(cwd, part) : path.join('/', part);
+      if (fs.existsSync(next)) {
+        cwd = next;
+        enc = idx === -1 ? '' : enc.slice(idx + 1);
+      } else {
+        return cwd || ('/' + proj.replace(/-/g, '/'));
+      }
+      continue;
+    }
+    cwd = cwd ? path.join(cwd, matched) : path.join('/', matched);
+    enc = enc.length === matched.length ? '' : enc.slice(matched.length + 1);
+  }
+  return cwd;
+}
+
 function scanCursorSessions() {
   const sessions = [];
 
@@ -212,22 +257,7 @@ function scanCursorSessions() {
         const transcriptsDir = path.join(CURSOR_PROJECTS, proj, 'agent-transcripts');
         if (!fs.existsSync(transcriptsDir)) continue;
 
-        // Decode project path from Cursor's encoding
-        // "Users-v-kovalskii-vpn" could be /Users/v.kovalskii/vpn or /Users/v-kovalskii/vpn
-        // Try to find existing directory by progressively splitting
-        let projectPath = '';
-        const segments = proj.split('-');
-        let candidate = '';
-        for (let i = 0; i < segments.length; i++) {
-          var trySlash = candidate + '/' + segments[i];
-          var tryDash = candidate + (candidate ? '-' : '') + segments[i];
-          var tryDot = candidate + (candidate ? '.' : '') + segments[i];
-          if (fs.existsSync(trySlash)) { candidate = trySlash; }
-          else if (fs.existsSync(tryDot)) { candidate = tryDot; }
-          else if (i === 0) { candidate = '/' + segments[i]; }
-          else { candidate = trySlash; } // default to slash
-        }
-        projectPath = candidate || ('/' + proj.replace(/-/g, '/'));
+        const projectPath = decodeCursorProjectFolderKey(proj) || ('/' + proj.replace(/-/g, '/'));
 
         for (const sessDir of fs.readdirSync(transcriptsDir)) {
           const sessFile = path.join(transcriptsDir, sessDir, sessDir + '.jsonl');
