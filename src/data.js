@@ -709,7 +709,7 @@ function loadSessions() {
   // Enrich Claude sessions with detail file info
   for (const [sid, s] of Object.entries(sessions)) {
     if (s.tool !== 'claude') continue;
-    const projectKey = s.project.replace(/[\/\.]/g, '-');
+    const projectKey = s.project.replace(/[^a-zA-Z0-9-]/g, '-');
     const sessionFile = path.join(PROJECTS_DIR, projectKey, `${sid}.jsonl`);
     if (fs.existsSync(sessionFile)) {
       s.has_detail = true;
@@ -866,7 +866,7 @@ function deleteSession(sessionId, project) {
   const deleted = [];
 
   // 1. Remove session JSONL file from project dir
-  const projectKey = project.replace(/[\/\.]/g, '-');
+  const projectKey = project.replace(/[^a-zA-Z0-9-]/g, '-');
   const sessionFile = path.join(PROJECTS_DIR, projectKey, `${sessionId}.jsonl`);
   if (fs.existsSync(sessionFile)) {
     fs.unlinkSync(sessionFile);
@@ -935,7 +935,7 @@ function getGitCommits(projectDir, fromTs, toTs) {
 }
 
 function exportSessionMarkdown(sessionId, project) {
-  const projectKey = project.replace(/[\/\.]/g, '-');
+  const projectKey = project.replace(/[^a-zA-Z0-9-]/g, '-');
   const sessionFile = path.join(PROJECTS_DIR, projectKey, `${sessionId}.jsonl`);
 
   if (!fs.existsSync(sessionFile)) {
@@ -971,7 +971,7 @@ function exportSessionMarkdown(sessionId, project) {
 function findSessionFile(sessionId, project) {
   // Try Claude projects dir
   if (project) {
-    const projectKey = project.replace(/[\/\.]/g, '-');
+    const projectKey = project.replace(/[^a-zA-Z0-9-]/g, '-');
     const claudeFile = path.join(PROJECTS_DIR, projectKey, `${sessionId}.jsonl`);
     if (fs.existsSync(claudeFile)) return { file: claudeFile, format: 'claude' };
   }
