@@ -1300,6 +1300,8 @@ function getSessionReplay(sessionId, project) {
   };
 }
 
+const CONTEXT_WINDOW = 200_000; // Claude's max context window (tokens)
+
 // ── Pricing per model (per token, April 2026) ─────────────
 
 const MODEL_PRICING = {
@@ -1329,11 +1331,15 @@ function getModelPricing(model) {
 
 function computeSessionCost(sessionId, project) {
   const found = findSessionFile(sessionId, project);
-  if (!found) return { cost: 0, inputTokens: 0, outputTokens: 0, model: '' };
+  if (!found) return { cost: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0, contextPctSum: 0, contextTurnCount: 0, model: '' };
 
   let totalCost = 0;
   let totalInput = 0;
   let totalOutput = 0;
+  let totalCacheRead = 0;
+  let totalCacheCreate = 0;
+  let contextPctSum = 0;
+  let contextTurnCount = 0;
   let model = '';
 
   try {
@@ -1353,12 +1359,21 @@ function computeSessionCost(sessionId, project) {
           const cacheRead = u.cache_read_input_tokens || 0;
           const out = u.output_tokens || 0;
 
-          totalInput += inp + cacheCreate + cacheRead;
+          totalInput += inp;
           totalOutput += out;
+          totalCacheRead += cacheRead;
+          totalCacheCreate += cacheCreate;
           totalCost += inp * pricing.input
                      + cacheCreate * pricing.cache_create
                      + cacheRead * pricing.cache_read
                      + out * pricing.output;
+
+          // Track per-turn context window usage (average, not peak)
+          const contextThisTurn = inp + cacheCreate + cacheRead;
+          if (contextThisTurn > 0) {
+            contextPctSum += (contextThisTurn / CONTEXT_WINDOW) * 100;
+            contextTurnCount++;
+          }
         }
         // Codex: estimate from file size (no token usage in session files)
       } catch {}
@@ -1377,7 +1392,7 @@ function computeSessionCost(sessionId, project) {
     } catch {}
   }
 
-  return { cost: totalCost, inputTokens: totalInput, outputTokens: totalOutput, model };
+  return { cost: totalCost, inputTokens: totalInput, outputTokens: totalOutput, cacheReadTokens: totalCacheRead, cacheCreateTokens: totalCacheCreate, contextPctSum, contextTurnCount, model };
 }
 
 // ── Cost analytics ────────────────────────────────────────
@@ -1386,20 +1401,59 @@ function getCostAnalytics(sessions) {
   const byDay = {};
   const byProject = {};
   const byWeek = {};
+  const byAgent = {};
   let totalCost = 0;
   let totalTokens = 0;
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+  let totalCacheReadTokens = 0;
+  let totalCacheCreateTokens = 0;
+  let globalContextPctSum = 0;
+  let globalContextTurnCount = 0;
+  let firstDate = null;
+  let lastDate = null;
+  let sessionsWithData = 0;
+  const agentNoCostData = {};
+  for (const s of sessions) {
+    if (!byAgent[s.tool]) byAgent[s.tool] = { cost: 0, sessions: 0, tokens: 0, estimated: false };
+  }
   const sessionCosts = [];
 
   for (const s of sessions) {
     const costData = computeSessionCost(s.id, s.project);
     const cost = costData.cost;
-    const tokens = costData.inputTokens + costData.outputTokens;
-    if (cost === 0 && tokens === 0) continue;
+    const tokens = costData.inputTokens + costData.outputTokens + costData.cacheReadTokens + costData.cacheCreateTokens;
+    if (cost === 0 && tokens === 0) {
+      if (!agentNoCostData[s.tool]) agentNoCostData[s.tool] = 0;
+      agentNoCostData[s.tool]++;
+      continue;
+    }
+    sessionsWithData++;
     totalCost += cost;
     totalTokens += tokens;
+    totalInputTokens += costData.inputTokens;
+    totalOutputTokens += costData.outputTokens;
+    totalCacheReadTokens += costData.cacheReadTokens;
+    totalCacheCreateTokens += costData.cacheCreateTokens;
 
-    // By day
+    // Per-agent breakdown
+    const agent = s.tool || 'unknown';
+    if (!byAgent[agent]) byAgent[agent] = { cost: 0, sessions: 0, tokens: 0, estimated: false };
+    byAgent[agent].cost += cost;
+    byAgent[agent].sessions++;
+    byAgent[agent].tokens += tokens;
+    if (agent === 'codex') byAgent[agent].estimated = true;
+
+    // Context % across all turns
+    globalContextPctSum += costData.contextPctSum;
+    globalContextTurnCount += costData.contextTurnCount;
+
+    // Date range
     const day = s.date || 'unknown';
+    if (s.date) {
+      if (!firstDate || s.date < firstDate) firstDate = s.date;
+      if (!lastDate || s.date > lastDate) lastDate = s.date;
+    }
     if (!byDay[day]) byDay[day] = { cost: 0, sessions: 0, tokens: 0 };
     byDay[day].cost += cost;
     byDay[day].sessions++;
@@ -1429,14 +1483,29 @@ function getCostAnalytics(sessions) {
   // Sort top sessions by cost
   sessionCosts.sort((a, b) => b.cost - a.cost);
 
+  const days = firstDate && lastDate
+    ? Math.max(1, Math.round((new Date(lastDate) - new Date(firstDate)) / 86400000) + 1)
+    : 1;
+
   return {
     totalCost,
     totalTokens,
-    totalSessions: sessions.length,
+    totalInputTokens,
+    totalOutputTokens,
+    totalCacheReadTokens,
+    totalCacheCreateTokens,
+    avgContextPct: globalContextTurnCount > 0 ? Math.round(globalContextPctSum / globalContextTurnCount) : 0,
+    dailyRate: totalCost / days,
+    firstDate,
+    lastDate,
+    days,
+    totalSessions: sessionsWithData,
     byDay,
     byWeek,
     byProject,
     topSessions: sessionCosts.slice(0, 10),
+    byAgent,
+    agentNoCostData,
   };
 }
 
