@@ -85,6 +85,38 @@ GET  /api/session/:id/export    Download session as Markdown
 - System messages from Codex/Kiro (AGENTS.md, permissions, exit) are filtered via `isSystemMessage()`
 - Cursor `<user_query>` wrappers are stripped in `loadCursorDetail()`
 
+## Git workflow
+
+**`main` branch is protected.** All changes go through feature branches + pull requests.
+
+```bash
+# 1. Create a feature branch
+git checkout -b feat/my-feature    # or fix/bug-name, chore/cleanup
+
+# 2. Make changes, commit
+git add <files> && git commit -m "feat: description"
+
+# 3. Push and create PR
+git push -u origin feat/my-feature
+gh pr create --title "feat: description" --body "..."
+
+# 4. After review/approval, merge via GitHub
+gh pr merge <number> --squash
+```
+
+**Branch naming:**
+- `feat/` — new features
+- `fix/` — bug fixes
+- `chore/` — refactoring, docs, CI
+- `release/` — version bumps + publish
+
+**Commit messages:** Use conventional format: `feat:`, `fix:`, `chore:`, `docs:`, `perf:`.
+
+**PR rules:**
+- 1 approval required to merge into main
+- Keep PRs small and focused — one feature/fix per PR
+- Large PRs touching 5+ files should be split
+
 ## Versioning rules
 
 **IMPORTANT: Do not bump versions aggressively.**
@@ -100,11 +132,12 @@ Before bumping minor/major, ask: "Does this really warrant a version bump, or ca
 ## Publishing
 
 ```bash
-# Bump version in package.json, then:
-git add -A && git commit && git push && npm publish --access public
-
-# Also sync to ~/codedash:
-cp -r src/* ~/codedash/src/ && cp bin/cli.js ~/codedash/bin/ && cp package.json ~/codedash/
+# From a release branch:
+git checkout -b release/6.x.x
+# Bump version in package.json, commit, push, create PR
+# After merge to main:
+git checkout main && git pull
+npm publish --access public
 ```
 
 Package name: `codedash-app`, binary name: `codedash`

@@ -101,6 +101,23 @@ curl -fsSL https://opencode.ai/install | bash            # OpenCode
 - At least one AI coding agent installed
 - macOS / Linux / Windows
 
+## Contributing
+
+`main` is protected. All changes go through feature branches and pull requests.
+
+```bash
+git checkout -b fix/my-fix
+# make changes
+git push -u origin fix/my-fix
+gh pr create
+```
+
+- **Branch naming:** `feat/`, `fix/`, `chore/`, `release/`
+- **1 approval** required to merge
+- Keep PRs small and focused
+
+See [ARCHITECTURE.md](docs/ARCHITECTURE.md) for codebase details.
+
 ## License
 
 MIT

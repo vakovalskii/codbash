@@ -323,3 +323,29 @@ GET  /api/version               Current + latest npm version
 GET  /api/changelog             Changelog entries
 GET  /api/terminals             Available terminal apps
 ```
+
+---
+
+## Contributing
+
+### Git Workflow
+
+`main` is protected. All changes require a pull request with 1 approval.
+
+```
+main (protected)
+  ├── feat/session-titles    → PR → merge
+  ├── fix/cursor-path        → PR → merge
+  └── release/6.4.0          → PR → merge + npm publish
+```
+
+**Branch naming:** `feat/`, `fix/`, `chore/`, `release/`
+
+**Commit format:** Conventional — `feat:`, `fix:`, `chore:`, `docs:`, `perf:`
+
+### PR Guidelines
+
+- One feature or fix per PR
+- Keep PRs under 5 files when possible
+- Large features should be split into incremental PRs
+- Test locally with `node -e "require('./src/server')"` before pushing
