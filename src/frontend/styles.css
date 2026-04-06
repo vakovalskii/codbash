@@ -2073,6 +2073,206 @@ body {
 .top-session-date { color: var(--text-muted); font-size: 12px; }
 .top-session-id { font-family: monospace; font-size: 11px; color: var(--text-muted); }
 
+/* ── Data coverage note ──────────────────────────────────────── */
+
+.analytics-coverage {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-bottom: 20px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+}
+
+.coverage-ok   { color: var(--accent-green); }
+.coverage-est  { color: #f59e0b; }
+.coverage-none { color: #f87171; }
+
+/* ── Token breakdown ─────────────────────────────────────────── */
+
+.token-breakdown-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    gap: 10px;
+}
+
+.token-type-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.token-type-val {
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.token-type-label {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.token-type-pct {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
+.token-cache-read .token-type-val  { color: var(--accent-green); }
+.token-cache-create .token-type-val { color: var(--accent-blue); }
+.token-context .token-type-val     { color: var(--accent-purple); }
+
+/* ── Subscription vs API ─────────────────────────────────────── */
+
+.subscription-section { }
+
+.sub-hint {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin: 0 0 12px;
+}
+
+.sub-comparison {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    margin-bottom: 14px;
+}
+
+.sub-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.sub-val {
+    font-size: 22px;
+    font-weight: 700;
+}
+
+.sub-label {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.sub-paid .sub-val   { color: var(--text-secondary); }
+.sub-api .sub-val    { color: var(--accent-blue); }
+.sub-savings .sub-val { color: var(--accent-green); }
+.sub-loss .sub-val   { color: #f87171; }
+
+.sub-bar-track {
+    height: 8px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 99px;
+    overflow: hidden;
+    margin-bottom: 10px;
+}
+
+.sub-bar-fill {
+    height: 100%;
+    background: linear-gradient(to right, var(--accent-blue), var(--accent-green));
+    border-radius: 99px;
+    transition: width 0.6s ease;
+}
+
+/* Subscription period list */
+.sub-entries {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.sub-entry-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 12px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 13px;
+}
+
+.sub-entry-plan {
+    font-weight: 600;
+    min-width: 60px;
+}
+
+.sub-entry-paid {
+    color: var(--accent-green);
+    font-weight: 600;
+    min-width: 60px;
+}
+
+.sub-entry-from {
+    color: var(--text-muted);
+    flex: 1;
+}
+
+.sub-entry-remove {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    padding: 0 4px;
+    transition: color 0.15s;
+}
+.sub-entry-remove:hover { color: #f87171; }
+
+/* Add period form */
+.sub-add-form {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-top: 4px;
+}
+
+.sub-add-form input {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+    color: var(--text-primary);
+    font-size: 13px;
+}
+
+.sub-add-form input[type="text"]   { width: 130px; }
+.sub-add-form input[type="number"] { width: 100px; }
+.sub-add-form input[type="date"]   { width: 140px; }
+
+.sub-add-form input:focus {
+    outline: none;
+    border-color: var(--accent-blue);
+}
+
+.sub-add-form button {
+    padding: 6px 14px;
+    background: var(--accent-blue);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: opacity 0.15s;
+    white-space: nowrap;
+}
+.sub-add-form button:hover { opacity: 0.85; }
+
 /* ── Update banner ──────────────────────────────────────────── */
 
 .update-banner {

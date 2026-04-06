@@ -1277,10 +1277,13 @@ async function openDetail(s) {
     var row = document.getElementById('detail-real-cost');
     if (row) {
       row.style.display = '';
+      var cacheStr = '';
+      if ((costData.cacheReadTokens || 0) + (costData.cacheCreateTokens || 0) > 0)
+        cacheStr = ' / ' + formatTokens((costData.cacheReadTokens||0) + (costData.cacheCreateTokens||0)) + ' cache';
       row.querySelector('span:last-child').innerHTML =
         '<span class="cost-badge" style="background:rgba(74,222,128,0.2);color:var(--accent-green)">$' + costData.cost.toFixed(2) + '</span>' +
         ' <span style="font-size:11px;color:var(--text-muted)">' +
-        formatTokens(costData.inputTokens) + ' in / ' + formatTokens(costData.outputTokens) + ' out' +
+        formatTokens(costData.inputTokens) + ' in / ' + formatTokens(costData.outputTokens) + ' out' + cacheStr +
         (costData.model ? ' (' + costData.model + ')' : '') + '</span>';
     }
     // Update estimated badge to show it was estimated
@@ -1811,6 +1814,24 @@ function formatDuration(ms) {
 
 // ── Cost Analytics ────────────────────────────────────────────
 
+// Subscription config — stored in localStorage as { entries: [{plan, paid, from}] }
+// Each entry = one billing period: "from this date I paid $X/mo for plan Y"
+function getSubscriptionConfig() {
+  try {
+    var raw = JSON.parse(localStorage.getItem('codedash-subscription') || 'null');
+    if (!raw) return { entries: [] };
+    // Migrate old single-entry format { plan, paid } → new format
+    if (!raw.entries) return { entries: [{ plan: raw.plan || 'Subscription', paid: raw.paid || 0, from: '' }] };
+    return raw;
+  } catch { return { entries: [] }; }
+}
+function saveSubscriptionConfig(cfg) {
+  localStorage.setItem('codedash-subscription', JSON.stringify(cfg));
+}
+function subTotalPaid(entries) {
+  return entries.reduce(function(s, e) { return s + (parseFloat(e.paid) || 0); }, 0);
+}
+
 async function renderAnalytics(container) {
   container.innerHTML = '<div class="loading">Loading analytics...</div>';
 
@@ -1826,17 +1847,124 @@ async function renderAnalytics(container) {
     var html = '<div class="analytics-container">';
     html += '<h2 class="heatmap-title">Cost Analytics</h2>';
 
-    // Summary cards
+    // ── Summary cards ──────────────────────────────────────────
     html += '<div class="analytics-summary">';
-    html += '<div class="analytics-card"><span class="analytics-val">~$' + data.totalCost.toFixed(2) + '</span><span class="analytics-label">Total estimated cost</span></div>';
+    html += '<div class="analytics-card"><span class="analytics-val">$' + data.totalCost.toFixed(2) + '</span><span class="analytics-label">Total cost (API-equivalent)</span></div>';
     html += '<div class="analytics-card"><span class="analytics-val">' + formatTokens(data.totalTokens) + '</span><span class="analytics-label">Total tokens</span></div>';
+    html += '<div class="analytics-card"><span class="analytics-val">$' + (data.dailyRate || 0).toFixed(2) + '</span><span class="analytics-label">Avg per day (' + (data.days || 1) + ' days)</span></div>';
     html += '<div class="analytics-card"><span class="analytics-val">' + data.totalSessions + '</span><span class="analytics-label">Sessions</span></div>';
-    html += '<div class="analytics-card"><span class="analytics-val">~$' + (data.totalCost / Math.max(data.totalSessions, 1)).toFixed(2) + '</span><span class="analytics-label">Avg per session</span></div>';
     html += '</div>';
 
-    // Cost by day chart (bar chart)
-    var days = Object.keys(data.byDay).sort();
-    var last30 = days.slice(-30);
+    // ── Data coverage note ────────────────────────────────────
+    if (data.byAgent || data.agentNoCostData) {
+      var coverageparts = [];
+      var byAgent = data.byAgent || {};
+      var noCost = data.agentNoCostData || {};
+      // Agents with real data
+      if (byAgent['claude'] && byAgent['claude'].sessions > 0)
+        coverageparts.push('<span class="coverage-ok">Claude Code ✓</span>');
+      if (byAgent['claude-ext'] && byAgent['claude-ext'].sessions > 0)
+        coverageparts.push('<span class="coverage-ok">Claude Extension ✓</span>');
+      if (byAgent['codex'] && byAgent['codex'].sessions > 0)
+        coverageparts.push('<span class="coverage-est">Codex ~est.</span>');
+      if (byAgent['opencode'] && byAgent['opencode'].sessions > 0)
+        coverageparts.push(byAgent['opencode'].estimated
+          ? '<span class="coverage-est">OpenCode ~est.</span>'
+          : '<span class="coverage-ok">OpenCode ✓</span>');
+      // Agents without cost data
+      ['cursor', 'kiro'].forEach(function(a) {
+        if (noCost[a] > 0)
+          coverageparts.push('<span class="coverage-none">' + a + ' ✗ (no token data)</span>');
+      });
+      if (noCost['opencode'] > 0 && !(byAgent['opencode'] && byAgent['opencode'].sessions > 0))
+        coverageparts.push('<span class="coverage-none">opencode ✗ (no token data)</span>');
+      if (coverageparts.length > 0) {
+        html += '<div class="analytics-coverage">Cost data: ' + coverageparts.join(' · ') + '</div>';
+      }
+    }
+
+    // ── Token breakdown ────────────────────────────────────────
+    if (data.totalInputTokens !== undefined) {
+      var totalTok = data.totalInputTokens + data.totalOutputTokens + data.totalCacheReadTokens + data.totalCacheCreateTokens;
+      var pctOf = function(n) { return totalTok > 0 ? Math.round(n / totalTok * 100) : 0; };
+      html += '<div class="chart-section analytics-token-breakdown">';
+      html += '<h3>Token Breakdown</h3>';
+      html += '<div class="token-breakdown-grid">';
+      html += '<div class="token-type-card"><span class="token-type-val">' + formatTokens(data.totalInputTokens) + '</span><span class="token-type-label">Input</span><span class="token-type-pct">' + pctOf(data.totalInputTokens) + '%</span></div>';
+      html += '<div class="token-type-card"><span class="token-type-val">' + formatTokens(data.totalOutputTokens) + '</span><span class="token-type-label">Output</span><span class="token-type-pct">' + pctOf(data.totalOutputTokens) + '%</span></div>';
+      html += '<div class="token-type-card token-cache-read"><span class="token-type-val">' + formatTokens(data.totalCacheReadTokens) + '</span><span class="token-type-label">Cache read</span><span class="token-type-pct">' + pctOf(data.totalCacheReadTokens) + '%</span></div>';
+      html += '<div class="token-type-card token-cache-create"><span class="token-type-val">' + formatTokens(data.totalCacheCreateTokens) + '</span><span class="token-type-label">Cache write</span><span class="token-type-pct">' + pctOf(data.totalCacheCreateTokens) + '%</span></div>';
+      if (data.avgContextPct > 0) {
+        html += '<div class="token-type-card token-context"><span class="token-type-val">' + data.avgContextPct + '%</span><span class="token-type-label">Avg context used</span><span class="token-type-pct">of 200K</span></div>';
+      }
+      html += '</div>';
+      html += '</div>';
+    }
+
+    // ── Subscription vs API ────────────────────────────────────
+    var sub = getSubscriptionConfig();
+    var subEntries = (sub && sub.entries) || [];
+    var totalPaid = subTotalPaid(subEntries);
+    html += '<div class="chart-section subscription-section">';
+    html += '<h3>Subscription vs API</h3>';
+
+    // Comparison cards — only when at least one entry exists
+    if (totalPaid > 0) {
+      var savings = data.totalCost - totalPaid;
+      var multiplier = data.totalCost / totalPaid;
+      var savingsPositive = savings > 0;
+      // Breakdown label: "Pro $20 + Max $100"
+      var breakdown = subEntries.map(function(e) {
+        return escHtml(e.plan || 'Sub') + ' $' + parseFloat(e.paid).toFixed(0);
+      }).join(' + ');
+      html += '<div class="sub-comparison">';
+      html += '<div class="sub-card sub-paid">';
+      html += '<span class="sub-val">$' + totalPaid.toFixed(2) + '</span>';
+      html += '<span class="sub-label">Paid (' + breakdown + ')</span>';
+      html += '</div>';
+      html += '<div class="sub-card sub-api">';
+      html += '<span class="sub-val">$' + data.totalCost.toFixed(2) + '</span>';
+      html += '<span class="sub-label">Would cost at API rates</span>';
+      html += '</div>';
+      html += '<div class="sub-card ' + (savingsPositive ? 'sub-savings' : 'sub-loss') + '">';
+      html += '<span class="sub-val">' + (savingsPositive ? '+' : '') + '$' + Math.abs(savings).toFixed(2) + '</span>';
+      html += '<span class="sub-label">' + (savingsPositive ? 'Saved (' + multiplier.toFixed(1) + '× ROI)' : 'API would be cheaper') + '</span>';
+      html += '</div>';
+      html += '</div>';
+      var barPct = Math.min(100, data.totalCost > 0 ? (totalPaid / data.totalCost * 100) : 100);
+      html += '<div class="sub-bar-track" title="$' + totalPaid.toFixed(2) + ' paid of $' + data.totalCost.toFixed(2) + ' API equivalent">';
+      html += '<div class="sub-bar-fill" style="width:' + barPct + '%"></div>';
+      html += '</div>';
+    } else {
+      html += '<p class="sub-hint">Add your subscription periods below to see how much you\'re saving vs API rates.</p>';
+    }
+
+    // Period list
+    html += '<div class="sub-entries">';
+    if (subEntries.length > 0) {
+      subEntries.forEach(function(e, i) {
+        html += '<div class="sub-entry-row">';
+        html += '<span class="sub-entry-plan">' + escHtml(e.plan || '—') + '</span>';
+        html += '<span class="sub-entry-paid">$' + parseFloat(e.paid || 0).toFixed(2) + '</span>';
+        html += '<span class="sub-entry-from">' + (e.from ? 'from ' + e.from : 'no date') + '</span>';
+        html += '<button class="sub-entry-remove" onclick="removeSubEntry(' + i + ')" title="Remove">×</button>';
+        html += '</div>';
+      });
+    }
+    html += '</div>';
+
+    // Add new period form
+    html += '<div class="sub-add-form">';
+    html += '<input id="sub-new-plan" type="text" placeholder="Plan (Pro, Max…)" />';
+    html += '<input id="sub-new-paid" type="number" min="0" step="0.01" placeholder="Amount ($)" />';
+    html += '<input id="sub-new-from" type="date" title="Start date of this billing period" />';
+    html += '<button onclick="addSubEntry()">+ Add period</button>';
+    html += '</div>';
+    html += '</div>';
+
+    // ── Daily cost chart ───────────────────────────────────────
+    var dayKeys = Object.keys(data.byDay).sort();
+    var last30 = dayKeys.slice(-30);
     if (last30.length > 0) {
       var maxCost = Math.max.apply(null, last30.map(function(d) { return data.byDay[d].cost; }));
       html += '<div class="chart-section"><h3>Daily Cost (last 30 days)</h3>';
@@ -1845,7 +1973,7 @@ async function renderAnalytics(container) {
         var c = data.byDay[d];
         var pct = maxCost > 0 ? (c.cost / maxCost * 100) : 0;
         var label = d.slice(5); // MM-DD
-        html += '<div class="bar-col" title="' + d + ': ~$' + c.cost.toFixed(2) + ' (' + c.sessions + ' sessions)">';
+        html += '<div class="bar-col" title="' + d + ': $' + c.cost.toFixed(2) + ' (' + c.sessions + ' sessions)">';
         html += '<div class="bar-fill" style="height:' + pct + '%"></div>';
         html += '<div class="bar-label">' + label + '</div>';
         html += '</div>';
@@ -1853,7 +1981,7 @@ async function renderAnalytics(container) {
       html += '</div></div>';
     }
 
-    // Cost by project (horizontal bars)
+    // ── Cost by project ────────────────────────────────────────
     var projects = Object.entries(data.byProject).sort(function(a, b) { return b[1].cost - a[1].cost; });
     var topProjects = projects.slice(0, 10);
     if (topProjects.length > 0) {
@@ -1867,22 +1995,43 @@ async function renderAnalytics(container) {
         html += '<div class="hbar-row">';
         html += '<span class="hbar-name">' + escHtml(name) + '</span>';
         html += '<div class="hbar-track"><div class="hbar-fill" style="width:' + pct + '%"></div></div>';
-        html += '<span class="hbar-val">~$' + info.cost.toFixed(2) + '</span>';
+        html += '<span class="hbar-val">$' + info.cost.toFixed(2) + '</span>';
         html += '</div>';
       });
       html += '</div></div>';
     }
 
-    // Top expensive sessions
+    // ── Top expensive sessions ─────────────────────────────────
     if (data.topSessions && data.topSessions.length > 0) {
       html += '<div class="chart-section"><h3>Most Expensive Sessions</h3>';
       html += '<div class="top-sessions">';
       data.topSessions.forEach(function(s) {
         html += '<div class="top-session-row" onclick="onCardClick(\'' + s.id + '\', event)">';
-        html += '<span class="top-session-cost">~$' + s.cost.toFixed(2) + '</span>';
+        html += '<span class="top-session-cost">$' + s.cost.toFixed(2) + '</span>';
         html += '<span class="top-session-project">' + escHtml(s.project) + '</span>';
         html += '<span class="top-session-date">' + (s.date || '') + '</span>';
         html += '<span class="top-session-id">' + s.id.slice(0, 8) + '</span>';
+        html += '</div>';
+      });
+      html += '</div></div>';
+    }
+
+    // ── Cost by agent ──────────────────────────────────────────
+    var agentEntries = Object.entries(data.byAgent || {}).filter(function(e) { return e[1].sessions > 0; });
+    if (agentEntries.length > 1) {
+      agentEntries.sort(function(a, b) { return b[1].cost - a[1].cost; });
+      html += '<div class="chart-section"><h3>Cost by Agent</h3>';
+      html += '<div class="hbar-chart">';
+      var maxAgentCost = agentEntries[0][1].cost || 1;
+      agentEntries.forEach(function(entry) {
+        var name = entry[0]; var info = entry[1];
+        var pct = maxAgentCost > 0 ? (info.cost / maxAgentCost * 100) : 0;
+        var label = { 'claude': 'Claude Code', 'claude-ext': 'Claude Ext', 'codex': 'Codex', 'opencode': 'OpenCode', 'cursor': 'Cursor', 'kiro': 'Kiro' }[name] || name;
+        var estMark = info.estimated ? ' <span style="font-size:10px;opacity:0.6">~est.</span>' : '';
+        html += '<div class="hbar-row">';
+        html += '<span class="hbar-name">' + label + estMark + '</span>';
+        html += '<div class="hbar-track"><div class="hbar-fill" style="width:' + pct + '%"></div></div>';
+        html += '<span class="hbar-val">$' + info.cost.toFixed(2) + ' <span style="font-size:10px;opacity:0.6">(' + info.sessions + ' sess.)</span></span>';
         html += '</div>';
       });
       html += '</div></div>';
@@ -1893,6 +2042,26 @@ async function renderAnalytics(container) {
   } catch (e) {
     container.innerHTML = '<div class="empty-state">Failed to load analytics.</div>';
   }
+}
+
+function addSubEntry() {
+  var plan = (document.getElementById('sub-new-plan').value || '').trim();
+  var paid = parseFloat(document.getElementById('sub-new-paid').value) || 0;
+  var from = (document.getElementById('sub-new-from').value || '').trim();
+  if (!paid) return;
+  var cfg = getSubscriptionConfig();
+  cfg.entries.push({ plan: plan || 'Subscription', paid: paid, from: from });
+  // Keep entries sorted by date
+  cfg.entries.sort(function(a, b) { return (a.from || '').localeCompare(b.from || ''); });
+  saveSubscriptionConfig(cfg);
+  render();
+}
+
+function removeSubEntry(idx) {
+  var cfg = getSubscriptionConfig();
+  cfg.entries.splice(idx, 1);
+  saveSubscriptionConfig(cfg);
+  render();
 }
 
 function formatTokens(n) {
