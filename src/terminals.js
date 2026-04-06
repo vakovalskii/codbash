@@ -1,9 +1,30 @@
 'use strict';
 
 const fs = require('fs');
+const path = require('path');
 const { execSync, exec } = require('child_process');
 
 // ── Detect available terminals ──────────────────────────────
+
+function commandExists(cmd) {
+  if (!cmd) return false;
+  const extensions = process.platform === 'win32'
+    ? (process.env.PATHEXT || '.EXE;.CMD;.BAT;.COM').split(';')
+    : [''];
+  const dirs = (process.env.PATH || '').split(path.delimiter);
+
+  for (const dir of dirs) {
+    if (!dir) continue;
+    for (const ext of extensions) {
+      try {
+        fs.accessSync(path.join(dir, cmd + ext), fs.constants.X_OK);
+        return true;
+      } catch {}
+    }
+  }
+
+  return false;
+}
 
 function detectTerminals() {
   const terminals = [];
@@ -26,15 +47,13 @@ function detectTerminals() {
       }
     } catch {}
     // Check Kitty
-    try {
-      execSync('which kitty', { stdio: 'pipe' });
+    if (commandExists('kitty')) {
       terminals.push({ id: 'kitty', name: 'Kitty', available: true });
-    } catch {}
+    }
     // Check Alacritty
-    try {
-      execSync('which alacritty', { stdio: 'pipe' });
+    if (commandExists('alacritty')) {
       terminals.push({ id: 'alacritty', name: 'Alacritty', available: true });
-    } catch {}
+    }
     // Check cmux
     try {
       if (fs.existsSync('/Applications/cmux.app')) {
@@ -43,27 +62,29 @@ function detectTerminals() {
     } catch {}
   } else if (platform === 'linux') {
     const linuxTerms = [
+      { id: 'x-terminal-emulator', name: 'Default Terminal', cmd: 'x-terminal-emulator' },
+      { id: 'xfce4-terminal', name: 'XFCE Terminal', cmd: 'xfce4-terminal' },
       { id: 'gnome-terminal', name: 'GNOME Terminal', cmd: 'gnome-terminal' },
+      { id: 'kgx', name: 'GNOME Console', cmd: 'kgx' },
+      { id: 'ptyxis', name: 'Ptyxis', cmd: 'ptyxis' },
       { id: 'konsole', name: 'Konsole', cmd: 'konsole' },
       { id: 'kitty', name: 'Kitty', cmd: 'kitty' },
       { id: 'alacritty', name: 'Alacritty', cmd: 'alacritty' },
+      { id: 'tilix', name: 'Tilix', cmd: 'tilix' },
+      { id: 'terminator', name: 'Terminator', cmd: 'terminator' },
+      { id: 'wezterm', name: 'WezTerm', cmd: 'wezterm' },
+      { id: 'foot', name: 'foot', cmd: 'foot' },
       { id: 'xterm', name: 'xterm', cmd: 'xterm' },
     ];
     for (const t of linuxTerms) {
-      try {
-        execSync(`which ${t.cmd}`, { stdio: 'pipe' });
-        terminals.push({ ...t, available: true });
-      } catch {
-        terminals.push({ ...t, available: false });
-      }
+      terminals.push({ ...t, available: commandExists(t.cmd) });
     }
   } else {
     terminals.push({ id: 'cmd', name: 'Command Prompt', available: true });
     terminals.push({ id: 'powershell', name: 'PowerShell', available: true });
-    try {
-      execSync('where wt', { stdio: 'pipe' });
+    if (commandExists('wt')) {
       terminals.push({ id: 'windows-terminal', name: 'Windows Terminal', available: true });
-    } catch {}
+    }
   }
 
   return terminals;
@@ -75,6 +96,10 @@ function termLog(tag, msg) {
   const ts = new Date().toLocaleTimeString('en-GB');
   const color = tag === 'ERROR' ? '\x1b[31m' : '\x1b[35m';
   console.log(`  ${color}${ts} [${tag}]\x1b[0m ${msg}`);
+}
+
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, "'\\''")}'`;
 }
 
 function openInTerminal(sessionId, tool, flags, projectDir, terminalId) {
@@ -91,9 +116,14 @@ function openInTerminal(sessionId, tool, flags, projectDir, terminalId) {
   const cdPart = projectDir ? `cd ${JSON.stringify(projectDir)} && ` : '';
   const fullCmd = cdPart + cmd;
   const escapedCmd = fullCmd.replace(/"/g, '\\"');
-  termLog('TERM', `openInTerminal: terminal=${terminalId || 'default'} tool=${tool} cmd="${fullCmd}"`);
-
   const platform = process.platform;
+
+  if (platform === 'linux' && !terminalId) {
+    const firstAvailable = detectTerminals().find(t => t.available);
+    terminalId = firstAvailable ? firstAvailable.id : 'gnome-terminal';
+  }
+
+  termLog('TERM', `openInTerminal: terminal=${terminalId || 'default'} tool=${tool} cmd="${fullCmd}"`);
 
   if (platform === 'darwin') {
     switch (terminalId) {
@@ -141,22 +171,47 @@ function openInTerminal(sessionId, tool, flags, projectDir, terminalId) {
       }
     }
   } else if (platform === 'linux') {
+    const bashCommand = shellQuote(`${fullCmd}; exec bash`);
     switch (terminalId) {
+      case 'x-terminal-emulator':
+        exec(`x-terminal-emulator -e bash -lc ${bashCommand}`);
+        break;
+      case 'xfce4-terminal':
+        exec(`xfce4-terminal --hold --command ${shellQuote(`bash -lc ${bashCommand}`)}`);
+        break;
+      case 'kgx':
+        exec(`kgx -- bash -lc ${bashCommand}`);
+        break;
+      case 'ptyxis':
+        exec(`ptyxis -- bash -lc ${bashCommand}`);
+        break;
       case 'kitty':
-        exec(`kitty bash -c '${fullCmd}; exec bash'`);
+        exec(`kitty bash -lc ${bashCommand}`);
         break;
       case 'alacritty':
-        exec(`alacritty -e bash -c '${fullCmd}; exec bash'`);
+        exec(`alacritty -e bash -lc ${bashCommand}`);
         break;
       case 'konsole':
-        exec(`konsole -e bash -c '${fullCmd}; exec bash'`);
+        exec(`konsole -e bash -lc ${bashCommand}`);
+        break;
+      case 'tilix':
+        exec(`tilix -e bash -lc ${bashCommand}`);
+        break;
+      case 'terminator':
+        exec(`terminator -x bash -lc ${bashCommand}`);
+        break;
+      case 'wezterm':
+        exec(`wezterm start -- bash -lc ${bashCommand}`);
+        break;
+      case 'foot':
+        exec(`foot bash -lc ${bashCommand}`);
         break;
       case 'xterm':
-        exec(`xterm -e bash -c '${fullCmd}; exec bash'`);
+        exec(`xterm -e bash -lc ${bashCommand}`);
         break;
       case 'gnome-terminal':
       default:
-        exec(`gnome-terminal -- bash -c "${fullCmd}; exec bash"`);
+        exec(`gnome-terminal -- bash -lc ${bashCommand}`);
         break;
     }
   } else {

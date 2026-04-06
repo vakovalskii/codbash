@@ -283,26 +283,47 @@ async function loadTerminals() {
     var sel = document.getElementById('terminalSelect');
     if (!sel) return;
     sel.innerHTML = '';
+    sel.disabled = false;
     var saved = localStorage.getItem('codedash-terminal') || '';
-    availableTerminals.forEach(function(t) {
-      if (!t.available) return;
+    var available = availableTerminals.filter(function(t) { return t.available; });
+
+    if (!available.length) {
+      var emptyOpt = document.createElement('option');
+      emptyOpt.value = '';
+      emptyOpt.textContent = 'No terminal found';
+      sel.appendChild(emptyOpt);
+      sel.disabled = true;
+      localStorage.removeItem('codedash-terminal');
+      return;
+    }
+
+    available.forEach(function(t) {
       var opt = document.createElement('option');
       opt.value = t.id;
       opt.textContent = t.name;
-      if (t.id === saved) opt.selected = true;
       sel.appendChild(opt);
     });
-    if (!saved && availableTerminals.length > 0) {
-      var first = availableTerminals.find(function(t) { return t.available; });
-      if (first) sel.value = first.id;
-    }
+
+    var selected = available.some(function(t) { return t.id === saved; }) ? saved : available[0].id;
+    sel.value = selected;
+    localStorage.setItem('codedash-terminal', selected);
   } catch (e) {
     // terminals not available
   }
 }
 
 function saveTerminalPref(val) {
-  localStorage.setItem('codedash-terminal', val);
+  if (val) localStorage.setItem('codedash-terminal', val);
+  else localStorage.removeItem('codedash-terminal');
+}
+
+function getTerminalPref() {
+  var sel = document.getElementById('terminalSelect');
+  if (sel && !sel.disabled && sel.value) {
+    localStorage.setItem('codedash-terminal', sel.value);
+    return sel.value;
+  }
+  return localStorage.getItem('codedash-terminal') || '';
 }
 
 // ── Active sessions polling ───────────────────────────────────
@@ -1183,7 +1204,6 @@ async function openDetail(s) {
   var costStr = cost > 0 ? '~$' + cost.toFixed(2) : '';
   var isStarred = stars.indexOf(s.id) >= 0;
   var sessionTags = tags[s.id] || [];
-  var terminal = localStorage.getItem('codedash-terminal') || '';
 
   var infoHtml = '<div class="detail-info">';
   // AI Title row
@@ -1327,7 +1347,7 @@ function launchDangerous(sessionId, project) {
 }
 
 function launchSession(sessionId, tool, project, flags) {
-  var terminal = localStorage.getItem('codedash-terminal') || '';
+  var terminal = getTerminalPref();
   fetch('/api/launch', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
