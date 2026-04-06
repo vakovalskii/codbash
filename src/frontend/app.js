@@ -438,7 +438,11 @@ function applyFilters() {
     var s = allSessions[i];
 
     // Tool filter
-    if (toolFilter && s.tool !== toolFilter) continue;
+    if (toolFilter) {
+      // claude-ext sessions show under both 'claude' and 'cursor' filters
+      var toolMatch = s.tool === toolFilter || (s.tool === 'claude-ext' && (toolFilter === 'cursor' || toolFilter === 'claude'));
+      if (!toolMatch) continue;
+    }
 
     // Tag filter
     if (tagFilter) {
