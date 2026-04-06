@@ -552,12 +552,23 @@ var calSelecting = false;
 
 function toggleCalendar() {
   var popup = document.getElementById('calendarPopup');
-  if (!popup) return;
+  var btn = document.getElementById('dateBtn');
+  if (!popup || !btn) return;
   if (popup.classList.contains('open')) {
     popup.classList.remove('open');
     return;
   }
   renderCalendar();
+  // Position popup below the button
+  var rect = btn.getBoundingClientRect();
+  var popupWidth = 280;
+  var left = rect.left;
+  // Keep within viewport
+  if (left + popupWidth > window.innerWidth - 8) {
+    left = window.innerWidth - popupWidth - 8;
+  }
+  popup.style.left = left + 'px';
+  popup.style.top = (rect.bottom + 4) + 'px';
   popup.classList.add('open');
   setTimeout(function() {
     document.addEventListener('click', closeCalendarOutside, { once: true });

@@ -559,10 +559,7 @@ body {
 
 .calendar-popup {
     display: none;
-    position: absolute;
-    top: 100%;
-    right: 0;
-    margin-top: 4px;
+    position: fixed;
     background: var(--bg-card);
     border: 1px solid var(--border);
     border-radius: 10px;
