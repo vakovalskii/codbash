@@ -71,6 +71,58 @@ function readLines(filePath) {
   return fs.readFileSync(filePath, 'utf8').split('\n').map(l => l.replace(/\r$/, '')).filter(Boolean);
 }
 
+function parseClaudeSessionFile(sessionFile) {
+  if (!fs.existsSync(sessionFile)) return null;
+
+  const stat = fs.statSync(sessionFile);
+  const lines = readLines(sessionFile);
+  let projectPath = '';
+  let tool = 'claude';
+  let msgCount = 0;
+  let firstMsg = '';
+  let customTitle = '';
+  let firstTs = stat.mtimeMs;
+  let lastTs = stat.mtimeMs;
+  let entrypointFound = false;
+
+  for (const line of lines) {
+    try {
+      const entry = JSON.parse(line);
+      if (entry.type === 'user' || entry.type === 'assistant') msgCount++;
+      if (entry.timestamp) {
+        if (entry.timestamp < firstTs) firstTs = entry.timestamp;
+        if (entry.timestamp > lastTs) lastTs = entry.timestamp;
+      }
+      if (!projectPath && entry.type === 'user' && entry.cwd) {
+        projectPath = entry.cwd;
+      }
+      if (!entrypointFound && entry.type === 'user' && entry.entrypoint) {
+        entrypointFound = true;
+        if (entry.entrypoint !== 'cli') tool = 'claude-ext';
+      }
+      if (entry.type === 'custom-title' && typeof entry.customTitle === 'string') {
+        const title = entry.customTitle.trim();
+        if (title) customTitle = title.slice(0, 200);
+      }
+      if (!firstMsg && entry.type === 'user' && entry.message && entry.message.content) {
+        const content = extractContent(entry.message.content).trim();
+        if (content) firstMsg = content.slice(0, 200);
+      }
+    } catch {}
+  }
+
+  return {
+    projectPath,
+    tool,
+    msgCount,
+    firstMsg,
+    customTitle,
+    firstTs,
+    lastTs,
+    fileSize: stat.size,
+  };
+}
+
 function scanOpenCodeSessions() {
   const sessions = [];
   if (!fs.existsSync(OPENCODE_DB)) return sessions;
@@ -598,6 +650,7 @@ function loadSessions() {
             last_ts: d.timestamp,
             messages: 0,
             first_message: '',
+            _claude_dir: CLAUDE_DIR,
           };
         }
 
@@ -654,17 +707,22 @@ function loadSessions() {
       if (fs.existsSync(extraHistory)) {
         const lines = readLines(extraHistory);
         for (const line of lines) {
+          let d;
           try {
-            const d = JSON.parse(line);
+            d = JSON.parse(line);
             const sid = d.sessionId;
-            if (!sid || sessions[sid]) continue;
-            sessions[sid] = {
-              id: sid, tool: 'claude',
-              project: d.project || '', project_short: (d.project || '').replace(os.homedir(), '~'),
-              first_ts: d.timestamp, last_ts: d.timestamp,
-              messages: 0, first_message: '',
-            };
+            if (!sid) continue;
+            if (!sessions[sid]) {
+              sessions[sid] = {
+                id: sid, tool: 'claude',
+                project: d.project || '', project_short: (d.project || '').replace(os.homedir(), '~'),
+                first_ts: d.timestamp, last_ts: d.timestamp,
+                messages: 0, first_message: '',
+                _claude_dir: extraClaudeDir,
+              };
+            }
           } catch {}
+          if (!d || !d.sessionId) continue;
           const s = sessions[d.sessionId];
           if (s) { s.last_ts = Math.max(s.last_ts, d.timestamp); s.first_ts = Math.min(s.first_ts, d.timestamp); s.messages++; if (d.display && d.display !== 'exit' && !s.first_message) s.first_message = d.display.slice(0, 200); }
         }
@@ -680,26 +738,22 @@ function loadSessions() {
             const sid = file.replace('.jsonl', '');
             if (sessions[sid]) { if (!sessions[sid].has_detail) { sessions[sid].has_detail = true; sessions[sid].file_size = fs.statSync(path.join(projDir, file)).size; } continue; }
             const fp = path.join(projDir, file);
-            const stat = fs.statSync(fp);
-            let projectPath = '', tool = 'claude', msgCount = 0, firstMsg = '', firstTs = stat.mtimeMs, lastTs = stat.mtimeMs;
-            try {
-              const sLines = readLines(fp);
-              let entrypointFound = false;
-              for (const sl of sLines) {
-                try {
-                  const entry = JSON.parse(sl);
-                  if (entry.type === 'user' || entry.type === 'assistant') msgCount++;
-                  if (entry.timestamp) { if (entry.timestamp < firstTs) firstTs = entry.timestamp; if (entry.timestamp > lastTs) lastTs = entry.timestamp; }
-                  if (!projectPath && entry.type === 'user' && entry.cwd) projectPath = entry.cwd;
-                  if (!entrypointFound && entry.type === 'user' && entry.entrypoint) { entrypointFound = true; if (entry.entrypoint !== 'cli') tool = 'claude-ext'; }
-                  if (!firstMsg && entry.type === 'user' && entry.message && entry.message.content) {
-                    const content = entry.message.content;
-                    if (typeof content === 'string') firstMsg = content.slice(0, 200);
-                  }
-                } catch {}
-              }
-            } catch {}
-            sessions[sid] = { id: sid, tool, project: projectPath, project_short: projectPath.replace(os.homedir(), '~'), first_ts: firstTs, last_ts: lastTs, messages: msgCount, first_message: firstMsg, has_detail: true, file_size: stat.size, detail_messages: msgCount };
+            const summary = parseClaudeSessionFile(fp);
+            if (!summary) continue;
+            sessions[sid] = {
+              id: sid,
+              tool: summary.tool,
+              project: summary.projectPath,
+              project_short: summary.projectPath.replace(os.homedir(), '~'),
+              first_ts: summary.firstTs,
+              last_ts: summary.lastTs,
+              messages: summary.msgCount,
+              first_message: summary.customTitle || summary.firstMsg,
+              has_detail: true,
+              file_size: summary.fileSize,
+              detail_messages: summary.msgCount,
+              _claude_dir: extraClaudeDir,
+            };
           }
         }
       }
@@ -708,23 +762,25 @@ function loadSessions() {
 
   // Enrich Claude sessions with detail file info
   for (const [sid, s] of Object.entries(sessions)) {
-    if (s.tool !== 'claude') continue;
+    if (s.tool !== 'claude' && s.tool !== 'claude-ext') continue;
+    const claudeDir = s._claude_dir || CLAUDE_DIR;
+    const projectsDir = path.join(claudeDir, 'projects');
     const projectKey = s.project.replace(/[^a-zA-Z0-9-]/g, '-');
-    const sessionFile = path.join(PROJECTS_DIR, projectKey, `${sid}.jsonl`);
+    const sessionFile = path.join(projectsDir, projectKey, `${sid}.jsonl`);
     if (fs.existsSync(sessionFile)) {
+      const summary = parseClaudeSessionFile(sessionFile);
       s.has_detail = true;
-      s.file_size = fs.statSync(sessionFile).size;
-      try {
-        let msgCount = 0;
-        const sLines = readLines(sessionFile);
-        for (const sl of sLines) {
-          try {
-            const entry = JSON.parse(sl);
-            if (entry.type === 'user' || entry.type === 'assistant') msgCount++;
-          } catch {}
+      s.file_size = summary ? summary.fileSize : fs.statSync(sessionFile).size;
+      s.detail_messages = summary ? summary.msgCount : 0;
+      if (summary) {
+        if (!s.project && summary.projectPath) {
+          s.project = summary.projectPath;
+          s.project_short = summary.projectPath.replace(os.homedir(), '~');
         }
-        s.detail_messages = msgCount;
-      } catch { s.detail_messages = 0; }
+        if (summary.customTitle) {
+          s.first_message = summary.customTitle;
+        }
+      }
     } else {
       s.has_detail = false;
       s.file_size = 0;
@@ -743,55 +799,21 @@ function loadSessions() {
           const sid = file.replace('.jsonl', '');
           if (sessions[sid]) continue; // already loaded
           const filePath = path.join(projDir, file);
-          const stat = fs.statSync(filePath);
-          let projectPath = '';
-          let tool = 'claude';
-          let msgCount = 0;
-          let firstMsg = '';
-          let firstTs = stat.mtimeMs;
-          let lastTs = stat.mtimeMs;
-          try {
-            const sLines = readLines(filePath);
-            let entrypointFound = false;
-            for (const sl of sLines) {
-              try {
-                const entry = JSON.parse(sl);
-                if (entry.type === 'user' || entry.type === 'assistant') msgCount++;
-                if (entry.timestamp) {
-                  if (entry.timestamp < firstTs) firstTs = entry.timestamp;
-                  if (entry.timestamp > lastTs) lastTs = entry.timestamp;
-                }
-                if (!projectPath && entry.type === 'user' && entry.cwd) {
-                  projectPath = entry.cwd;
-                }
-                if (!entrypointFound && entry.type === 'user' && entry.entrypoint) {
-                  entrypointFound = true;
-                  if (entry.entrypoint !== 'cli') tool = 'claude-ext';
-                }
-                if (!firstMsg && entry.type === 'user' && entry.message && entry.message.content) {
-                  const content = entry.message.content;
-                  if (typeof content === 'string') firstMsg = content.slice(0, 200);
-                  else if (Array.isArray(content)) {
-                    for (let ci = 0; ci < content.length; ci++) {
-                      if (content[ci].type === 'text' && content[ci].text) { firstMsg = content[ci].text.slice(0, 200); break; }
-                    }
-                  }
-                }
-              } catch {}
-            }
-          } catch {}
+          const summary = parseClaudeSessionFile(filePath);
+          if (!summary) continue;
           sessions[sid] = {
             id: sid,
-            tool: tool,
-            project: projectPath,
-            project_short: projectPath.replace(os.homedir(), '~'),
-            first_ts: firstTs,
-            last_ts: lastTs,
-            messages: msgCount,
-            first_message: firstMsg,
+            tool: summary.tool,
+            project: summary.projectPath,
+            project_short: summary.projectPath.replace(os.homedir(), '~'),
+            first_ts: summary.firstTs,
+            last_ts: summary.lastTs,
+            messages: summary.msgCount,
+            first_message: summary.customTitle || summary.firstMsg,
             has_detail: true,
-            file_size: stat.size,
-            detail_messages: msgCount,
+            file_size: summary.fileSize,
+            detail_messages: summary.msgCount,
+            _claude_dir: CLAUDE_DIR,
           };
         }
       }
