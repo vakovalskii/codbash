@@ -90,6 +90,7 @@ function parseClaudeSessionFile(sessionFile) {
   let firstTs = stat.mtimeMs;
   let lastTs = stat.mtimeMs;
   let entrypointFound = false;
+  let worktreeOriginalCwd = '';
 
   for (const line of lines) {
     try {
@@ -101,6 +102,11 @@ function parseClaudeSessionFile(sessionFile) {
       }
       if (!projectPath && entry.type === 'user' && entry.cwd) {
         projectPath = entry.cwd;
+      }
+      // worktree-state is written by Claude Code when a session runs inside a git worktree.
+      // originalCwd is the main checkout directory — safe to use in containers (no git needed).
+      if (!worktreeOriginalCwd && entry.type === 'worktree-state' && entry.worktreeSession && entry.worktreeSession.originalCwd) {
+        worktreeOriginalCwd = entry.worktreeSession.originalCwd;
       }
       if (!entrypointFound && entry.type === 'user' && entry.entrypoint) {
         entrypointFound = true;
@@ -126,6 +132,7 @@ function parseClaudeSessionFile(sessionFile) {
     firstTs,
     lastTs,
     fileSize: stat.size,
+    worktreeOriginalCwd,
   };
 }
 
@@ -141,6 +148,10 @@ function mergeClaudeSessionDetail(session, summary, sessionFile) {
   if (!session.project && summary.projectPath) {
     session.project = summary.projectPath;
     session.project_short = summary.projectPath.replace(os.homedir(), '~');
+  }
+
+  if (summary.worktreeOriginalCwd) {
+    session.worktree_original_cwd = summary.worktreeOriginalCwd;
   }
 
   if (summary.customTitle) {
@@ -704,6 +715,15 @@ function scanCodexSessions() {
 }
 
 // ── Git root resolver ───────────────────────────────────────
+//
+// Priority order for determining the git root of a session:
+//   1. worktree-state.originalCwd — written by Claude Code into the JSONL when
+//      the session runs inside a git worktree. Container-safe: no git required.
+//   2. git rev-parse --show-toplevel — resolves the root at runtime. Fails
+//      gracefully (returns '') in containerized setups where git repos are not
+//      mounted; the try/catch ensures it never crashes the server.
+//   3. Path heuristic in the frontend (getGitProjectName) — parses /.claude/worktrees/
+//      from the session cwd string. Works without git for standard worktree layouts.
 
 const _gitRootCache = {};
 
@@ -717,6 +737,7 @@ function resolveGitRoot(projectPath) {
     _gitRootCache[projectPath] = root;
     return root;
   } catch {
+    // git not available or project path not mounted (e.g. containerised env) — fall back gracefully
     _gitRootCache[projectPath] = '';
     return '';
   }
@@ -867,6 +888,7 @@ function loadSessions() {
               detail_messages: summary.msgCount,
               _claude_dir: extraClaudeDir,
               _session_file: fp,
+              worktree_original_cwd: summary.worktreeOriginalCwd || '',
             };
           }
         }
@@ -938,6 +960,7 @@ function loadSessions() {
             detail_messages: summary.msgCount,
             _claude_dir: CLAUDE_DIR,
             _session_file: filePath,
+            worktree_original_cwd: summary.worktreeOriginalCwd || '',
           };
         }
       }
@@ -955,7 +978,8 @@ function loadSessions() {
     s.last_time = new Date(s.last_ts).toLocaleString('sv-SE').slice(0, 16);
     const dt = new Date(s.last_ts);
     s.date = dt.getFullYear() + '-' + String(dt.getMonth()+1).padStart(2,'0') + '-' + String(dt.getDate()).padStart(2,'0');
-    s.git_root = s.project ? (_gitRootCache[s.project] || '') : '';
+    // Priority: worktree-state.originalCwd (container-safe) > git rev-parse > path heuristic (frontend)
+    s.git_root = s.worktree_original_cwd || (s.project ? (_gitRootCache[s.project] || '') : '');
   }
 
   _sessionsCache = result;
