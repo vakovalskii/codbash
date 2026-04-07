@@ -100,6 +100,62 @@ function estimateCost(fileSize) {
   return tokens * 0.3 * (3.0 / 1e6) + tokens * 0.7 * (15.0 / 1e6);
 }
 
+// ── Subscription service plans (pricing as of 2025) ─────────────
+var SERVICE_PLANS = {
+  'Claude': { label: 'Claude (Anthropic)', plans: [
+    { name: 'Pro', price: 20 },
+    { name: 'Max 5×', price: 100 },
+    { name: 'Max 20×', price: 200 }
+  ]},
+  'OpenAI': { label: 'OpenAI (ChatGPT)', plans: [
+    { name: 'Plus', price: 20 },
+    { name: 'Pro', price: 200 }
+  ]},
+  'Cursor': { label: 'Cursor', plans: [
+    { name: 'Pro', price: 20 },
+    { name: 'Pro+', price: 60 },
+    { name: 'Ultra', price: 200 }
+  ]},
+  'Kiro': { label: 'Kiro', plans: [
+    { name: 'Pro', price: 20 },
+    { name: 'Pro+', price: 40 },
+    { name: 'Power', price: 200 }
+  ]},
+  'OpenCode': { label: 'OpenCode', plans: [
+    { name: 'Go', price: 10 }
+  ]}
+};
+
+function onSubServiceChange() {
+  var serviceEl = document.getElementById('sub-new-service');
+  var planEl = document.getElementById('sub-new-plan');
+  var paidEl = document.getElementById('sub-new-paid');
+  var service = serviceEl ? serviceEl.value : '';
+  if (!planEl) return;
+  planEl.innerHTML = '<option value="">— select plan —</option>';
+  paidEl.value = '';
+  if (service && SERVICE_PLANS[service]) {
+    SERVICE_PLANS[service].plans.forEach(function(p) {
+      var opt = document.createElement('option');
+      opt.value = p.name;
+      opt.textContent = p.name + ' ($' + p.price + '/mo)';
+      planEl.appendChild(opt);
+    });
+  }
+}
+
+function onSubPlanChange() {
+  var serviceEl = document.getElementById('sub-new-service');
+  var planEl = document.getElementById('sub-new-plan');
+  var paidEl = document.getElementById('sub-new-paid');
+  var service = serviceEl ? serviceEl.value : '';
+  var planName = planEl ? planEl.value : '';
+  if (service && planName && SERVICE_PLANS[service]) {
+    var found = SERVICE_PLANS[service].plans.find(function(p) { return p.name === planName; });
+    if (found && paidEl) paidEl.value = found.price;
+  }
+}
+
 // ── Subscription config helpers ──────────────────────────────────
 function getSubscriptionConfig() {
   var raw = JSON.parse(localStorage.getItem('codedash-subscription') || 'null');
@@ -111,12 +167,14 @@ function getSubscriptionConfig() {
 function saveSubscriptionConfig(cfg) { localStorage.setItem('codedash-subscription', JSON.stringify(cfg)); }
 function subTotalPaid(entries) { return entries.reduce(function(s,e){return s+(parseFloat(e.paid)||0);},0); }
 function addSubEntry() {
-  var plan = (document.getElementById('sub-new-plan').value || '').trim();
+  var service = (document.getElementById('sub-new-service').value || '').trim();
+  var planEl = document.getElementById('sub-new-plan');
+  var plan = planEl ? planEl.value.trim() : '';
   var paid = parseFloat(document.getElementById('sub-new-paid').value) || 0;
   var from = (document.getElementById('sub-new-from').value || '').trim();
   if (!paid) return;
   var cfg = getSubscriptionConfig();
-  cfg.entries.push({ plan: plan || 'Subscription', paid: paid, from: from });
+  cfg.entries.push({ service: service || '', plan: plan || 'Subscription', paid: paid, from: from });
   cfg.entries.sort(function(a,b){return (a.from||'').localeCompare(b.from||'');});
   saveSubscriptionConfig(cfg);
   render();
@@ -2112,9 +2170,11 @@ async function renderAnalytics(container) {
     html += '<div class="sub-entries">';
     if (subEntries.length > 0) {
       subEntries.forEach(function(e, i) {
+        var serviceLabel = e.service && SERVICE_PLANS[e.service] ? SERVICE_PLANS[e.service].label : e.service || '';
         html += '<div class="sub-entry-row">';
+        if (serviceLabel) html += '<span class="sub-entry-service">' + escHtml(serviceLabel) + '</span>';
         html += '<span class="sub-entry-plan">' + escHtml(e.plan || '\u2014') + '</span>';
-        html += '<span class="sub-entry-paid">$' + parseFloat(e.paid || 0).toFixed(2) + '</span>';
+        html += '<span class="sub-entry-paid">$' + parseFloat(e.paid || 0).toFixed(2) + '/mo</span>';
         html += '<span class="sub-entry-from">' + (e.from ? 'from ' + e.from : 'no date') + '</span>';
         html += '<button class="sub-entry-remove" onclick="removeSubEntry(' + i + ')" title="Remove">\u00d7</button>';
         html += '</div>';
@@ -2123,9 +2183,14 @@ async function renderAnalytics(container) {
     html += '</div>';
 
     // Add form
+    var serviceOptions = '<option value="">— service —</option>' +
+      Object.keys(SERVICE_PLANS).map(function(k) {
+        return '<option value="' + k + '">' + SERVICE_PLANS[k].label + '</option>';
+      }).join('');
     html += '<div class="sub-add-form">';
-    html += '<input id="sub-new-plan" type="text" placeholder="Plan (Pro, Max\u2026)" />';
-    html += '<input id="sub-new-paid" type="number" min="0" step="0.01" placeholder="Amount ($)" />';
+    html += '<select id="sub-new-service" onchange="onSubServiceChange()">' + serviceOptions + '</select>';
+    html += '<select id="sub-new-plan" onchange="onSubPlanChange()"><option value="">— plan —</option></select>';
+    html += '<input id="sub-new-paid" type="number" min="0" step="0.01" placeholder="$/mo" />';
     html += '<input id="sub-new-from" type="date" title="Start date of this billing period" />';
     html += '<button onclick="addSubEntry()">+ Add period</button>';
     html += '</div>';

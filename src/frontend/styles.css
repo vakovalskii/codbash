@@ -2274,8 +2274,9 @@ body {
     font-size: 13px;
 }
 
-.sub-entry-plan { font-weight: 600; min-width: 80px; }
-.sub-entry-paid { color: var(--accent-green); min-width: 70px; }
+.sub-entry-service { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; color: var(--accent-blue); background: rgba(96,165,250,0.12); border-radius: 4px; padding: 2px 6px; }
+.sub-entry-plan { font-weight: 600; min-width: 60px; }
+.sub-entry-paid { color: var(--accent-green); min-width: 80px; }
 .sub-entry-from { color: var(--text-muted); flex: 1; }
 .sub-entry-remove {
     background: none;
@@ -2304,8 +2305,18 @@ body {
     font-size: 13px;
 }
 
-.sub-add-form input[type="text"] { width: 130px; }
-.sub-add-form input[type="number"] { width: 100px; }
+.sub-add-form select {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+    color: var(--text);
+    font-size: 13px;
+    cursor: pointer;
+}
+.sub-add-form select:first-child { width: 170px; }
+.sub-add-form select:nth-child(2) { width: 150px; }
+.sub-add-form input[type="number"] { width: 80px; }
 .sub-add-form input[type="date"] { width: 140px; }
 
 .sub-add-form button {
