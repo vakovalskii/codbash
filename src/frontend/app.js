@@ -87,6 +87,43 @@ function showToast(msg) {
   setTimeout(() => el.classList.remove('show'), 2500);
 }
 
+function fallbackCopyText(text) {
+  try {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.top = '-9999px';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    var ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch (e) {
+    return false;
+  }
+}
+
+function copyText(text, successMsg) {
+  var done = function() {
+    showToast(successMsg || ('Copied: ' + text));
+    return true;
+  };
+  var fail = function() {
+    if (fallbackCopyText(text)) return done();
+    prompt('Copy this command:', text);
+    showToast(window.isSecureContext ? 'Clipboard copy failed' : 'Clipboard unavailable on non-secure origin');
+    return false;
+  };
+
+  if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+    return navigator.clipboard.writeText(text).then(done).catch(fail);
+  }
+  return Promise.resolve(fail());
+}
+
 function formatBytes(bytes) {
   if (!bytes || bytes < 1024) return (bytes || 0) + ' B';
   if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
@@ -1358,12 +1395,7 @@ function copyResume(sessionId, tool) {
   } else {
     cmd = 'claude --resume ' + sessionId;
   }
-  navigator.clipboard.writeText(cmd).then(function() {
-    showToast('Copied: ' + cmd);
-  }).catch(function() {
-    // Fallback
-    prompt('Copy this command:', cmd);
-  });
+  copyText(cmd, 'Copied: ' + cmd);
 }
 
 function exportMd(sessionId, project) {
@@ -2038,7 +2070,7 @@ function installAgent(agent) {
 
   var overlay = document.getElementById('confirmOverlay');
   document.getElementById('confirmTitle').textContent = 'Install ' + info.name;
-  var html = '<code style="display:block;margin:8px 0;padding:10px;background:var(--bg-card);border-radius:6px;font-size:13px;cursor:pointer" onclick="navigator.clipboard.writeText(\'' + info.cmd.replace(/'/g, "\\'") + '\');document.querySelector(\'#toast\').textContent=\'Copied!\';document.querySelector(\'#toast\').classList.add(\'show\');setTimeout(function(){document.querySelector(\'#toast\').classList.remove(\'show\')},1500)">' + escHtml(info.cmd) + '</code>';
+  var html = '<code style="display:block;margin:8px 0;padding:10px;background:var(--bg-card);border-radius:6px;font-size:13px;cursor:pointer" onclick="copyText(\'' + info.cmd.replace(/'/g, "\\'") + '\', \'Copied!\')">' + escHtml(info.cmd) + '</code>';
   if (info.alt) {
     html += '<span style="font-size:11px;color:var(--text-muted)">or: <code>' + escHtml(info.alt) + '</code></span><br>';
   }
@@ -2048,9 +2080,7 @@ function installAgent(agent) {
   document.getElementById('confirmAction').textContent = 'Copy Install Command';
   document.getElementById('confirmAction').className = 'launch-btn btn-primary';
   document.getElementById('confirmAction').onclick = function() {
-    navigator.clipboard.writeText(info.cmd).then(function() {
-      showToast('Copied: ' + info.cmd);
-    });
+    copyText(info.cmd, 'Copied: ' + info.cmd);
     closeConfirm();
   };
   if (overlay) overlay.style.display = 'flex';
@@ -2072,9 +2102,7 @@ function showExportDialog() {
   document.getElementById('confirmAction').textContent = 'Copy Export Command';
   document.getElementById('confirmAction').className = 'launch-btn btn-primary';
   document.getElementById('confirmAction').onclick = function() {
-    navigator.clipboard.writeText('codedash export').then(function() {
-      showToast('Copied: codedash export');
-    });
+    copyText('codedash export', 'Copied: codedash export');
     closeConfirm();
   };
   if (overlay) overlay.style.display = 'flex';
@@ -2105,9 +2133,7 @@ async function checkForUpdates() {
         badge.classList.add('update-available');
         badge.title = 'Click to copy update command';
         badge.onclick = function() {
-          navigator.clipboard.writeText('npm i -g codedash-app@latest').then(function() {
-            showToast('Copied: npm i -g codedash-app@latest');
-          });
+          copyText('npm i -g codedash-app@latest', 'Copied: npm i -g codedash-app@latest');
         };
       }
       var banner = document.getElementById('updateBanner');
@@ -2123,9 +2149,7 @@ async function checkForUpdates() {
 
 function copyUpdate() {
   var cmd = 'codedash update && codedash restart';
-  navigator.clipboard.writeText(cmd).then(function() {
-    showToast('Copied: ' + cmd + '  (run in terminal)');
-  });
+  copyText(cmd, 'Copied: ' + cmd + '  (run in terminal)');
 }
 
 function dismissUpdate() {
