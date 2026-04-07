@@ -1991,72 +1991,117 @@ document.addEventListener('keydown', function(e) {
   }
 });
 
-// ── Running Sessions View ──────────────────────────────────────
+// ── Running Sessions View (Kanban) ─────────────────────────────
+
+function renderRunningCard(a, s) {
+  var projName = s ? getProjectName(s.project) : (a.cwd ? a.cwd.split('/').pop() : 'unknown');
+  var projColor = getProjectColor(projName);
+  var statusClass = a.status === 'waiting' ? 'running-waiting' : 'running-active';
+  var uptime = a.startedAt ? formatDuration(Date.now() - a.startedAt) : '';
+  var sid = a.sessionId;
+
+  var html = '<div class="running-card ' + statusClass + '">';
+  html += '<div class="running-card-header">';
+  html += '<span class="live-badge live-' + a.status + '">' + (a.status === 'waiting' ? 'WAITING' : 'LIVE') + '</span>';
+  html += '<span class="running-project" style="color:' + projColor + '">' + escHtml(projName) + '</span>';
+  html += '<span class="running-tool">' + escHtml(a.entrypoint || a.kind || 'claude') + '</span>';
+  html += '</div>';
+  html += '<div class="running-stats">';
+  html += '<div class="running-stat"><span class="running-stat-val">' + a.cpu.toFixed(1) + '%</span><span class="running-stat-label">CPU</span></div>';
+  html += '<div class="running-stat"><span class="running-stat-val">' + a.memoryMB + 'MB</span><span class="running-stat-label">MEM</span></div>';
+  if (uptime) html += '<div class="running-stat"><span class="running-stat-val">' + uptime + '</span><span class="running-stat-label">Uptime</span></div>';
+  html += '</div>';
+  if (s && s.first_message) html += '<div class="running-msg">' + escHtml(s.first_message.slice(0, 120)) + '</div>';
+  html += '<div class="running-actions">';
+  html += '<button class="launch-btn" style="background:var(--accent-green);color:#000" onclick="focusSession(\'' + sid + '\')">Focus</button>';
+  if (s) {
+    html += '<button class="launch-btn btn-secondary" onclick="var ss=allSessions.find(function(x){return x.id===\'' + sid + '\'});if(ss)openDetail(ss);">Details</button>';
+    html += '<button class="launch-btn btn-secondary" onclick="closeDetail();openReplay(\'' + sid + '\',\'' + escHtml((s.project || '').replace(/'/g, "\\'")) + '\')">Replay</button>';
+  }
+  html += '</div>';
+  html += '</div>';
+  return html;
+}
+
+function renderDoneCard(s) {
+  var projName = getProjectName(s.project);
+  var projColor = getProjectColor(projName);
+  var html = '<div class="running-card running-done">';
+  html += '<div class="running-card-header">';
+  html += '<span class="live-badge live-done">DONE</span>';
+  html += '<span class="running-project" style="color:' + projColor + '">' + escHtml(projName) + '</span>';
+  html += '<span class="running-tool tool-' + (s.tool || 'claude') + '">' + escHtml(s.tool || 'claude') + '</span>';
+  html += '</div>';
+  if (s.first_message) html += '<div class="running-msg">' + escHtml(s.first_message.slice(0, 120)) + '</div>';
+  html += '<div class="running-stats">';
+  html += '<div class="running-stat"><span class="running-stat-val">' + (s.messages || 0) + '</span><span class="running-stat-label">msgs</span></div>';
+  if (s.last_time) html += '<div class="running-stat"><span class="running-stat-val">' + s.last_time.slice(11) + '</span><span class="running-stat-label">ended</span></div>';
+  html += '</div>';
+  html += '<div class="running-actions">';
+  html += '<button class="launch-btn btn-secondary" onclick="openDetail(' + JSON.stringify({id: s.id, project: s.project || '', tool: s.tool || ''}) + ')">Details</button>';
+  html += '</div>';
+  html += '</div>';
+  return html;
+}
 
 function renderRunning(container, sessions) {
-  var activeIds = Object.keys(activeSessions);
+  var allActiveIds = Object.keys(activeSessions);
+  var running = allActiveIds.filter(function(sid) { return activeSessions[sid].status !== 'waiting'; });
+  var waiting = allActiveIds.filter(function(sid) { return activeSessions[sid].status === 'waiting'; });
+  var cutoff = Date.now() - 4 * 3600 * 1000;
+  var done = sessions.filter(function(s) {
+    return !activeSessions[s.id] && s.last_ts >= cutoff;
+  }).slice(0, 8);
 
-  if (activeIds.length === 0) {
+  if (allActiveIds.length === 0 && done.length === 0) {
     container.innerHTML = '<div class="empty-state">No running sessions detected.<br><span style="font-size:12px;color:var(--text-muted)">Start a Claude Code or Codex session and it will appear here.</span></div>';
     return;
   }
 
-  // Running cards at top
   var html = '<div class="running-container">';
-  html += '<h2 class="heatmap-title">Running Sessions (' + activeIds.length + ')</h2>';
-  html += '<div class="running-grid">';
+  html += '<h2 class="heatmap-title">Agent Board</h2>';
+  html += '<div class="kanban-board">';
 
-  activeIds.forEach(function(sid) {
-    var a = activeSessions[sid];
-    var s = allSessions.find(function(x) { return x.id === sid; });
-    var projName = s ? getProjectName(s.project) : (a.cwd ? a.cwd.split('/').pop() : 'unknown');
-    var projColor = getProjectColor(projName);
-    var statusClass = a.status === 'waiting' ? 'running-waiting' : 'running-active';
-    var uptime = a.startedAt ? formatDuration(Date.now() - a.startedAt) : '';
-
-    html += '<div class="running-card ' + statusClass + '">';
-    html += '<div class="running-card-header">';
-    html += '<span class="live-badge live-' + a.status + '">' + (a.status === 'waiting' ? 'WAITING' : 'LIVE') + '</span>';
-    html += '<span class="running-project" style="color:' + projColor + '">' + escHtml(projName) + '</span>';
-    html += '<span class="running-tool">' + escHtml(a.entrypoint || a.kind || 'claude') + '</span>';
-    html += '</div>';
-
-    html += '<div class="running-stats">';
-    html += '<div class="running-stat"><span class="running-stat-val">' + a.cpu.toFixed(1) + '%</span><span class="running-stat-label">CPU</span></div>';
-    html += '<div class="running-stat"><span class="running-stat-val">' + a.memoryMB + 'MB</span><span class="running-stat-label">Memory</span></div>';
-    html += '<div class="running-stat"><span class="running-stat-val">' + a.pid + '</span><span class="running-stat-label">PID</span></div>';
-    if (uptime) {
-      html += '<div class="running-stat"><span class="running-stat-val">' + uptime + '</span><span class="running-stat-label">Uptime</span></div>';
-    }
-    html += '</div>';
-
-    if (s && s.first_message) {
-      html += '<div class="running-msg">' + escHtml(s.first_message.slice(0, 150)) + '</div>';
-    }
-
-    html += '<div class="running-actions">';
-    html += '<button class="launch-btn" style="background:var(--accent-green);color:#000" onclick="focusSession(\'' + sid + '\')">Focus</button>';
-    if (s) {
-      html += '<button class="launch-btn btn-secondary" onclick="var ss=allSessions.find(function(x){return x.id===\'' + sid + '\'});if(ss)openDetail(ss);">Details</button>';
-      html += '<button class="launch-btn btn-secondary" onclick="closeDetail();openReplay(\'' + sid + '\',\'' + escHtml((s.project || '').replace(/'/g, "\\'")) + '\')">Replay</button>';
-    }
-    html += '</div>';
-    html += '</div>';
-  });
-
-  html += '</div>';
-
-  // Also show recent non-active sessions below
-  var recentInactive = sessions.filter(function(s) { return !activeSessions[s.id]; }).slice(0, 6);
-  if (recentInactive.length > 0) {
-    html += '<h3 style="margin:24px 0 12px;font-size:14px;color:var(--text-secondary)">Recently Inactive</h3>';
-    html += '<div class="grid-view">';
-    var idx = 0;
-    recentInactive.forEach(function(s) { html += renderCard(s, idx++); });
-    html += '</div>';
+  // ── Running column ──────────────────────────────────────────
+  html += '<div class="kanban-col">';
+  html += '<div class="kanban-col-header kanban-running"><span class="kanban-col-title">Running</span><span class="kanban-col-count">' + running.length + '</span></div>';
+  if (running.length === 0) {
+    html += '<div class="kanban-empty">No active sessions</div>';
+  } else {
+    running.forEach(function(sid) {
+      var a = activeSessions[sid];
+      var s = allSessions.find(function(x) { return x.id === sid; });
+      html += renderRunningCard(a, s);
+    });
   }
-
   html += '</div>';
+
+  // ── Waiting column ──────────────────────────────────────────
+  html += '<div class="kanban-col">';
+  html += '<div class="kanban-col-header kanban-waiting"><span class="kanban-col-title">Waiting for input</span><span class="kanban-col-count">' + waiting.length + '</span></div>';
+  if (waiting.length === 0) {
+    html += '<div class="kanban-empty">No sessions waiting</div>';
+  } else {
+    waiting.forEach(function(sid) {
+      var a = activeSessions[sid];
+      var s = allSessions.find(function(x) { return x.id === sid; });
+      html += renderRunningCard(a, s);
+    });
+  }
+  html += '</div>';
+
+  // ── Done column ─────────────────────────────────────────────
+  html += '<div class="kanban-col">';
+  html += '<div class="kanban-col-header kanban-done"><span class="kanban-col-title">Done (last 4h)</span><span class="kanban-col-count">' + done.length + '</span></div>';
+  if (done.length === 0) {
+    html += '<div class="kanban-empty">No recent sessions</div>';
+  } else {
+    done.forEach(function(s) { html += renderDoneCard(s); });
+  }
+  html += '</div>';
+
+  html += '</div>'; // kanban-board
+  html += '</div>'; // running-container
   container.innerHTML = html;
 }
 
