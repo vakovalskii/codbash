@@ -2746,6 +2746,78 @@ body {
 .token-cache-create { border-color: rgba(251, 191, 36, 0.3); }
 .token-context { border-color: rgba(168, 85, 247, 0.3); }
 
+/* ── Cost attribution bar ─────────────────────────────────── */
+.cost-attr-section {
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+}
+
+.cost-attr-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 10px;
+}
+
+.cost-attr-note {
+    font-size: 11px;
+    font-weight: 400;
+    color: var(--text-muted);
+}
+
+.cost-attr-bar {
+    display: flex;
+    height: 20px;
+    border-radius: 6px;
+    overflow: hidden;
+    gap: 1px;
+    margin-bottom: 10px;
+}
+
+.cost-attr-seg {
+    transition: opacity 0.15s;
+}
+.cost-attr-seg:hover { opacity: 0.75; cursor: default; }
+
+.seg-output { background: #ef4444; }
+.seg-input  { background: var(--accent-blue); }
+.seg-cw     { background: #f59e0b; }
+.seg-cr     { background: var(--accent-green); }
+
+.cost-attr-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    margin-bottom: 10px;
+}
+
+.cost-attr-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.cost-attr-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    flex-shrink: 0;
+}
+
+.cache-metrics {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+}
+
+.cache-metric {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
 /* ── Subscription vs API ──────────────────────────────────── */
 
 .subscription-section { margin-top: 8px; }

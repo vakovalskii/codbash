@@ -98,6 +98,49 @@ async function renderAnalytics(container) {
         html += '<div class="token-type-card token-context"><span class="token-type-val">' + data.avgContextPct + '%</span><span class="token-type-label">Avg context used</span><span class="token-type-pct">of 200K</span></div>';
       }
       html += '</div>';
+
+      // ── Cost attribution stacked bar ──────────────────────────
+      // Uses Sonnet-baseline ratios projected onto actual totalCost.
+      // Ratios are model-agnostic (Claude output/input is ~5:1 across all tiers).
+      if (data.outputCostEst !== undefined && data.totalCost > 0) {
+        var estTotal = data.inputCostEst + data.outputCostEst + data.cacheReadCostEst + data.cacheCreateCostEst;
+        var sharePct = function(v) { return estTotal > 0 ? (v / estTotal * 100) : 0; };
+        var actualOf = function(v) { return (sharePct(v) / 100 * data.totalCost); };
+
+        var outPct = sharePct(data.outputCostEst).toFixed(1);
+        var inPct  = sharePct(data.inputCostEst).toFixed(1);
+        var cwPct  = sharePct(data.cacheCreateCostEst).toFixed(1);
+        var crPct  = sharePct(data.cacheReadCostEst).toFixed(1);
+
+        html += '<div class="cost-attr-section">';
+        html += '<div class="cost-attr-title">Where your money goes</div>';
+        html += '<div class="cost-attr-bar">';
+        if (parseFloat(outPct) > 0) html += '<div class="cost-attr-seg seg-output" style="width:' + outPct + '%" title="Output tokens: ~' + outPct + '% of cost"></div>';
+        if (parseFloat(inPct) > 0)  html += '<div class="cost-attr-seg seg-input"  style="width:' + inPct  + '%" title="Input tokens: ~' + inPct + '% of cost"></div>';
+        if (parseFloat(cwPct) > 0)  html += '<div class="cost-attr-seg seg-cw"     style="width:' + cwPct  + '%" title="Cache write: ~' + cwPct + '% of cost"></div>';
+        if (parseFloat(crPct) > 0)  html += '<div class="cost-attr-seg seg-cr"     style="width:' + crPct  + '%" title="Cache read: ~' + crPct + '% of cost"></div>';
+        html += '</div>';
+        html += '<div class="cost-attr-legend">';
+        html += '<span class="cost-attr-item"><span class="cost-attr-dot seg-output"></span>Output ~' + outPct + '% (~$' + actualOf(data.outputCostEst).toFixed(2) + ')</span>';
+        html += '<span class="cost-attr-item"><span class="cost-attr-dot seg-input"></span>Input ~' + inPct + '% (~$' + actualOf(data.inputCostEst).toFixed(2) + ')</span>';
+        if (parseFloat(cwPct) > 0) html += '<span class="cost-attr-item"><span class="cost-attr-dot seg-cw"></span>Cache write ~' + cwPct + '%</span>';
+        if (parseFloat(crPct) > 0) html += '<span class="cost-attr-item"><span class="cost-attr-dot seg-cr"></span>Cache read ~' + crPct + '%</span>';
+        html += '</div>';
+
+        if (data.cacheHitRate > 0 || data.cacheSavings > 0) {
+          html += '<div class="cache-metrics">';
+          if (data.cacheHitRate > 0) {
+            var hitColor = data.cacheHitRate >= 60 ? 'var(--accent-green)' : data.cacheHitRate >= 30 ? '#f59e0b' : 'var(--text-muted)';
+            html += '<span class="cache-metric" style="color:' + hitColor + '">Cache hit rate: <b>' + data.cacheHitRate + '%</b></span>';
+          }
+          if (data.cacheSavings > 0.001) {
+            html += '<span class="cache-metric" style="color:var(--accent-green)">Cache saved ~<b>$' + data.cacheSavings.toFixed(0) + '</b> vs no-cache</span>';
+          }
+          html += '</div>';
+        }
+        html += '</div>';
+      }
+
       html += '</div>';
     }
 
