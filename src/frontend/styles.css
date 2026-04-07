@@ -369,7 +369,7 @@ body {
     flex-shrink: 0;
 }
 
-.card-body { flex: 1; min-width: 0; }
+.card-body { flex: 1; min-width: 0; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 
 .card-title {
     font-size: 14px;
@@ -1633,12 +1633,15 @@ body {
     position: relative;
     border-radius: 12px;
     padding: 2px;
+    display: flex;
+    flex-direction: column;
 }
 
 .card-live-wrap > .card {
     border: none;
     position: relative;
     z-index: 1;
+    flex: 1;
 }
 
 .card-live-wrap .live-border {
