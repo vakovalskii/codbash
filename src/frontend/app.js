@@ -1664,6 +1664,41 @@ function closeDetail() {
   if (overlay) overlay.classList.remove('open');
 }
 
+// ── Detail panel resize ───────────────────────────────────────
+(function initDetailResize() {
+  var handle = document.getElementById('detailResizeHandle');
+  var panel = document.getElementById('detailPanel');
+  if (!handle || !panel) return;
+
+  var startX, startW;
+  handle.addEventListener('mousedown', function(e) {
+    e.preventDefault();
+    startX = e.clientX;
+    startW = panel.offsetWidth;
+    panel.classList.add('resizing');
+    handle.classList.add('active');
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+  function onMove(e) {
+    var newW = startW + (startX - e.clientX);
+    newW = Math.max(400, Math.min(newW, window.innerWidth * 0.9));
+    panel.style.width = newW + 'px';
+    panel.style.right = '0';
+  }
+  function onUp() {
+    panel.classList.remove('resizing');
+    handle.classList.remove('active');
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    localStorage.setItem('codedash-detail-width', panel.style.width);
+  }
+
+  // Restore saved width
+  var saved = localStorage.getItem('codedash-detail-width');
+  if (saved) panel.style.width = saved;
+})();
+
 async function loadGitCommits(project, fromTs, toTs) {
   try {
     var resp = await fetch('/api/git-commits?project=' + encodeURIComponent(project) + '&from=' + fromTs + '&to=' + toTs);

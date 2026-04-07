@@ -466,21 +466,37 @@ function saveLLMConfig(config) {
 
 function callLLM(config, conversation, totalMessages) {
   return new Promise((resolve, reject) => {
-    const prompt = `You are a helpful assistant that generates concise session titles.
+    const systemPrompt = `<MAIN_ROLE>
+You are a coding session summarizer. You read coding conversations and produce a single short concrete title describing what was done.
+</MAIN_ROLE>
 
-Given a coding session conversation (first and last messages from ${totalMessages} total), generate a short descriptive title (3-8 words) that captures the main topic/task.
+<MAIN_GUIDELINES>
+- Write 5-15 words summarizing WHAT was concretely done
+- Mention specific: technologies, files, features, bugs, configs
+- Write in the SAME language the user used in the conversation
+- Never write vague/generic descriptions
+- Respond ONLY with JSON: {"title": "your summary"}
 
-Conversation:
+GOOD: "Фикс авторизации OAuth + рефактор middleware"
+GOOD: "Добавил Cursor сессии, cmux терминал, WSL поддержку"
+GOOD: "Настройка nginx reverse proxy для staging"
+GOOD: "Fix Codex message count bug in grid view"
+BAD: "Coding session about project" — too vague
+BAD: "Bug fix and improvements" — no specifics
+BAD: "Working with code" — meaningless
+</MAIN_GUIDELINES>`;
+
+    const prompt = `Coding session: ${totalMessages} messages total. First and last messages below.
+
 ${conversation}`;
 
     const body = JSON.stringify({
       model: config.model,
       messages: [
-        { role: 'system', content: 'Generate a concise title for this coding session. Respond with JSON: {"title": "your title here"}' },
+        { role: 'system', content: systemPrompt },
         { role: 'user', content: prompt },
       ],
-      response_format: { type: 'json_object' },
-      max_tokens: 100,
+      max_tokens: 200,
       temperature: 0.3,
     });
 
@@ -510,7 +526,15 @@ ${conversation}`;
             reject(new Error(result.error.message || JSON.stringify(result.error)));
             return;
           }
-          const content = result.choices[0].message.content;
+          const msg = result.choices && result.choices[0] && result.choices[0].message;
+          // Reasoning models may put output in reasoning_content or content
+          const content = (msg && msg.content) || (msg && msg.reasoning_content) || '';
+          if (!content) {
+            // Log full response for debugging
+            log('ERROR', 'LLM empty content, full response: ' + JSON.stringify(result).slice(0, 500));
+            reject(new Error('LLM returned empty content. If using a reasoning model, it may not support structured output.'));
+            return;
+          }
           let title;
           try {
             title = JSON.parse(content).title;

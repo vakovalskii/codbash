@@ -729,17 +729,36 @@ body {
 .detail-panel {
     position: fixed;
     top: 0;
-    right: -700px;
-    width: 700px;
+    right: 0;
+    width: 840px;
+    min-width: 400px;
+    max-width: 90vw;
     height: 100vh;
     background: var(--bg-secondary);
     border-left: 1px solid var(--border);
-    transition: right 0.25s ease;
+    transform: translateX(100%);
+    transition: transform 0.25s ease;
     display: flex;
     flex-direction: column;
     z-index: 100;
 }
-.detail-panel.open { right: 0; }
+.detail-panel.open { transform: translateX(0); }
+.detail-panel.resizing { transition: none; }
+
+.detail-resize-handle {
+    position: absolute;
+    left: -3px;
+    top: 0;
+    width: 6px;
+    height: 100%;
+    cursor: col-resize;
+    z-index: 101;
+}
+.detail-resize-handle:hover,
+.detail-resize-handle.active {
+    background: var(--accent-blue);
+    opacity: 0.5;
+}
 
 .detail-header {
     padding: 16px 20px;
