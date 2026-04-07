@@ -515,9 +515,17 @@ ${conversation}`;
           try {
             title = JSON.parse(content).title;
           } catch {
-            // Fallback: use raw content if not valid JSON
-            title = content.replace(/["\n]/g, '').trim();
+            // Fallback: extract title from malformed JSON or raw text
+            var m = content.match(/["']?title["']?\s*[:=]\s*["']([^"']+)["']/i);
+            if (m) {
+              title = m[1].trim();
+            } else {
+              // Strip JSON artifacts and use as-is
+              title = content.replace(/[{}"'\n]/g, '').replace(/^title\s*[:=]\s*/i, '').trim();
+            }
           }
+          // Sanitize: limit length, strip leftover JSON
+          if (title) title = title.replace(/^\{.*?:\s*/, '').slice(0, 80).trim();
           resolve(title || 'Untitled session');
         } catch (e) {
           reject(new Error('Failed to parse LLM response: ' + data.slice(0, 200)));
