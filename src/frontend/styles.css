@@ -2170,6 +2170,65 @@ body {
     color: var(--text-muted);
 }
 
+.burn-rate-bar {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 18px;
+    margin-bottom: 24px;
+    display: flex;
+    align-items: center;
+    gap: 24px;
+}
+
+.burn-rate-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    white-space: nowrap;
+}
+
+.burn-rate-stats {
+    display: flex;
+    gap: 28px;
+    flex-wrap: wrap;
+}
+
+.burn-stat {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+}
+
+.burn-val {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.burn-val.burn-low  { color: var(--accent-green); }
+.burn-val.burn-medium { color: #f59e0b; }
+.burn-val.burn-high { color: #ef4444; }
+
+.burn-label {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.burn-pace {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-left: 2px;
+}
+
+.burn-pace.burn-low    { background: rgba(74,222,128,0.12); color: var(--accent-green); }
+.burn-pace.burn-medium { background: rgba(245,158,11,0.12); color: #f59e0b; }
+.burn-pace.burn-high   { background: rgba(239,68,68,0.12);  color: #ef4444; }
+
 .chart-section {
     margin-bottom: 28px;
 }

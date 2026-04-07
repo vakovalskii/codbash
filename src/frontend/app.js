@@ -2192,6 +2192,27 @@ async function renderAnalytics(container) {
     html += '<div class="analytics-card"><span class="analytics-val">' + data.totalSessions + '</span><span class="analytics-label">Sessions</span></div>';
     html += '</div>';
 
+    // ── Burn rate ──────────────────────────────────────────────
+    var todayCost = data.todayCost || 0;
+    var last1hCost = data.last1hCost || 0;
+    var dailyRate = data.dailyRate || 0;
+    var hoursElapsed = data.hoursElapsedToday || 1;
+    // Project today's pace to a full day for comparison
+    var projectedDaily = todayCost / (hoursElapsed / 24);
+    var paceRatio = dailyRate > 0 ? projectedDaily / dailyRate : 0;
+    var burnClass = paceRatio >= 2 ? 'burn-high' : paceRatio >= 1.3 ? 'burn-medium' : 'burn-low';
+    var paceLabel = paceRatio >= 2 ? '🔥 ' + Math.round(paceRatio) + 'x avg' : paceRatio >= 1.3 ? '↑ ' + paceRatio.toFixed(1) + 'x avg' : dailyRate > 0 ? '✓ normal' : '';
+    html += '<div class="burn-rate-bar">';
+    html += '<div class="burn-rate-title">Burn Rate</div>';
+    html += '<div class="burn-rate-stats">';
+    html += '<div class="burn-stat"><span class="burn-val ' + burnClass + '">$' + todayCost.toFixed(3) + '</span><span class="burn-label">today</span>' + (paceLabel ? '<span class="burn-pace ' + burnClass + '">' + paceLabel + '</span>' : '') + '</div>';
+    html += '<div class="burn-stat"><span class="burn-val">$' + last1hCost.toFixed(3) + '</span><span class="burn-label">last hour</span></div>';
+    if (dailyRate > 0) {
+      html += '<div class="burn-stat"><span class="burn-val">$' + projectedDaily.toFixed(2) + '</span><span class="burn-label">projected today</span></div>';
+    }
+    html += '</div>';
+    html += '</div>';
+
     // ── Data coverage note ────────────────────────────────────
     if (data.byAgent || data.agentNoCostData) {
       var coverageparts = [];

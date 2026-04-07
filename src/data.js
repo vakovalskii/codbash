@@ -1841,7 +1841,7 @@ function getCostAnalytics(sessions) {
     byProject[proj].sessions++;
     byProject[proj].tokens += tokens;
 
-    sessionCosts.push({ id: s.id, cost, project: proj, date: s.date });
+    sessionCosts.push({ id: s.id, cost, project: proj, date: s.date, last_ts: s.last_ts || 0 });
   }
 
   // Sort top sessions by cost
@@ -1850,6 +1850,17 @@ function getCostAnalytics(sessions) {
   const days = firstDate && lastDate
     ? Math.max(1, Math.round((new Date(lastDate) - new Date(firstDate)) / 86400000) + 1)
     : 1;
+
+  // Burn rate: derived from already-computed sessionCosts — no extra IO
+  const now = Date.now();
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const hoursElapsedToday = (now - new Date(todayStr).getTime()) / 3600000;
+  let last1hCost = 0;
+  let todayCost = 0;
+  for (const sc of sessionCosts) {
+    if (sc.last_ts >= now - 3600000) last1hCost += sc.cost;
+    if (sc.date === todayStr) todayCost += sc.cost;
+  }
 
   return {
     totalCost,
@@ -1870,6 +1881,9 @@ function getCostAnalytics(sessions) {
     topSessions: sessionCosts.slice(0, 10),
     byAgent,
     agentNoCostData,
+    last1hCost,
+    todayCost,
+    hoursElapsedToday: Math.max(1, hoursElapsedToday),
   };
 }
 
