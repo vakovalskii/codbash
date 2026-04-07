@@ -123,6 +123,25 @@ function parseClaudeSessionFile(sessionFile) {
   };
 }
 
+function mergeClaudeSessionDetail(session, summary, sessionFile) {
+  if (!session || !summary) return;
+
+  session.tool = summary.tool || session.tool;
+  session.has_detail = true;
+  session.file_size = summary.fileSize;
+  session.detail_messages = summary.msgCount;
+  session._session_file = sessionFile;
+
+  if (!session.project && summary.projectPath) {
+    session.project = summary.projectPath;
+    session.project_short = summary.projectPath.replace(os.homedir(), '~');
+  }
+
+  if (summary.customTitle) {
+    session.first_message = summary.customTitle;
+  }
+}
+
 function parseCodexSessionIndex(codexDir) {
   const titles = {};
   const titleMeta = {};
@@ -789,8 +808,17 @@ function loadSessions() {
           for (const file of fs.readdirSync(projDir)) {
             if (!file.endsWith('.jsonl')) continue;
             const sid = file.replace('.jsonl', '');
-            if (sessions[sid]) { if (!sessions[sid].has_detail) { sessions[sid].has_detail = true; sessions[sid].file_size = fs.statSync(path.join(projDir, file)).size; } continue; }
             const fp = path.join(projDir, file);
+            if (sessions[sid]) {
+              const summary = parseClaudeSessionFile(fp);
+              if (summary) mergeClaudeSessionDetail(sessions[sid], summary, fp);
+              else if (!sessions[sid].has_detail) {
+                sessions[sid].has_detail = true;
+                sessions[sid].file_size = fs.statSync(fp).size;
+                sessions[sid]._session_file = fp;
+              }
+              continue;
+            }
             const summary = parseClaudeSessionFile(fp);
             if (!summary) continue;
             sessions[sid] = {
@@ -806,6 +834,7 @@ function loadSessions() {
               file_size: summary.fileSize,
               detail_messages: summary.msgCount,
               _claude_dir: extraClaudeDir,
+              _session_file: fp,
             };
           }
         }
@@ -816,25 +845,30 @@ function loadSessions() {
   // Enrich Claude sessions with detail file info
   for (const [sid, s] of Object.entries(sessions)) {
     if (s.tool !== 'claude' && s.tool !== 'claude-ext') continue;
-    const claudeDir = s._claude_dir || CLAUDE_DIR;
-    const projectsDir = path.join(claudeDir, 'projects');
-    const projectKey = s.project.replace(/[^a-zA-Z0-9-]/g, '-');
-    const sessionFile = path.join(projectsDir, projectKey, `${sid}.jsonl`);
+    let sessionFile = '';
+    if (s._session_file && fs.existsSync(s._session_file)) {
+      sessionFile = s._session_file;
+    } else if (s.project) {
+      const claudeDir = s._claude_dir || CLAUDE_DIR;
+      const projectsDir = path.join(claudeDir, 'projects');
+      const projectKey = s.project.replace(/[^a-zA-Z0-9-]/g, '-');
+      const candidate = path.join(projectsDir, projectKey, `${sid}.jsonl`);
+      if (fs.existsSync(candidate)) sessionFile = candidate;
+    }
+    if (!sessionFile) {
+      const found = findSessionFile(sid, s.project);
+      if (found && found.format === 'claude') sessionFile = found.file;
+    }
+
     if (fs.existsSync(sessionFile)) {
       const summary = parseClaudeSessionFile(sessionFile);
-      s.has_detail = true;
-      s.file_size = summary ? summary.fileSize : fs.statSync(sessionFile).size;
-      s.detail_messages = summary ? summary.msgCount : 0;
-      if (summary) {
-        if (!s.project && summary.projectPath) {
-          s.project = summary.projectPath;
-          s.project_short = summary.projectPath.replace(os.homedir(), '~');
-        }
-        if (summary.customTitle) {
-          s.first_message = summary.customTitle;
-        }
+      if (summary) mergeClaudeSessionDetail(s, summary, sessionFile);
+      else {
+        s.has_detail = true;
+        s.file_size = fs.statSync(sessionFile).size;
+        s._session_file = sessionFile;
       }
-    } else {
+    } else if (!s.has_detail) {
       s.has_detail = false;
       s.file_size = 0;
       s.detail_messages = 0;
@@ -850,8 +884,12 @@ function loadSessions() {
         for (const file of fs.readdirSync(projDir)) {
           if (!file.endsWith('.jsonl')) continue;
           const sid = file.replace('.jsonl', '');
-          if (sessions[sid]) continue; // already loaded
           const filePath = path.join(projDir, file);
+          if (sessions[sid]) {
+            const summary = parseClaudeSessionFile(filePath);
+            if (summary) mergeClaudeSessionDetail(sessions[sid], summary, filePath);
+            continue;
+          }
           const summary = parseClaudeSessionFile(filePath);
           if (!summary) continue;
           sessions[sid] = {
@@ -867,6 +905,7 @@ function loadSessions() {
             file_size: summary.fileSize,
             detail_messages: summary.msgCount,
             _claude_dir: CLAUDE_DIR,
+            _session_file: filePath,
           };
         }
       }
