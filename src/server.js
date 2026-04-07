@@ -496,8 +496,7 @@ ${conversation}`;
         { role: 'system', content: systemPrompt },
         { role: 'user', content: prompt },
       ],
-      response_format: { type: 'json_object' },
-      max_tokens: 150,
+      max_tokens: 200,
       temperature: 0.3,
     });
 
@@ -527,7 +526,15 @@ ${conversation}`;
             reject(new Error(result.error.message || JSON.stringify(result.error)));
             return;
           }
-          const content = result.choices[0].message.content;
+          const msg = result.choices && result.choices[0] && result.choices[0].message;
+          // Reasoning models may put output in reasoning_content or content
+          const content = (msg && msg.content) || (msg && msg.reasoning_content) || '';
+          if (!content) {
+            // Log full response for debugging
+            log('ERROR', 'LLM empty content, full response: ' + JSON.stringify(result).slice(0, 500));
+            reject(new Error('LLM returned empty content. If using a reasoning model, it may not support structured output.'));
+            return;
+          }
           let title;
           try {
             title = JSON.parse(content).title;
