@@ -55,8 +55,11 @@ function getProjectName(fullPath) {
   return parts[parts.length - 1] || 'unknown';
 }
 
-// Returns the git repo name, stripping /.claude/worktrees/<name> and /.codex/ suffixes
-function getGitProjectName(fullPath) {
+// Returns the git repo name from session data.
+// Prefers s.git_root resolved by the backend (git rev-parse --show-toplevel),
+// falls back to path-based heuristic for sessions without it.
+function getGitProjectName(fullPath, gitRoot) {
+  if (gitRoot) return gitRoot.replace(/\/+$/, '').split('/').pop() || 'unknown';
   if (!fullPath) return 'unknown';
   var cleaned = fullPath.replace(/\/+$/, '');
   var wt = cleaned.match(/^(.*?)\/.claude\/worktrees\//);
@@ -1162,7 +1165,7 @@ function renderQACard(s, idx) {
 function renderProjects(container, sessions) {
   var byGit = {};
   sessions.forEach(function(s) {
-    var name = getGitProjectName(s.project);
+    var name = getGitProjectName(s.project, s.git_root);
     if (!byGit[name]) byGit[name] = [];
     byGit[name].push(s);
   });

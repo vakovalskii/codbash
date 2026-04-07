@@ -703,6 +703,25 @@ function scanCodexSessions() {
   return sessions;
 }
 
+// ── Git root resolver ───────────────────────────────────────
+
+const _gitRootCache = {};
+
+function resolveGitRoot(projectPath) {
+  if (!projectPath) return '';
+  if (_gitRootCache[projectPath] !== undefined) return _gitRootCache[projectPath];
+  try {
+    const root = execSync(`git -C "${projectPath}" rev-parse --show-toplevel 2>/dev/null`, {
+      encoding: 'utf8', timeout: 2000
+    }).trim();
+    _gitRootCache[projectPath] = root;
+    return root;
+  } catch {
+    _gitRootCache[projectPath] = '';
+    return '';
+  }
+}
+
 // ── Public API ─────────────────────────────────────────────
 
 let _sessionsCache = null;
@@ -927,11 +946,16 @@ function loadSessions() {
 
   const result = Object.values(sessions).sort((a, b) => b.last_ts - a.last_ts);
 
+  // Collect unique project paths and resolve git roots in one pass
+  const uniquePaths = [...new Set(result.map(s => s.project).filter(Boolean))];
+  for (const p of uniquePaths) resolveGitRoot(p);
+
   for (const s of result) {
     s.first_time = new Date(s.first_ts).toLocaleString('sv-SE').slice(0, 16);
     s.last_time = new Date(s.last_ts).toLocaleString('sv-SE').slice(0, 16);
     const dt = new Date(s.last_ts);
     s.date = dt.getFullYear() + '-' + String(dt.getMonth()+1).padStart(2,'0') + '-' + String(dt.getDate()).padStart(2,'0');
+    s.git_root = s.project ? (_gitRootCache[s.project] || '') : '';
   }
 
   _sessionsCache = result;
