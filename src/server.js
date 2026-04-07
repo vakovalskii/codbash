@@ -25,9 +25,9 @@ function log(tag, msg, data) {
   console.log(line);
 }
 
-function startServer(port, openBrowser = true) {
+function startServer(host, port, openBrowser = true) {
   const server = http.createServer((req, res) => {
-    const parsed = new URL(req.url, `http://localhost:${port}`);
+    const parsed = new URL(req.url, `http://${host}:${port}`);
     const pathname = parsed.pathname;
     const reqStart = Date.now();
 
@@ -370,18 +370,26 @@ function startServer(port, openBrowser = true) {
     }
   });
 
-  server.listen(port, '127.0.0.1', () => {
+  const bindAddr = host === 'localhost' ? '127.0.0.1' : host;
+  const displayHost = host === '0.0.0.0' ? 'localhost' : host;
+  const displayUrl = `http://${displayHost}:${port}`;
+
+  server.listen(port, bindAddr, () => {
     console.log('');
     console.log('  \x1b[36m\x1b[1mcodedash\x1b[0m — Claude & Codex Sessions Dashboard');
-    console.log(`  \x1b[2mhttp://localhost:${port}\x1b[0m`);
+    console.log(`  \x1b[2m${displayUrl}\x1b[0m`);
+    if (host === '0.0.0.0') {
+      console.log('  \x1b[2mListening on all interfaces\x1b[0m');
+    }
     console.log('  \x1b[2mPress Ctrl+C to stop\x1b[0m');
     console.log('');
 
     if (openBrowser) {
+      const browserUrl = `http://localhost:${port}`;
       if (process.platform === 'darwin') {
-        exec(`open http://localhost:${port}`);
+        exec(`open ${browserUrl}`);
       } else if (process.platform === 'linux') {
-        exec(`xdg-open http://localhost:${port}`);
+        exec(`xdg-open ${browserUrl}`);
       }
     }
   });

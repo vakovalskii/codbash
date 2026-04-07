@@ -7,6 +7,7 @@ const { convertSession } = require('../src/convert');
 const { generateHandoff, quickHandoff } = require('../src/handoff');
 
 const DEFAULT_PORT = 3847;
+const DEFAULT_HOST = 'localhost';
 const args = process.argv.slice(2);
 const command = args[0] || 'help';
 
@@ -15,8 +16,10 @@ switch (command) {
   case 'start': {
     const portArg = args.find(a => a.startsWith('--port='));
     const port = portArg ? parseInt(portArg.split('=')[1]) : (parseInt(args[1]) || DEFAULT_PORT);
+    const hostArg = args.find(a => a.startsWith('--host='));
+    const host = hostArg ? hostArg.split('=')[1] : (process.env.CODEDASH_HOST || DEFAULT_HOST);
     const noBrowser = args.includes('--no-browser');
-    startServer(port, !noBrowser);
+    startServer(host, port, !noBrowser);
     break;
   }
 
@@ -253,6 +256,8 @@ switch (command) {
     const { execSync } = require('child_process');
     const portArg = args.find(a => a.startsWith('--port='));
     const port = portArg ? parseInt(portArg.split('=')[1]) : DEFAULT_PORT;
+    const hostArg = args.find(a => a.startsWith('--host='));
+    const host = hostArg ? hostArg.split('=')[1] : (process.env.CODEDASH_HOST || DEFAULT_HOST);
     console.log(`\n  Stopping codedash on port ${port}...`);
     try {
       execSync(`lsof -ti:${port} | xargs kill -9 2>/dev/null`, { stdio: 'pipe' });
@@ -263,7 +268,7 @@ switch (command) {
     setTimeout(() => {
       console.log('  Starting...\n');
       const noBrowser = args.includes('--no-browser');
-      startServer(port, !noBrowser);
+      startServer(host, port, !noBrowser);
     }, 500);
     break;
   }
@@ -328,9 +333,18 @@ switch (command) {
     codedash help                        Show this help
     codedash version                     Show version
 
+  \x1b[1mServer options:\x1b[0m
+    --port=N                             Listen on port N (default: ${DEFAULT_PORT})
+    --host=ADDR                          Bind to address (default: localhost)
+    --no-browser                         Don't open browser on start
+
+  \x1b[1mEnvironment variables:\x1b[0m
+    CODEDASH_HOST                        Bind address (same as --host)
+
   \x1b[1mExamples:\x1b[0m
     codedash run                         Start on port ${DEFAULT_PORT}
     codedash run --port=4000             Start on port 4000
+    codedash run --host=0.0.0.0          Listen on all interfaces
     codedash run --no-browser            Start without opening browser
     codedash list 50                     Show last 50 sessions
     codedash ls                          Alias for list
