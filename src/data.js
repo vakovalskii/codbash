@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { execSync } = require('child_process');
+const { execSync, execFileSync } = require('child_process');
 
 // ── Constants ──────────────────────────────────────────────
 
@@ -222,10 +222,11 @@ function scanOpenCodeSessions() {
   try {
     // Use sqlite3 CLI with tab separator — session titles can contain pipes
     // (e.g. "review changes [commit|branch|pr]") which break the default | separator
-    const rows = execSync(
-      `sqlite3 -separator $'\\t' "${OPENCODE_DB}" "SELECT s.id, s.title, s.directory, s.time_created, s.time_updated, COUNT(m.id) as msg_count FROM session s LEFT JOIN message m ON m.session_id = s.id GROUP BY s.id ORDER BY s.time_updated DESC"`,
-      { encoding: 'utf8', timeout: 5000 }
-    ).trim();
+    const rows = execFileSync('sqlite3', [
+      '-separator', '\t',
+      OPENCODE_DB,
+      'SELECT s.id, s.title, s.directory, s.time_created, s.time_updated, COUNT(m.id) as msg_count FROM session s LEFT JOIN message m ON m.session_id = s.id GROUP BY s.id ORDER BY s.time_updated DESC'
+    ], { encoding: 'utf8', timeout: 5000, windowsHide: true }).trim();
 
     if (!rows) return sessions;
 
@@ -258,10 +259,10 @@ function loadOpenCodeDetail(sessionId) {
 
   try {
     // Get messages with parts joined
-    const rows = execSync(
-      `sqlite3 "${OPENCODE_DB}" "SELECT m.data, GROUP_CONCAT(p.data, '|||') FROM message m LEFT JOIN part p ON p.message_id = m.id WHERE m.session_id = '${sessionId.replace(/'/g, "''")}' GROUP BY m.id ORDER BY m.time_created"`,
-      { encoding: 'utf8', timeout: 10000 }
-    ).trim();
+    const rows = execFileSync('sqlite3', [
+      OPENCODE_DB,
+      `SELECT m.data, GROUP_CONCAT(p.data, '|||') FROM message m LEFT JOIN part p ON p.message_id = m.id WHERE m.session_id = '${sessionId.replace(/'/g, "''")}' GROUP BY m.id ORDER BY m.time_created`
+    ], { encoding: 'utf8', timeout: 10000, windowsHide: true }).trim();
 
     if (!rows) return { messages: [] };
 
@@ -329,10 +330,11 @@ function scanKiroSessions() {
   if (!fs.existsSync(KIRO_DB)) return sessions;
 
   try {
-    const rows = execSync(
-      `sqlite3 -separator $'\\t' "${KIRO_DB}" "SELECT key, conversation_id, created_at, updated_at, substr(value, 1, 500), length(value) FROM conversations_v2 ORDER BY updated_at DESC"`,
-      { encoding: 'utf8', timeout: 5000 }
-    ).trim();
+    const rows = execFileSync('sqlite3', [
+      '-separator', '\t',
+      KIRO_DB,
+      'SELECT key, conversation_id, created_at, updated_at, substr(value, 1, 500), length(value) FROM conversations_v2 ORDER BY updated_at DESC'
+    ], { encoding: 'utf8', timeout: 5000, windowsHide: true }).trim();
 
     if (!rows) return sessions;
 
@@ -376,10 +378,10 @@ function loadKiroDetail(conversationId) {
   if (!fs.existsSync(KIRO_DB)) return { messages: [] };
 
   try {
-    const raw = execSync(
-      `sqlite3 "${KIRO_DB}" "SELECT value FROM conversations_v2 WHERE conversation_id = '${conversationId.replace(/'/g, "''")}';"`,
-      { encoding: 'utf8', timeout: 10000 }
-    ).trim();
+    const raw = execFileSync('sqlite3', [
+      KIRO_DB,
+      `SELECT value FROM conversations_v2 WHERE conversation_id = '${conversationId.replace(/'/g, "''")}';`
+    ], { encoding: 'utf8', timeout: 10000, windowsHide: true }).trim();
 
     if (!raw) return { messages: [] };
 
@@ -795,8 +797,8 @@ function resolveGitRoot(projectPath) {
   if (!projectPath) return '';
   if (_gitRootCache[projectPath] !== undefined) return _gitRootCache[projectPath];
   try {
-    const root = execSync(`git -C "${projectPath}" rev-parse --show-toplevel 2>/dev/null`, {
-      encoding: 'utf8', timeout: 2000
+    const root = execFileSync('git', ['-C', projectPath, 'rev-parse', '--show-toplevel'], {
+      encoding: 'utf8', timeout: 2000, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe']
     }).trim();
     _gitRootCache[projectPath] = root;
     return root;
@@ -822,22 +824,22 @@ function getProjectGitInfo(projectPath) {
   if (!gitRoot) return null;
 
   const cwd = gitRoot;
-  const opts = { encoding: 'utf8', timeout: 3000, stdio: ['pipe', 'pipe', 'pipe'] };
+  const opts = { encoding: 'utf8', timeout: 3000, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] };
   const info = { gitRoot, branch: '', remoteUrl: '', lastCommit: '', lastCommitDate: '', isDirty: false, _ts: now };
 
-  try { info.branch = execSync(`git -C "${cwd}" rev-parse --abbrev-ref HEAD 2>/dev/null`, opts).trim(); } catch {}
-  try { info.remoteUrl = execSync(`git -C "${cwd}" config --get remote.origin.url 2>/dev/null`, opts).trim(); } catch {}
+  try { info.branch = execFileSync('git', ['-C', cwd, 'rev-parse', '--abbrev-ref', 'HEAD'], opts).trim(); } catch {}
+  try { info.remoteUrl = execFileSync('git', ['-C', cwd, 'config', '--get', 'remote.origin.url'], opts).trim(); } catch {}
   try {
-    const log = execSync(`git -C "${cwd}" log -1 --format="%h %s" 2>/dev/null`, opts).trim();
+    const log = execFileSync('git', ['-C', cwd, 'log', '-1', '--format=%h %s'], opts).trim();
     if (log) {
       const sp = log.indexOf(' ');
       info.lastCommit = sp > 0 ? log.slice(sp + 1).slice(0, 80) : log;
       info.lastCommitHash = sp > 0 ? log.slice(0, sp) : '';
     }
   } catch {}
-  try { info.lastCommitDate = execSync(`git -C "${cwd}" log -1 --format="%ci" 2>/dev/null`, opts).trim(); } catch {}
+  try { info.lastCommitDate = execFileSync('git', ['-C', cwd, 'log', '-1', '--format=%ci'], opts).trim(); } catch {}
   try {
-    const status = execSync(`git -C "${cwd}" status --porcelain 2>/dev/null`, opts).trim();
+    const status = execFileSync('git', ['-C', cwd, 'status', '--porcelain'], opts).trim();
     info.isDirty = status.length > 0;
   } catch {}
 
@@ -1191,10 +1193,9 @@ function getGitCommits(projectDir, fromTs, toTs) {
     const afterDate = new Date(fromTs).toISOString();
     const beforeDate = new Date(toTs).toISOString();
 
-    const output = execSync(
-      `git log --oneline --after="${afterDate}" --before="${beforeDate}"`,
-      { cwd: projectDir, encoding: 'utf8', timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }
-    ).trim();
+    const output = execFileSync('git', [
+      'log', '--oneline', `--after=${afterDate}`, `--before=${beforeDate}`
+    ], { cwd: projectDir, encoding: 'utf8', timeout: 5000, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }).trim();
 
     if (!output) return [];
 
@@ -1322,10 +1323,10 @@ function findSessionFile(sessionId, project) {
   // Try Kiro (SQLite)
   if (fs.existsSync(KIRO_DB)) {
     try {
-      const check = execSync(
-        `sqlite3 "${KIRO_DB}" "SELECT COUNT(*) FROM conversations_v2 WHERE conversation_id = '${sessionId.replace(/'/g, "''")}';"`,
-        { encoding: 'utf8', timeout: 3000 }
-      ).trim();
+      const check = execFileSync('sqlite3', [
+        KIRO_DB,
+        `SELECT COUNT(*) FROM conversations_v2 WHERE conversation_id = '${sessionId.replace(/'/g, "''")}';`
+      ], { encoding: 'utf8', timeout: 3000, windowsHide: true }).trim();
       if (parseInt(check) > 0) {
         return { file: KIRO_DB, format: 'kiro', sessionId: sessionId };
       }
@@ -1625,10 +1626,10 @@ function computeSessionCost(sessionId, project) {
     const safeId = /^[a-zA-Z0-9_-]+$/.test(found.sessionId) ? found.sessionId : '';
     if (!safeId) return { cost: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0, contextPctSum: 0, contextTurnCount: 0, model: '' };
     try {
-      const rows = execSync(
-        `sqlite3 "${OPENCODE_DB}" "SELECT data FROM message WHERE session_id = '${safeId}' AND json_extract(data, '$.role') = 'assistant' ORDER BY time_created"`,
-        { encoding: 'utf8', timeout: 10000 }
-      ).trim();
+      const rows = execFileSync('sqlite3', [
+        OPENCODE_DB,
+        `SELECT data FROM message WHERE session_id = '${safeId}' AND json_extract(data, '$.role') = 'assistant' ORDER BY time_created`
+      ], { encoding: 'utf8', timeout: 10000, windowsHide: true }).trim();
       if (rows) {
         for (const row of rows.split('\n')) {
           try {
@@ -1745,10 +1746,10 @@ function getCostAnalytics(sessions) {
   const opencodeSessions = sessions.filter(s => s.tool === 'opencode');
   if (opencodeSessions.length > 0 && fs.existsSync(OPENCODE_DB)) {
     try {
-      const batchRows = execSync(
-        `sqlite3 "${OPENCODE_DB}" "SELECT session_id, data FROM message WHERE json_extract(data, '$.role') = 'assistant' ORDER BY time_created"`,
-        { encoding: 'utf8', timeout: 30000 }
-      ).trim();
+      const batchRows = execFileSync('sqlite3', [
+        OPENCODE_DB,
+        `SELECT session_id, data FROM message WHERE json_extract(data, '$.role') = 'assistant' ORDER BY time_created`
+      ], { encoding: 'utf8', timeout: 30000, windowsHide: true }).trim();
       if (batchRows) {
         for (const row of batchRows.split('\n')) {
           const sepIdx = row.indexOf('|');
