@@ -125,8 +125,20 @@ function parseClaudeSessionFile(sessionFile) {
 
 function parseCodexSessionIndex(codexDir) {
   const titles = {};
+  const titleMeta = {};
   const indexFile = path.join(codexDir, 'session_index.jsonl');
   if (!fs.existsSync(indexFile)) return titles;
+
+  const parseUpdatedAt = (value) => {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (!trimmed) return NaN;
+      if (/^\d+$/.test(trimmed)) return Number(trimmed);
+      return Date.parse(trimmed);
+    }
+    return NaN;
+  };
 
   for (const line of readLines(indexFile)) {
     try {
@@ -134,7 +146,26 @@ function parseCodexSessionIndex(codexDir) {
       const sid = entry.id || entry.session_id || entry.sessionId;
       if (!sid || typeof entry.thread_name !== 'string') continue;
       const title = entry.thread_name.trim();
-      if (title) titles[sid] = title.slice(0, 200);
+      if (!title) continue;
+
+      const updatedAt = parseUpdatedAt(entry.updated_at);
+      const hasUpdatedAt = Number.isFinite(updatedAt);
+      const existing = titleMeta[sid];
+
+      if (!existing) {
+        titles[sid] = title.slice(0, 200);
+        titleMeta[sid] = { updatedAt, hasUpdatedAt };
+        continue;
+      }
+
+      if (
+        (hasUpdatedAt && !existing.hasUpdatedAt) ||
+        (hasUpdatedAt && existing.hasUpdatedAt && updatedAt >= existing.updatedAt) ||
+        (!hasUpdatedAt && !existing.hasUpdatedAt)
+      ) {
+        titles[sid] = title.slice(0, 200);
+        titleMeta[sid] = { updatedAt, hasUpdatedAt };
+      }
     } catch {}
   }
 
