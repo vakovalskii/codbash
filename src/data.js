@@ -2260,30 +2260,47 @@ function getDailyStats(sessions) {
 
     // For sessions with detail files — read actual message timestamps
     const found = s.has_detail ? findSessionFile(s.id, s.project) : null;
-    if (found && found.format === 'claude' && fs.existsSync(found.file)) {
+    if (found && found.format !== 'opencode' && found.format !== 'kiro' && fs.existsSync(found.file)) {
       // Read timestamps from session file for accurate per-day breakdown
       const msgsByDay = {};
-      const tsByDay = {}; // track first/last ts per day for hours
+      const tsByDay = {};
       try {
         const lines = readLines(found.file);
         for (const line of lines) {
           try {
             const entry = JSON.parse(line);
-            if (entry.type !== 'user' && entry.type !== 'assistant') continue;
+            // Detect user message across formats
+            let isUser = false;
+            let hasText = false;
             let ts = 0;
-            if (entry.timestamp) {
-              ts = typeof entry.timestamp === 'number' ? entry.timestamp : new Date(entry.timestamp).getTime();
-            }
-            if (!ts || ts < 1000000000000) continue;
-            const day = fmtLocalDay(ts);
-            // Count only user messages with actual text content (skip empty tool-permission entries)
-            if (entry.type === 'user') {
-              let hasText = false;
+
+            if (found.format === 'claude') {
+              if (entry.type !== 'user') continue;
+              isUser = true;
+              if (entry.timestamp) ts = typeof entry.timestamp === 'number' ? entry.timestamp : new Date(entry.timestamp).getTime();
               const c = entry.message && entry.message.content;
               if (typeof c === 'string' && c.trim()) hasText = true;
               else if (Array.isArray(c)) { for (const p of c) { if (p.type === 'text' && p.text && p.text.trim()) { hasText = true; break; } } }
-              if (hasText) msgsByDay[day] = (msgsByDay[day] || 0) + 1;
+            } else if (found.format === 'cursor') {
+              if (entry.role !== 'user') continue;
+              isUser = true;
+              ts = s.first_ts; // Cursor has no per-message timestamps, use session time
+              const c = (entry.message || {}).content;
+              if (Array.isArray(c)) { for (const p of c) { if (p.type === 'text' && p.text && p.text.replace(/<\/?user_query>/g,'').trim()) { hasText = true; break; } } }
+              else if (typeof c === 'string' && c.trim()) hasText = true;
+            } else if (found.format === 'codex') {
+              if (entry.type === 'response_item' && entry.payload && entry.payload.role === 'user') {
+                isUser = true;
+                ts = s.first_ts;
+                const c = entry.payload.content;
+                if (Array.isArray(c)) { for (const p of c) { if ((p.text || '').trim()) { hasText = true; break; } } }
+              } else continue;
             }
+
+            if (!isUser || !hasText) continue;
+            if (!ts || ts < 1000000000000) ts = s.first_ts;
+            const day = (found.format === 'claude' && ts) ? fmtLocalDay(ts) : (s.date || fmtLocalDay(s.last_ts));
+            msgsByDay[day] = (msgsByDay[day] || 0) + 1;
             if (!tsByDay[day]) tsByDay[day] = { first: ts, last: ts };
             if (ts < tsByDay[day].first) tsByDay[day].first = ts;
             if (ts > tsByDay[day].last) tsByDay[day].last = ts;
@@ -2311,7 +2328,8 @@ function getDailyStats(sessions) {
     const day = s.date || fmtLocalDay(s.last_ts);
     const d = ensureDay(day);
     d.sessions++;
-    d.messages += (s.detail_messages || s.messages || 0);
+    // Estimate user-only prompts: roughly half of total messages
+    d.messages += Math.ceil((s.detail_messages || s.messages || 0) / 2);
     d.hours += Math.min((s.last_ts - s.first_ts) / 3600000, 16);
     d.cost += sessionCost;
     d.agents[tool] = (d.agents[tool] || 0) + 1;
