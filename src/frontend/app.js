@@ -2654,36 +2654,83 @@ async function syncLeaderboard() {
   if (btn) btn.textContent = 'Sync to Global Leaderboard';
 }
 
+var _lbRemoteData = null;
+var _lbCurrentTab = 'today';
+
+function switchLbTab(tab, btn) {
+  _lbCurrentTab = tab;
+  document.querySelectorAll('.lb-tab').forEach(function(t) { t.classList.remove('active'); });
+  if (btn) btn.classList.add('active');
+  renderGlobalBoard();
+}
+
+function renderGlobalBoard() {
+  var board = document.getElementById('globalBoard');
+  if (!board || !_lbRemoteData) return;
+  var data = _lbRemoteData;
+  if (!data.users || data.users.length === 0) {
+    board.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted)">No one here yet. Sync your stats to be first!</div>';
+    return;
+  }
+
+  // Sort by tab
+  var sorted = data.users.slice();
+  if (_lbCurrentTab === 'today') {
+    sorted.sort(function(a,b) { return (b.stats?.today?.messages||0) - (a.stats?.today?.messages||0); });
+  } else if (_lbCurrentTab === 'week') {
+    sorted.sort(function(a,b) { return (b.stats?.week?.messages||0) - (a.stats?.week?.messages||0); });
+  } else {
+    sorted.sort(function(a,b) { return (b.stats?.totals?.messages||0) - (a.stats?.totals?.messages||0); });
+  }
+
+  var html = '';
+  sorted.forEach(function(u, i) {
+    var t = u.stats?.today || {};
+    var w = u.stats?.week || {};
+    var tot = u.stats?.totals || {};
+
+    // Pick values based on tab
+    var msgs, hours, cost, label;
+    if (_lbCurrentTab === 'today') { msgs = t.messages||0; hours = t.hours||0; cost = t.cost||0; label = 'today'; }
+    else if (_lbCurrentTab === 'week') { msgs = w.messages||0; hours = w.hours||0; cost = w.cost||0; label = 'this week'; }
+    else { msgs = tot.messages||0; hours = tot.hours||0; cost = tot.cost||0; label = 'all time'; }
+
+    html += '<div class="lb-global-row">';
+    html += '<span class="lb-rank' + (i < 3 ? ' lb-rank-' + (i+1) : '') + '">#' + (i+1) + '</span>';
+    html += '<img class="lb-global-avatar" src="' + escHtml(u.avatar || '') + '" alt="">';
+    html += '<div class="lb-global-info">';
+    html += '<div class="lb-global-name"><a href="https://github.com/' + escHtml(u.username) + '" target="_blank">' + escHtml(u.name || u.username) + '</a>';
+    if (u.verified) html += ' <span class="lb-verified">&#10003;</span>';
+    html += '</div>';
+    html += '<div class="lb-global-handle"><a href="https://github.com/' + escHtml(u.username) + '" target="_blank" style="color:var(--text-muted);text-decoration:none">@' + escHtml(u.username) + '</a>';
+    if (u.deviceCount > 1) html += ' <span class="lb-devices">' + u.deviceCount + ' devices</span>';
+    html += '</div>';
+    // Top agents
+    var agents = Object.entries(u.stats?.agents || {}).sort(function(a,b){return b[1]-a[1]}).slice(0,3);
+    if (agents.length) {
+      html += '<div class="lb-global-agents">';
+      agents.forEach(function(a) { html += '<span class="lb-agent-mini tool-' + a[0] + '">' + a[0] + '</span>'; });
+      html += '</div>';
+    }
+    html += '</div>';
+    html += '<div class="lb-global-stats">';
+    html += '<span title="Prompts ' + label + '"><strong>' + msgs.toLocaleString() + '</strong> prompts</span>';
+    html += '<span title="Agent hours ' + label + '"><strong>' + hours.toFixed(1) + 'h</strong> coded</span>';
+    html += '<span title="API cost ' + label + '"><strong>$' + cost.toFixed(0) + '</strong> spent</span>';
+    if (u.stats?.streak > 1) html += '<span class="lb-streak-badge">' + u.stats.streak + 'd streak</span>';
+    html += '</div></div>';
+  });
+  board.innerHTML = html;
+}
+
 async function loadGlobalLeaderboard() {
   var board = document.getElementById('globalBoard');
   if (!board) return;
   try {
     var resp = await fetch('/api/leaderboard/remote');
-    var data = await resp.json();
-    if (!data.users || data.users.length === 0) {
-      board.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted)">No one here yet. Sync your stats to be first!</div>';
-      return;
-    }
-    var html = '';
-    data.users.forEach(function(u, i) {
-      var t = u.stats.today || {};
-      var tot = u.stats.totals || {};
-      html += '<div class="lb-global-row">';
-      html += '<span class="lb-rank' + (i < 3 ? ' lb-rank-' + (i+1) : '') + '">#' + (i+1) + '</span>';
-      html += '<img class="lb-global-avatar" src="' + escHtml(u.avatar || '') + '" alt="">';
-      html += '<div class="lb-global-info">';
-      html += '<div class="lb-global-name">' + escHtml(u.name || u.username) + '</div>';
-      html += '<div class="lb-global-handle">@' + escHtml(u.username) + '</div>';
-      html += '</div>';
-      html += '<div class="lb-global-stats">';
-      html += '<span><strong>' + (t.messages || 0) + '</strong> today</span>';
-      html += '<span><strong>' + (tot.messages || 0).toLocaleString() + '</strong> total</span>';
-      html += '<span><strong>' + (tot.hours || 0) + 'h</strong></span>';
-      if (u.stats.streak > 1) html += '<span class="lb-streak-badge">' + u.stats.streak + 'd streak</span>';
-      html += '</div></div>';
-    });
-    board.innerHTML = html;
-  } catch { board.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted)">Could not load global leaderboard</div>'; }
+    _lbRemoteData = await resp.json();
+    renderGlobalBoard();
+  } catch { if (board) board.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted)">Could not load global leaderboard</div>'; }
 }
 
 async function githubConnect() {
@@ -2829,13 +2876,19 @@ async function renderLeaderboard(container) {
 
     // Sync button + Global leaderboard
     if (gh.authenticated) {
-      html += '<div style="text-align:center;margin:20px 0">';
-      html += '<button class="lb-github-btn" onclick="syncLeaderboard()" id="syncBtn">Sync to Global Leaderboard</button>';
+      html += '<div class="lb-sync-bar">';
+      html += '<button class="lb-sync-btn" onclick="syncLeaderboard()" id="syncBtn">Sync Stats</button>';
       html += '</div>';
     }
 
     // Global leaderboard
+    // Global leaderboard with tabs
     html += '<div class="lb-section-title">Global Leaderboard</div>';
+    html += '<div class="lb-tabs">';
+    html += '<button class="lb-tab active" onclick="switchLbTab(\'today\',this)">Today</button>';
+    html += '<button class="lb-tab" onclick="switchLbTab(\'week\',this)">Week</button>';
+    html += '<button class="lb-tab" onclick="switchLbTab(\'alltime\',this)">All Time</button>';
+    html += '</div>';
     html += '<div id="globalBoard"><div class="loading">Loading...</div></div>';
 
     html += '<div class="lb-footer">Active days: ' + data.activeDays + ' | <a href="https://codedash-leaderboard.valeriy.workers.dev" target="_blank" style="color:var(--accent-blue)">View public leaderboard</a></div>';
