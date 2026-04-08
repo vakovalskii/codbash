@@ -3192,7 +3192,8 @@ async function renderCloud(container) {
   html += '<div style="margin-left:auto;display:flex;gap:8px;align-items:center;">';
 
   if (!cloudConfigured) {
-    html += '<span class="dim">Run <code>codedash cloud setup</code> first</span>';
+    html += '<input type="password" id="cloudNewPassphrase" placeholder="Create passphrase" style="padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);width:180px;" onkeydown="if(event.key===\'Enter\')setupCloud()">';
+    html += '<button class="btn btn-sm" onclick="setupCloud()">Setup Encryption</button>';
   } else if (!cloudUnlocked) {
     html += '<input type="password" id="cloudPassphrase" placeholder="Enter passphrase" style="padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);width:180px;" onkeydown="if(event.key===\'Enter\')unlockCloud()">';
     html += '<button class="btn btn-sm" onclick="unlockCloud()">Unlock</button>';
@@ -3254,6 +3255,30 @@ async function renderCloud(container) {
   // Auto-load data if not loaded yet
   if (!cloudSessions && !cloudLoading) {
     loadCloudData();
+  }
+}
+
+async function setupCloud() {
+  var input = document.getElementById('cloudNewPassphrase');
+  if (!input || !input.value) return;
+  if (input.value.length < 4) { showToast('Passphrase too short (min 4)', 'error'); return; }
+  try {
+    var resp = await fetch('/api/cloud/setup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ passphrase: input.value }),
+    });
+    var data = await resp.json();
+    if (data.ok) {
+      cloudConfigured = true;
+      cloudUnlocked = true;
+      showToast('Cloud encryption configured!');
+      applyFilters();
+    } else {
+      showToast(data.error || 'Setup failed', 'error');
+    }
+  } catch (e) {
+    showToast('Error: ' + e.message, 'error');
   }
 }
 

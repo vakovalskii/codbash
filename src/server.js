@@ -487,7 +487,7 @@ function autoSync() {
 }
 
 // ── Cloud Sync Proxy ────────────────────────
-const { serializeSession, encryptSession, decryptSession, deserializeSession, loadCloudKey, cloudRequest: cloudApiRequest, deriveKey, encrypt, decrypt, CLOUD_API } = require('./cloud');
+const { serializeSession, encryptSession, decryptSession, deserializeSession, loadCloudKey, saveCloudKey, cloudRequest: cloudApiRequest, deriveKey, encrypt, decrypt, CLOUD_API } = require('./cloud');
 const crypto = require('crypto');
 
 // Cached encryption key (in-memory, survives until server restart)
@@ -520,6 +520,49 @@ function unlockCloudKey(passphrase) {
 async function handleCloudProxy(req, res, pathname) {
   const profile = loadGitHubProfile();
   if (!profile || !profile.authenticated) return json(res, { error: 'Connect GitHub first' }, 401);
+
+  // POST /api/cloud/setup — create passphrase (first time) or re-enter on new device
+  if (req.method === 'POST' && pathname === '/api/cloud/setup') {
+    return new Promise((resolve) => {
+      readBody(req, async (body) => {
+        try {
+          const { passphrase } = JSON.parse(body);
+          if (!passphrase || passphrase.length < 4) { json(res, { error: 'Passphrase too short (min 4 chars)' }, 400); return resolve(); }
+
+          const existing = loadCloudKey();
+          if (existing && existing.salt) {
+            // Already configured — just unlock
+            const result = unlockCloudKey(passphrase);
+            json(res, result.error ? result : { ok: true }, result.error ? 400 : 200);
+            return resolve();
+          }
+
+          // Check if server has a salt from another device
+          const verifyRes = await cloudApiRequest('POST', '/api/auth/verify', profile.token);
+          const serverSalt = verifyRes.status === 200 ? verifyRes.data?.user?.encryption_salt : null;
+
+          let salt;
+          if (serverSalt) {
+            // Another device already set up — use same salt
+            salt = Buffer.from(serverSalt, 'hex');
+          } else {
+            // First time — generate new salt
+            salt = crypto.randomBytes(16);
+            // Sync salt to cloud server
+            await cloudApiRequest('PUT', '/api/auth/salt', profile.token, JSON.stringify({ salt: salt.toString('hex') }));
+          }
+
+          const key = deriveKey(passphrase, salt);
+          const verifier = encrypt(Buffer.from('codedash-verify'), key);
+          saveCloudKey({ salt: salt.toString('hex'), verifier: verifier.toString('hex') });
+
+          _cachedCloudKey = key;
+          json(res, { ok: true, isNew: !serverSalt });
+          resolve();
+        } catch (e) { json(res, { error: e.message }, 500); resolve(); }
+      });
+    });
+  }
 
   // POST /api/cloud/unlock — cache encryption key from passphrase
   if (req.method === 'POST' && pathname === '/api/cloud/unlock') {

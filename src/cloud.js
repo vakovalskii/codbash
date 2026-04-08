@@ -581,6 +581,7 @@ module.exports = {
   decryptSession,
   deserializeSession,
   loadCloudKey,
+  saveCloudKey,
   loadProfile,
   cloudRequest,
   getCloudAPI,
