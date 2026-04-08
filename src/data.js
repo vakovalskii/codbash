@@ -2214,10 +2214,102 @@ function getActiveSessions() {
   return active;
 }
 
+// ── Leaderboard stats ─────────────────────────────────────
+
+const ANON_NAMES_ADJ = ['brave','swift','calm','bold','keen','wise','cool','fast','wild','epic','rare','pure','warm','dark','deep','fair','free','glad','gold','iron'];
+const ANON_NAMES_NOUN = ['fox','owl','cat','wolf','bear','hawk','lion','deer','hare','crow','lynx','moth','seal','wren','dove','frog','newt','crab','swan','kite'];
+
+function getOrCreateAnonId() {
+  const configDir = path.join(os.homedir(), '.codedash');
+  const idFile = path.join(configDir, 'anon-id.json');
+  try {
+    const data = JSON.parse(fs.readFileSync(idFile, 'utf8'));
+    if (data.id && data.name) return data;
+  } catch {}
+  // Generate new
+  const id = require('crypto').randomUUID();
+  const adj = ANON_NAMES_ADJ[Math.floor(Math.random() * ANON_NAMES_ADJ.length)];
+  const noun = ANON_NAMES_NOUN[Math.floor(Math.random() * ANON_NAMES_NOUN.length)];
+  const num = Math.floor(Math.random() * 100);
+  const name = adj + '-' + noun + '-' + num;
+  const data = { id, name, createdAt: new Date().toISOString() };
+  if (!fs.existsSync(configDir)) fs.mkdirSync(configDir, { recursive: true });
+  fs.writeFileSync(idFile, JSON.stringify(data, null, 2));
+  return data;
+}
+
+function getDailyStats(sessions) {
+  const byDay = {};
+  for (const s of sessions) {
+    if (!s.date) continue;
+    if (!byDay[s.date]) byDay[s.date] = { date: s.date, sessions: 0, messages: 0, hours: 0, cost: 0, agents: {} };
+    const d = byDay[s.date];
+    d.sessions++;
+    d.messages += (s.detail_messages || s.messages || 0);
+    // Hours = time between first and last message
+    const durationMs = (s.last_ts || 0) - (s.first_ts || 0);
+    if (durationMs > 0) d.hours += durationMs / 3600000;
+    // Cost
+    const costData = computeSessionCost(s.id, s.project);
+    if (costData && costData.cost) d.cost += costData.cost;
+    // Agent breakdown
+    const tool = s.tool || 'unknown';
+    if (!d.agents[tool]) d.agents[tool] = 0;
+    d.agents[tool]++;
+  }
+  return Object.values(byDay).sort((a, b) => b.date.localeCompare(a.date));
+}
+
+function getLeaderboardStats() {
+  const sessions = loadSessions();
+  const anon = getOrCreateAnonId();
+  const daily = getDailyStats(sessions);
+
+  // Totals
+  let totalMessages = 0, totalHours = 0, totalCost = 0, totalSessions = sessions.length;
+  const agentTotals = {};
+  for (const d of daily) {
+    totalMessages += d.messages;
+    totalHours += d.hours;
+    totalCost += d.cost;
+    for (const [agent, count] of Object.entries(d.agents)) {
+      agentTotals[agent] = (agentTotals[agent] || 0) + count;
+    }
+  }
+
+  // Today
+  const today = new Date().toISOString().slice(0, 10);
+  const todayStats = daily.find(d => d.date === today) || { sessions: 0, messages: 0, hours: 0, cost: 0, agents: {} };
+
+  // Streak (consecutive days with sessions)
+  let streak = 0;
+  const dt = new Date();
+  for (let i = 0; i < 365; i++) {
+    const day = dt.toISOString().slice(0, 10);
+    if (daily.find(d => d.date === day)) {
+      streak++;
+      dt.setDate(dt.getDate() - 1);
+    } else {
+      break;
+    }
+  }
+
+  return {
+    anon,
+    today: todayStats,
+    totals: { sessions: totalSessions, messages: totalMessages, hours: Math.round(totalHours * 10) / 10, cost: Math.round(totalCost * 100) / 100 },
+    agents: agentTotals,
+    streak,
+    daily: daily.slice(0, 30), // last 30 days
+    activeDays: daily.length,
+  };
+}
+
 module.exports = {
   loadSessions,
   loadSessionDetail,
   getProjectGitInfo,
+  getLeaderboardStats,
   deleteSession,
   getGitCommits,
   exportSessionMarkdown,

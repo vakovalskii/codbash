@@ -3,7 +3,7 @@ const http = require('http');
 const https = require('https');
 const { URL } = require('url');
 const { exec } = require('child_process');
-const { loadSessions, loadSessionDetail, deleteSession, getGitCommits, exportSessionMarkdown, getSessionPreview, searchFullText, getActiveSessions, getSessionReplay, getCostAnalytics, computeSessionCost, getProjectGitInfo } = require('./data');
+const { loadSessions, loadSessionDetail, deleteSession, getGitCommits, exportSessionMarkdown, getSessionPreview, searchFullText, getActiveSessions, getSessionReplay, getCostAnalytics, computeSessionCost, getProjectGitInfo, getLeaderboardStats } = require('./data');
 const { detectTerminals, openInTerminal, focusTerminalByPid } = require('./terminals');
 const { convertSession } = require('./convert');
 const { generateHandoff } = require('./handoff');
@@ -354,6 +354,12 @@ function startServer(host, port, openBrowser = true) {
     }
 
     // ── Changelog ─────────────────────────────
+    // ── Leaderboard stats ────────────────────
+    else if (req.method === 'GET' && pathname === '/api/leaderboard') {
+      const stats = getLeaderboardStats();
+      json(res, stats);
+    }
+
     else if (req.method === 'GET' && pathname === '/api/changelog') {
       json(res, CHANGELOG);
     }

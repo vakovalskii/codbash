@@ -1124,6 +1124,11 @@ function render() {
     return;
   }
 
+  if (currentView === 'leaderboard') {
+    renderLeaderboard(content);
+    return;
+  }
+
   if (currentView === 'settings') {
     renderSettings(content);
     return;
@@ -2631,6 +2636,78 @@ function renderSettings(container) {
 
   // Load LLM config into the inputs
   loadLLMSettings();
+}
+
+async function renderLeaderboard(container) {
+  container.innerHTML = '<div class="loading">Loading stats...</div>';
+  try {
+    var resp = await fetch('/api/leaderboard');
+    var data = await resp.json();
+
+    var html = '<div class="leaderboard-container">';
+
+    // Header card — your identity
+    html += '<div class="lb-hero">';
+    html += '<div class="lb-avatar">' + escHtml(data.anon.name.split('-').map(function(w){return w[0].toUpperCase()}).join('')) + '</div>';
+    html += '<div class="lb-hero-info">';
+    html += '<div class="lb-name">' + escHtml(data.anon.name) + '</div>';
+    html += '<div class="lb-streak">' + data.streak + ' day streak</div>';
+    html += '</div></div>';
+
+    // Today stats
+    html += '<div class="lb-section-title">Today</div>';
+    html += '<div class="lb-stats-grid">';
+    html += '<div class="lb-stat"><div class="lb-stat-value">' + data.today.messages + '</div><div class="lb-stat-label">messages</div></div>';
+    html += '<div class="lb-stat"><div class="lb-stat-value">' + data.today.hours.toFixed(1) + 'h</div><div class="lb-stat-label">agent time</div></div>';
+    html += '<div class="lb-stat"><div class="lb-stat-value">' + data.today.sessions + '</div><div class="lb-stat-label">sessions</div></div>';
+    html += '<div class="lb-stat"><div class="lb-stat-value">$' + data.today.cost.toFixed(2) + '</div><div class="lb-stat-label">cost</div></div>';
+    html += '</div>';
+
+    // All time
+    html += '<div class="lb-section-title">All Time</div>';
+    html += '<div class="lb-stats-grid">';
+    html += '<div class="lb-stat"><div class="lb-stat-value">' + data.totals.messages.toLocaleString() + '</div><div class="lb-stat-label">messages</div></div>';
+    html += '<div class="lb-stat"><div class="lb-stat-value">' + data.totals.hours.toFixed(0) + 'h</div><div class="lb-stat-label">agent time</div></div>';
+    html += '<div class="lb-stat"><div class="lb-stat-value">' + data.totals.sessions + '</div><div class="lb-stat-label">sessions</div></div>';
+    html += '<div class="lb-stat"><div class="lb-stat-value">$' + data.totals.cost.toFixed(2) + '</div><div class="lb-stat-label">cost</div></div>';
+    html += '</div>';
+
+    // Agents breakdown
+    html += '<div class="lb-section-title">Agents</div>';
+    html += '<div class="lb-agents">';
+    var agentEntries = Object.entries(data.agents).sort(function(a,b){return b[1]-a[1]});
+    agentEntries.forEach(function(e) {
+      var pct = data.totals.sessions > 0 ? Math.round(e[1] / data.totals.sessions * 100) : 0;
+      html += '<div class="lb-agent-row">';
+      html += '<span class="tool-badge tool-' + e[0] + '">' + escHtml(e[0]) + '</span>';
+      html += '<div class="lb-agent-bar"><div class="lb-agent-bar-fill" style="width:' + pct + '%"></div></div>';
+      html += '<span class="lb-agent-count">' + e[1] + ' (' + pct + '%)</span>';
+      html += '</div>';
+    });
+    html += '</div>';
+
+    // Daily chart (last 14 days)
+    html += '<div class="lb-section-title">Last 14 Days</div>';
+    html += '<div class="lb-daily-chart">';
+    var last14 = data.daily.slice(0, 14).reverse();
+    var maxMsg = Math.max.apply(null, last14.map(function(d){return d.messages})) || 1;
+    last14.forEach(function(d) {
+      var h = Math.max(4, Math.round(d.messages / maxMsg * 120));
+      var dayLabel = d.date.slice(5); // MM-DD
+      html += '<div class="lb-bar-col">';
+      html += '<div class="lb-bar" style="height:' + h + 'px" title="' + d.date + ': ' + d.messages + ' msgs, ' + d.hours.toFixed(1) + 'h, $' + d.cost.toFixed(2) + '"></div>';
+      html += '<div class="lb-bar-label">' + dayLabel + '</div>';
+      html += '</div>';
+    });
+    html += '</div>';
+
+    html += '<div class="lb-footer">Active days: ' + data.activeDays + ' | ID: ' + escHtml(data.anon.name) + '</div>';
+    html += '</div>';
+
+    container.innerHTML = html;
+  } catch (e) {
+    container.innerHTML = '<div class="empty-state">Failed to load stats: ' + escHtml(e.message) + '</div>';
+  }
 }
 
 async function renderChangelog(container) {
