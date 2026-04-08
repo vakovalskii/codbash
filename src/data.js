@@ -45,6 +45,14 @@ const KIRO_DB = path.join(ALL_HOMES[0], 'Library', 'Application Support', 'kiro-
 const CURSOR_DIR = path.join(ALL_HOMES[0], '.cursor');
 const CURSOR_PROJECTS = path.join(CURSOR_DIR, 'projects');
 const CURSOR_CHATS = path.join(CURSOR_DIR, 'chats');
+// Cursor global DB path varies by OS: macOS ~/Library/Application Support, Linux ~/.config, Windows %APPDATA%
+const CURSOR_APP_DATA = process.platform === 'darwin'
+  ? path.join(ALL_HOMES[0], 'Library', 'Application Support', 'Cursor')
+  : process.platform === 'win32'
+    ? path.join(ALL_HOMES[0], 'AppData', 'Roaming', 'Cursor')
+    : path.join(ALL_HOMES[0], '.config', 'Cursor');
+const CURSOR_GLOBAL_DB = path.join(CURSOR_APP_DATA, 'User', 'globalStorage', 'state.vscdb');
+const CURSOR_WORKSPACE_STORAGE = path.join(CURSOR_APP_DATA, 'User', 'workspaceStorage');
 const HISTORY_FILE = path.join(CLAUDE_DIR, 'history.jsonl');
 const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
 
@@ -562,8 +570,64 @@ function decodeCursorProjectFolderKey(proj) {
   return cwd;
 }
 
+// Build composerId -> project path mapping from Cursor workspace storage (cached 5 min)
+let _cursorWsMapCache = null;
+let _cursorWsMapCacheTs = 0;
+const CURSOR_WS_MAP_TTL = 300000; // 5 minutes
+
+function buildCursorWorkspaceMap() {
+  const now = Date.now();
+  if (_cursorWsMapCache && (now - _cursorWsMapCacheTs) < CURSOR_WS_MAP_TTL) {
+    return _cursorWsMapCache;
+  }
+
+  const map = {}; // composerId -> projectPath
+  if (!fs.existsSync(CURSOR_WORKSPACE_STORAGE)) return map;
+
+  try {
+    // Step 1: Read all workspace.json files (fast fs reads, ~10ms)
+    const hashToFolder = {};
+    for (const hash of fs.readdirSync(CURSOR_WORKSPACE_STORAGE)) {
+      const wsJson = path.join(CURSOR_WORKSPACE_STORAGE, hash, 'workspace.json');
+      try {
+        const wsData = JSON.parse(fs.readFileSync(wsJson, 'utf8'));
+        let folder = wsData.folder || '';
+        if (folder.startsWith('file://')) {
+          folder = decodeURIComponent(folder.replace('file://', ''));
+        } else if (folder.startsWith('vscode-remote://')) {
+          const m = folder.match(/vscode-remote:\/\/[^/]+(\/.*)/);
+          folder = m ? decodeURIComponent(m[1]) : '';
+        }
+        if (folder) hashToFolder[hash] = folder;
+      } catch {}
+    }
+
+    // Step 2: Query workspace state.vscdb files for composer IDs
+    for (const hash of Object.keys(hashToFolder)) {
+      const wsDb = path.join(CURSOR_WORKSPACE_STORAGE, hash, 'state.vscdb');
+      if (!fs.existsSync(wsDb)) continue;
+      try {
+        const raw = execFileSync('sqlite3', [
+          wsDb,
+          "SELECT value FROM ItemTable WHERE key = 'composer.composerData'"
+        ], { encoding: 'utf8', timeout: 2000, windowsHide: true }).trim();
+        if (!raw) continue;
+        const data = JSON.parse(raw);
+        for (const c of (data.allComposers || [])) {
+          if (c.composerId) map[c.composerId] = hashToFolder[hash];
+        }
+      } catch {}
+    }
+  } catch {}
+
+  _cursorWsMapCache = map;
+  _cursorWsMapCacheTs = now;
+  return map;
+}
+
 function scanCursorSessions() {
   const sessions = [];
+  const seenIds = new Set();
 
   // Scan ~/.cursor/projects/*/agent-transcripts/*/*.jsonl
   if (fs.existsSync(CURSOR_PROJECTS)) {
@@ -598,6 +662,7 @@ function scanCursorSessions() {
             msgCount = readLines(sessFile).length;
           } catch {}
 
+          seenIds.add(sessDir);
           sessions.push({
             id: sessDir,
             tool: 'cursor',
@@ -647,6 +712,7 @@ function scanCursorSessions() {
             msgCount = readLines(filePath).length;
           } catch {}
 
+          seenIds.add(chatDir);
           sessions.push({
             id: chatDir,
             tool: 'cursor',
@@ -662,6 +728,63 @@ function scanCursorSessions() {
             _file: filePath,
           });
           break; // one file per chat dir
+        }
+      }
+    } catch {}
+  }
+
+  // Scan Cursor global state.vscdb (composerData + bubbleId entries)
+  if (fs.existsSync(CURSOR_GLOBAL_DB)) {
+    try {
+      // Build workspace -> project mapping for project association
+      const wsMap = buildCursorWorkspaceMap();
+
+      // Use json_extract + json_array_length for lightweight query (~215KB vs ~48MB full values)
+      const rows = execFileSync('sqlite3', [
+        '-separator', '\t',
+        CURSOR_GLOBAL_DB,
+        "SELECT json_extract(value, '$.composerId'), json_extract(value, '$.name'), json_extract(value, '$.createdAt'), json_extract(value, '$.lastUpdatedAt'), json_array_length(json_extract(value, '$.fullConversationHeadersOnly')) FROM cursorDiskKV WHERE key LIKE 'composerData:%'"
+      ], { encoding: 'utf8', timeout: 15000, maxBuffer: 10 * 1024 * 1024, windowsHide: true }).trim();
+
+      if (rows) {
+        for (const row of rows.split('\n')) {
+          const cols = row.split('\t');
+          if (cols.length < 5) continue;
+
+          try {
+            const composerId = cols[0];
+            if (!composerId || seenIds.has(composerId)) continue;
+
+            const name = cols[1] || '';
+            const createdAt = parseInt(cols[2]) || 0;
+            const lastUpdatedAt = parseInt(cols[3]) || createdAt;
+            const msgCount = parseInt(cols[4]) || 0;
+
+            // Skip empty sessions (no messages at all)
+            if (msgCount === 0) continue;
+
+            // Get first user message text from the session name (Cursor auto-names sessions)
+            const firstMsg = name.slice(0, 200);
+
+            // Resolve project path from workspace mapping
+            const projectPath = wsMap[composerId] || '';
+
+            seenIds.add(composerId);
+            sessions.push({
+              id: composerId,
+              tool: 'cursor',
+              project: projectPath,
+              project_short: projectPath ? projectPath.replace(os.homedir(), '~') : '',
+              first_ts: createdAt,
+              last_ts: lastUpdatedAt,
+              messages: msgCount,
+              first_message: firstMsg,
+              has_detail: true,
+              file_size: 0,
+              detail_messages: msgCount,
+              _cursor_vscdb: true,
+            });
+          } catch {}
         }
       }
     } catch {}
@@ -695,6 +818,11 @@ function loadCursorDetail(sessionId) {
     }
   }
 
+  // Try loading from global vscdb (Cursor stores most sessions here)
+  if (!filePath && fs.existsSync(CURSOR_GLOBAL_DB)) {
+    return loadCursorVscdbDetail(sessionId);
+  }
+
   if (!filePath) return { messages: [] };
 
   const messages = [];
@@ -724,6 +852,70 @@ function loadCursorDetail(sessionId) {
       messages.push({ role: role, content: text.slice(0, 2000), uuid: '' });
     } catch {}
   }
+
+  return { messages: messages.slice(0, 200) };
+}
+
+// Load Cursor session detail from global state.vscdb (composerData + bubbleId entries)
+function loadCursorVscdbDetail(sessionId) {
+  const messages = [];
+
+  try {
+    // Get bubble order from composerData
+    const cleanId = sessionId.replace(/'/g, "''");
+    const composerRaw = execFileSync('sqlite3', [
+      CURSOR_GLOBAL_DB,
+      "SELECT value FROM cursorDiskKV WHERE key = 'composerData:" + cleanId + "'"
+    ], { encoding: 'utf8', timeout: 5000, windowsHide: true }).trim();
+
+    if (!composerRaw) return { messages: [] };
+
+    const composer = JSON.parse(composerRaw);
+    const bubbleHeaders = composer.fullConversationHeadersOnly || [];
+    if (bubbleHeaders.length === 0) return { messages: [] };
+
+    // Query all bubbles for this composer in one go
+    const bubbleRows = execFileSync('sqlite3', [
+      '-separator', '\t',
+      CURSOR_GLOBAL_DB,
+      "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'bubbleId:" + cleanId + ":%'"
+    ], { encoding: 'utf8', timeout: 10000, maxBuffer: 50 * 1024 * 1024, windowsHide: true }).trim();
+
+    if (!bubbleRows) return { messages: [] };
+
+    // Build bubbleId -> data map
+    const bubbleMap = {};
+    for (const row of bubbleRows.split('\n')) {
+      const tabIdx = row.indexOf('\t');
+      if (tabIdx < 0) continue;
+      const key = row.slice(0, tabIdx);
+      const value = row.slice(tabIdx + 1);
+      // key format: bubbleId:<composerId>:<bubbleId>
+      const parts = key.split(':');
+      const bubbleId = parts[2];
+      if (!bubbleId) continue;
+      try {
+        bubbleMap[bubbleId] = JSON.parse(value);
+      } catch {}
+    }
+
+    // Iterate in conversation order
+    for (const header of bubbleHeaders) {
+      const bubble = bubbleMap[header.bubbleId];
+      if (!bubble) continue;
+
+      // type 1 = user, type 2 = assistant
+      const bType = bubble.type;
+      if (bType !== 1 && bType !== 2) continue;
+
+      const role = bType === 1 ? 'user' : 'assistant';
+      let text = bubble.text || '';
+      text = text.replace(/<\/?user_query>/g, '').replace(/<\/?tool_call>/g, '').trim();
+      if (!text) continue;
+
+      messages.push({ role: role, content: text.slice(0, 2000), uuid: '' });
+    }
+  } catch {}
 
   return { messages: messages.slice(0, 200) };
 }
@@ -1385,6 +1577,24 @@ function getGitCommits(projectDir, fromTs, toTs) {
 
 function exportSessionMarkdown(sessionId, project) {
   const found = findSessionFile(sessionId, project);
+
+  // For non-Claude formats, use the detail loader for markdown export
+  if (found && found.format !== 'claude') {
+    const detail =
+      found.format === 'cursor' ? loadCursorDetail(sessionId) :
+      found.format === 'opencode' ? loadOpenCodeDetail(sessionId) :
+      found.format === 'kiro' ? loadKiroDetail(sessionId) :
+      null;
+    if (detail && detail.messages && detail.messages.length > 0) {
+      const parts = [`# Session ${sessionId}\n\n**Project:** ${project || '(none)'}\n`];
+      for (const msg of detail.messages) {
+        const header = msg.role === 'user' ? '## User' : '## Assistant';
+        parts.push(`\n${header}\n\n${msg.content}\n`);
+      }
+      return parts.join('');
+    }
+  }
+
   if (!found || found.format !== 'claude' || !fs.existsSync(found.file)) {
     return `# Session ${sessionId}\n\nSession file not found.\n`;
   }
@@ -1489,6 +1699,20 @@ function findSessionFile(sessionId, project) {
         }
       }
     }
+  }
+
+  // Try Cursor global vscdb
+  if (fs.existsSync(CURSOR_GLOBAL_DB)) {
+    try {
+      const cleanId = sessionId.replace(/'/g, "''");
+      const check = execFileSync('sqlite3', [
+        CURSOR_GLOBAL_DB,
+        "SELECT COUNT(*) FROM cursorDiskKV WHERE key = 'composerData:" + cleanId + "'"
+      ], { encoding: 'utf8', timeout: 3000, windowsHide: true }).trim();
+      if (parseInt(check) > 0) {
+        return { file: CURSOR_GLOBAL_DB, format: 'cursor', sessionId: sessionId };
+      }
+    } catch {}
   }
 
   // Try Kiro (SQLite)
