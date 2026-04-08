@@ -2809,8 +2809,9 @@ function getDailyStats(sessions) {
     const day = s.date || fmtLocalDay(s.last_ts);
     const d = ensureDay(day);
     d.sessions++;
-    // Estimate user-only prompts: roughly half of total messages
-    d.messages += Math.ceil((s.detail_messages || s.messages || 0) / 2);
+    // Estimate user-only prompts: cursor has ~7% user bubbles, others ~50%
+    const totalMsgEst = s.detail_messages || s.messages || 0;
+    d.messages += Math.ceil(totalMsgEst * (tool === 'cursor' ? 0.07 : 0.5));
     d.hours += Math.min((s.last_ts - s.first_ts) / 3600000, 16);
     d.cost += sessionCost;
     d.agents[tool] = (d.agents[tool] || 0) + 1;
