@@ -3180,32 +3180,33 @@ async function renderCloud(container) {
   if (!profile || !profile.authenticated) {
     html += '<div class="empty-state">';
     html += '<p>Connect GitHub to sync sessions to the cloud.</p>';
-    html += '<button class="btn" onclick="githubConnect()">Connect GitHub</button>';
+    html += '<button class="launch-btn btn-primary" onclick="githubConnect()">Connect GitHub</button>';
     html += '</div>';
     container.innerHTML = html;
     return;
   }
 
-  html += '<div style="margin-bottom:16px;padding:12px;background:var(--card-bg);border:1px solid var(--border);border-radius:8px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">';
-  html += '<img src="' + profile.avatar + '" style="width:32px;height:32px;border-radius:50%;">';
-  html += '<div><strong>' + (profile.name || profile.username) + '</strong><br><span class="dim">@' + profile.username + '</span></div>';
+  // User header
+  html += '<div style="margin-bottom:16px;padding:14px 16px;background:var(--bg-card);border:1px solid var(--border);border-radius:10px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">';
+  html += '<img src="' + profile.avatar + '" style="width:36px;height:36px;border-radius:50%;border:2px solid var(--border);">';
+  html += '<div><strong style="font-size:14px;">' + escHtml(profile.name || profile.username) + '</strong><br><span class="dim" style="font-size:12px;">@' + escHtml(profile.username) + '</span></div>';
   html += '<div style="margin-left:auto;display:flex;gap:8px;align-items:center;">';
 
   if (!cloudConfigured) {
-    html += '<input type="password" id="cloudNewPassphrase" placeholder="Create passphrase" style="padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);width:180px;" onkeydown="if(event.key===\'Enter\')setupCloud()">';
-    html += '<button class="btn btn-sm" onclick="setupCloud()">Setup Encryption</button>';
+    html += '<input type="text" id="cloudNewPassphrase" placeholder="Create passphrase" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-1p-ignore data-lpignore="true" style="padding:7px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg-card-hover);color:var(--text-primary);width:200px;font-size:13px;-webkit-text-security:disc;" onkeydown="if(event.key===\'Enter\')setupCloud()">';
+    html += '<button class="launch-btn btn-primary" onclick="setupCloud()">Setup</button>';
   } else if (!cloudUnlocked) {
-    html += '<input type="password" id="cloudPassphrase" placeholder="Enter passphrase" style="padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);width:180px;" onkeydown="if(event.key===\'Enter\')unlockCloud()">';
-    html += '<button class="btn btn-sm" onclick="unlockCloud()">Unlock</button>';
+    html += '<input type="text" id="cloudPassphrase" placeholder="Enter passphrase" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-1p-ignore data-lpignore="true" style="padding:7px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg-card-hover);color:var(--text-primary);width:200px;font-size:13px;-webkit-text-security:disc;" onkeydown="if(event.key===\'Enter\')unlockCloud()">';
+    html += '<button class="launch-btn btn-primary" onclick="unlockCloud()">Unlock</button>';
   } else {
-    html += '<span style="color:var(--green);font-size:12px;">Unlocked</span>';
+    html += '<span style="color:var(--accent-green,#3fb950);font-size:12px;font-weight:600;">&#10003; Unlocked</span>';
   }
-  html += '<button class="btn btn-sm" onclick="loadCloudData()">Refresh</button>';
+  html += '<button class="launch-btn btn-secondary" onclick="loadCloudData()">Refresh</button>';
   html += '</div></div>';
 
   // Stats
   if (cloudStats && cloudStats.total_sessions > 0) {
-    html += '<div style="display:flex;gap:16px;margin-bottom:16px;flex-wrap:wrap;">';
+    html += '<div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap;">';
     html += '<div class="stat-card"><div class="stat-value">' + (cloudStats.total_sessions || 0) + '</div><div class="stat-label">sessions</div></div>';
     html += '<div class="stat-card"><div class="stat-value">' + ((cloudStats.total_size || 0) / 1024 / 1024).toFixed(1) + ' MB</div><div class="stat-label">storage</div></div>';
     var agents = cloudStats.by_agent || {};
@@ -3216,11 +3217,11 @@ async function renderCloud(container) {
     html += '</div>';
   }
 
-  // Push all button
+  // Action buttons
   if (cloudUnlocked) {
     html += '<div style="margin-bottom:16px;display:flex;gap:8px;">';
-    html += '<button class="btn" onclick="cloudPushAll()" id="cloudPushAllBtn">Push All Sessions to Cloud</button>';
-    html += '<button class="btn" onclick="cloudPullAll()" id="cloudPullAllBtn">Pull All from Cloud</button>';
+    html += '<button class="launch-btn btn-primary" onclick="cloudPushAll()" id="cloudPushAllBtn">Push All to Cloud</button>';
+    html += '<button class="launch-btn btn-secondary" onclick="cloudPullAll()" id="cloudPullAllBtn">Pull All from Cloud</button>';
     html += '</div>';
   }
 
@@ -3230,24 +3231,22 @@ async function renderCloud(container) {
   } else if (!cloudSessions || cloudSessions.length === 0) {
     html += '<div class="empty-state">No sessions in cloud yet.</div>';
   } else {
-    html += '<div class="session-list">';
     for (var j = 0; j < cloudSessions.length; j++) {
       var s = cloudSessions[j];
       var date = s.last_ts ? new Date(s.last_ts).toLocaleString() : 'Unknown';
       var size = s.blob_size ? (s.blob_size / 1024).toFixed(0) + ' KB' : '?';
-      html += '<div class="session-card" style="display:flex;align-items:center;gap:12px;padding:10px 14px;">';
+      html += '<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--bg-card);border:1px solid var(--border);border-radius:10px;margin-bottom:6px;">';
       html += '<span class="tool-badge tool-' + s.agent + '">' + s.agent + '</span>';
       html += '<div style="flex:1;min-width:0;">';
-      html += '<div style="font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escHtml((s.first_message || s.session_id).substring(0, 80)) + '</div>';
-      html += '<div class="dim" style="font-size:12px;">' + escHtml(s.project_short || '') + ' &middot; ' + date + ' &middot; ' + s.message_count + ' msgs &middot; ' + size + '</div>';
+      html += '<div style="font-weight:500;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escHtml((s.first_message || s.session_id).substring(0, 80)) + '</div>';
+      html += '<div class="dim" style="font-size:11px;">' + escHtml(s.project_short || '') + ' &middot; ' + date + ' &middot; ' + s.message_count + ' msgs &middot; ' + size + '</div>';
       html += '</div>';
       if (cloudUnlocked) {
-        html += '<button class="btn btn-sm" onclick="cloudPullOne(\'' + s.session_id + '\',this)" title="Download to this PC">Pull</button>';
+        html += '<button class="launch-btn btn-secondary" style="padding:5px 12px;font-size:12px;" onclick="cloudPullOne(\'' + s.session_id + '\',this)">Pull</button>';
       }
-      html += '<button class="btn btn-sm btn-danger" onclick="deleteCloudSession(\'' + s.session_id + '\')" title="Delete from cloud">&times;</button>';
+      html += '<button class="launch-btn btn-delete" style="padding:5px 10px;font-size:12px;" onclick="deleteCloudSession(\'' + s.session_id + '\')">&times;</button>';
       html += '</div>';
     }
-    html += '</div>';
   }
 
   container.innerHTML = html;
