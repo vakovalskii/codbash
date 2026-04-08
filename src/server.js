@@ -642,14 +642,19 @@ async function syncLeaderboard() {
       let data = '';
       res.on('data', c => data += c);
       res.on('end', () => {
+        log('SYNC', `Response status=${res.statusCode} body=${data.slice(0, 500)}`);
+        if (res.statusCode >= 400) {
+          reject(new Error(`Leaderboard API ${res.statusCode}: ${data.slice(0, 200)}`));
+          return;
+        }
         try {
           const r = JSON.parse(data);
           log('SYNC', `Pushed stats to leaderboard as @${profile.username}`);
           resolve(r);
-        } catch { reject(new Error('Bad response')); }
+        } catch { reject(new Error('Bad response: ' + data.slice(0, 200))); }
       });
     });
-    req.on('error', reject);
+    req.on('error', (e) => { log('SYNC', `Request error: ${e.message}`); reject(e); });
     req.write(body);
     req.end();
   });
