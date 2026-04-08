@@ -2,6 +2,17 @@
 
 const CHANGELOG = [
   {
+    version: '6.14.3',
+    date: '2026-04-08',
+    title: 'Cursor: full session scan from state.vscdb',
+    changes: [
+      'Scan Cursor sessions from globalStorage state.vscdb (composerData + bubbleId)',
+      'Workspace-to-project mapping via workspaceStorage (cached 5 min)',
+      'Cross-platform Cursor paths (macOS / Linux / Windows)',
+      'Markdown export support for Cursor, OpenCode, Kiro sessions',
+    ],
+  },
+  {
     version: '6.0.4',
     date: '2026-04-06',
     title: '5 agents: Cursor + live detection for all',
