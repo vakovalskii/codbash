@@ -2761,6 +2761,14 @@ async function loadGlobalLeaderboard() {
   try {
     var resp = await fetch('/api/leaderboard/remote');
     _lbRemoteData = await resp.json();
+    // Show network stats
+    var net = _lbRemoteData.network || {};
+    var netEl = document.getElementById('networkStats');
+    if (netEl) {
+      netEl.innerHTML = '<span>' + (_lbRemoteData.totalUsers || 0) + ' on leaderboard</span>' +
+        '<span>' + (net.totalInstalls || 0) + ' vibe coders online</span>' +
+        '<span>' + (net.todayActive || 0) + ' active today</span>';
+    }
     renderGlobalBoard();
   } catch { if (board) board.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted)">Could not load global leaderboard</div>'; }
 }
@@ -2914,6 +2922,9 @@ async function renderLeaderboard(container) {
     }
 
     // Global leaderboard
+    // Network stats
+    html += '<div class="lb-network" id="networkStats"><span>Loading network...</span></div>';
+
     // Global leaderboard with tabs
     html += '<div class="lb-section-title">Global Leaderboard</div>';
     html += '<div class="lb-tabs">';

@@ -2085,6 +2085,20 @@ body {
     user-select: all;
 }
 
+.lb-network {
+    display: flex;
+    justify-content: center;
+    gap: 24px;
+    padding: 12px 16px;
+    background: linear-gradient(135deg, rgba(99,102,241,0.08), rgba(168,85,247,0.08));
+    border: 1px solid rgba(139,92,246,0.2);
+    border-radius: 10px;
+    margin: 16px 0;
+    font-size: 13px;
+    color: var(--text-muted);
+}
+.lb-network span { font-weight: 600; }
+
 .lb-sync-bar {
     text-align: center;
     margin: 20px 0;

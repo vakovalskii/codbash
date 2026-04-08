@@ -438,7 +438,38 @@ function startServer(host, port, openBrowser = true) {
         execFile('xdg-open', [browserUrl]);
       }
     }
+
+    // Anonymous heartbeat — count active installs
+    sendHeartbeat();
   });
+}
+
+function sendHeartbeat() {
+  try {
+    const { getOrCreateAnonId } = require('./data');
+    const anon = getOrCreateAnonId();
+    const pkg = require('../package.json');
+    const sessions = require('./data').loadSessions();
+    const agentCounts = {};
+    sessions.forEach(s => { agentCounts[s.tool] = (agentCounts[s.tool] || 0) + 1; });
+
+    const body = JSON.stringify({
+      anonId: anon.id,
+      version: pkg.version,
+      platform: process.platform,
+      agents: agentCounts,
+    });
+
+    const req = https.request({
+      hostname: 'codedash-leaderboard.valeriy.workers.dev',
+      path: '/api/heartbeat', method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+      timeout: 5000,
+    });
+    req.on('error', () => {}); // silent fail
+    req.write(body);
+    req.end();
+  } catch {}
 }
 
 // ── Helpers ─────────────────────────────────

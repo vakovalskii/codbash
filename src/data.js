@@ -2403,6 +2403,7 @@ module.exports = {
   loadSessionDetail,
   getProjectGitInfo,
   getLeaderboardStats,
+  getOrCreateAnonId,
   deleteSession,
   getGitCommits,
   exportSessionMarkdown,
