@@ -2276,7 +2276,14 @@ function getDailyStats(sessions) {
             }
             if (!ts || ts < 1000000000000) continue;
             const day = fmtLocalDay(ts);
-            if (entry.type === 'user') msgsByDay[day] = (msgsByDay[day] || 0) + 1;
+            // Count only user messages with actual text content (skip empty tool-permission entries)
+            if (entry.type === 'user') {
+              let hasText = false;
+              const c = entry.message && entry.message.content;
+              if (typeof c === 'string' && c.trim()) hasText = true;
+              else if (Array.isArray(c)) { for (const p of c) { if (p.type === 'text' && p.text && p.text.trim()) { hasText = true; break; } } }
+              if (hasText) msgsByDay[day] = (msgsByDay[day] || 0) + 1;
+            }
             if (!tsByDay[day]) tsByDay[day] = { first: ts, last: ts };
             if (ts < tsByDay[day].first) tsByDay[day].first = ts;
             if (ts > tsByDay[day].last) tsByDay[day].last = ts;
