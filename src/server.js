@@ -581,7 +581,7 @@ async function syncLeaderboard() {
     deviceId: anon.id || require('crypto').randomUUID(),
     token: profile.token, // for server-side GitHub verification
     stats: {
-      today: stats.today,
+      today: { ...stats.today, hours: Math.min(stats.today.hours || 0, 24) },
       totals: stats.totals,
       agents: stats.agents,
       streak: stats.streak,
