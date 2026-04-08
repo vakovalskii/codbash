@@ -1229,19 +1229,45 @@ function _loadCursorVscdbInBackground() {
     '-separator', '\t', CURSOR_GLOBAL_DB, query
   ], { encoding: 'utf8', timeout: 15000, maxBuffer: 10 * 1024 * 1024, windowsHide: true },
   function(err, stdout) {
-    // Query 2: count user bubbles (type=1) per composer — key format: bubbleId:<composerId>:<bubbleId>
-    const userCountQuery = "SELECT substr(key, 10, 36), count(*) FROM cursorDiskKV WHERE key LIKE 'bubbleId:%' AND json_extract(value, '$.type') = 1 GROUP BY substr(key, 10, 36)";
+    // Query 2: user bubble counts + token totals per composer (combined for efficiency)
+    const statsQuery = "SELECT substr(key, 10, 36) as cid, " +
+      "sum(CASE WHEN json_extract(value, '$.type') = 1 THEN 1 ELSE 0 END), " +
+      "sum(CASE WHEN json_extract(value, '$.tokenCount.inputTokens') > 0 THEN json_extract(value, '$.tokenCount.inputTokens') ELSE 0 END), " +
+      "sum(CASE WHEN json_extract(value, '$.tokenCount.outputTokens') > 0 THEN json_extract(value, '$.tokenCount.outputTokens') ELSE 0 END) " +
+      "FROM cursorDiskKV WHERE key LIKE 'bubbleId:%' GROUP BY cid";
 
     cp.execFile('sqlite3', [
-      '-separator', '\t', CURSOR_GLOBAL_DB, userCountQuery
-    ], { encoding: 'utf8', timeout: 15000, maxBuffer: 10 * 1024 * 1024, windowsHide: true },
+      '-separator', '\t', CURSOR_GLOBAL_DB, statsQuery
+    ], { encoding: 'utf8', timeout: 30000, maxBuffer: 10 * 1024 * 1024, windowsHide: true },
     function(err2, stdout2) {
-    // Build user count map from query 2
-    const userCounts = {};
+    // Build per-composer stats from query 2
+    const composerStats = {}; // { userCount, inputTokens, outputTokens }
     if (stdout2) {
       for (const row of stdout2.trim().split('\n')) {
+        const cols = row.split('\t');
+        if (cols.length < 4) continue;
+        composerStats[cols[0]] = {
+          userCount: parseInt(cols[1]) || 0,
+          inputTokens: parseInt(cols[2]) || 0,
+          outputTokens: parseInt(cols[3]) || 0,
+        };
+      }
+    }
+
+    // Build model map from composerData (query 1 already has this via the main query)
+    // We need to add model to the main query — for now extract from sessions metadata
+    // Query 3: models per composer (lightweight)
+    const modelQuery = "SELECT json_extract(value, '$.composerId'), json_extract(value, '$.modelConfig.modelName') FROM cursorDiskKV WHERE key LIKE 'composerData:%'";
+
+    cp.execFile('sqlite3', [
+      '-separator', '\t', CURSOR_GLOBAL_DB, modelQuery
+    ], { encoding: 'utf8', timeout: 10000, maxBuffer: 5 * 1024 * 1024, windowsHide: true },
+    function(err3, stdout3) {
+    const composerModels = {};
+    if (stdout3) {
+      for (const row of stdout3.trim().split('\n')) {
         const tabIdx = row.indexOf('\t');
-        if (tabIdx > 0) userCounts[row.slice(0, tabIdx)] = parseInt(row.slice(tabIdx + 1)) || 0;
+        if (tabIdx > 0) composerModels[row.slice(0, tabIdx)] = row.slice(tabIdx + 1) || '';
       }
     }
 
@@ -1257,6 +1283,7 @@ function _loadCursorVscdbInBackground() {
           const msgCount = parseInt(cols[4]) || 0;
           if (msgCount === 0) continue;
           const projectPath = wsMap[composerId] || '';
+          const stats = composerStats[composerId] || {};
           results.push({
             id: composerId,
             tool: 'cursor',
@@ -1269,8 +1296,11 @@ function _loadCursorVscdbInBackground() {
             has_detail: true,
             file_size: 0,
             detail_messages: msgCount,
-            user_messages: userCounts[composerId] || 0,
+            user_messages: stats.userCount || 0,
             _cursor_vscdb: true,
+            _cursor_input_tokens: stats.inputTokens || 0,
+            _cursor_output_tokens: stats.outputTokens || 0,
+            _cursor_model: composerModels[composerId] || '',
           });
         }
       }
@@ -1303,8 +1333,9 @@ function _loadCursorVscdbInBackground() {
       _sessionsCache = null;
       _sessionsCacheTs = 0;
     }
-    }); // end execFile query 2
-  }); // end execFile query 1
+    }); // end execFile query 3 (models)
+    }); // end execFile query 2 (stats)
+  }); // end execFile query 1 (sessions)
 }
 
 function loadSessions() {
@@ -2460,13 +2491,25 @@ function getCostAnalytics(sessions) {
     let costData;
     if (s.tool === 'opencode' && opencodeCostCache[s.id]) {
       costData = opencodeCostCache[s.id];
-    } else if (s.tool === 'cursor' && (s.user_messages > 0 || s.messages > 0)) {
-      // Estimate Cursor cost: avg ~2K input + ~1K output tokens per prompt on Sonnet
-      const userMsgs = s.user_messages || Math.ceil((s.messages || 0) * 0.07);
-      const pricing = getModelPricing('claude-sonnet');
-      const estInput = userMsgs * 2000;
-      const estOutput = userMsgs * 1000;
-      costData = { cost: estInput * pricing.input + estOutput * pricing.output, inputTokens: estInput, outputTokens: estOutput, cacheReadTokens: 0, cacheCreateTokens: 0, contextPctSum: 0, contextTurnCount: 0, model: 'cursor-estimated' };
+    } else if (s.tool === 'cursor') {
+      // Use real token data from Cursor vscdb if available
+      const inp = s._cursor_input_tokens || 0;
+      const out = s._cursor_output_tokens || 0;
+      if (inp > 0 || out > 0) {
+        const model = s._cursor_model || '';
+        const pricing = getModelPricing(model);
+        costData = { cost: inp * pricing.input + out * pricing.output, inputTokens: inp, outputTokens: out, cacheReadTokens: 0, cacheCreateTokens: 0, contextPctSum: 0, contextTurnCount: 0, model: model };
+      } else if (s.user_messages > 0 || s.messages > 0) {
+        // Fallback: estimate from user prompt count
+        const userMsgs = s.user_messages || Math.ceil((s.messages || 0) * 0.07);
+        const model = s._cursor_model || 'claude-sonnet';
+        const pricing = getModelPricing(model);
+        const estInput = userMsgs * 2000;
+        const estOutput = userMsgs * 1000;
+        costData = { cost: estInput * pricing.input + estOutput * pricing.output, inputTokens: estInput, outputTokens: estOutput, cacheReadTokens: 0, cacheCreateTokens: 0, contextPctSum: 0, contextTurnCount: 0, model: model + '-estimated' };
+      } else {
+        costData = EMPTY_COST;
+      }
     } else {
       costData = computeSessionCost(s.id, s.project);
     }
@@ -2491,7 +2534,8 @@ function getCostAnalytics(sessions) {
     byAgent[agent].cost += cost;
     byAgent[agent].sessions++;
     byAgent[agent].tokens += tokens;
-    if (agent === 'codex' || agent === 'cursor') byAgent[agent].estimated = true;
+    if (agent === 'codex') byAgent[agent].estimated = true;
+    if (agent === 'cursor' && costData.model && costData.model.includes('-estimated')) byAgent[agent].estimated = true;
     if (agent === 'opencode' && !costData.model) byAgent[agent].estimated = true;
 
     // Context % across all turns
