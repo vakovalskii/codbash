@@ -890,6 +890,10 @@ function renderCard(s, idx) {
     html += '<span class="cost-badge">' + costStr + '</span>';
   }
   html += '<button class="star-btn' + (isStarred ? ' active' : '') + '" onclick="event.stopPropagation();toggleStar(\'' + s.id + '\')" title="Star">&#9733;</button>';
+  if (cloudUnlocked) {
+    var inCloud = cloudSessionIds.has(s.id);
+    html += '<button class="star-btn' + (inCloud ? ' active' : '') + '" onclick="event.stopPropagation();cloudPushOne(\'' + s.id + '\',this)" title="' + (inCloud ? 'In cloud' : 'Push to cloud') + '" style="font-size:12px;">&#9729;</button>';
+  }
   html += '</div>';
   var aiTitle = showAITitles && sessionTitles[s.id];
   if (aiTitle) {
@@ -1130,6 +1134,11 @@ function render() {
 
   if (currentView === 'leaderboard') {
     renderLeaderboard(content);
+    return;
+  }
+
+  if (currentView === 'cloud') {
+    renderCloud(content);
     return;
   }
 
@@ -3135,6 +3144,287 @@ function dismissUpdate() {
   startActivePolling();
 
   // Apply saved theme
+// ── Cloud Sync View ─────────────────────────
+var cloudSessions = null;
+var cloudStats = null;
+var cloudLoading = false;
+var cloudUnlocked = false;
+var cloudConfigured = false;
+var cloudSessionIds = new Set(); // for quick "in cloud" check
+
+async function renderCloud(container) {
+  var profile = null;
+  try {
+    var resp = await fetch('/api/github/profile');
+    profile = await resp.json();
+  } catch (e) {}
+
+  var html = '<div class="view-header"><h2>Cloud Sync</h2></div>';
+
+  if (!profile || !profile.authenticated) {
+    html += '<div class="empty-state">';
+    html += '<p>Connect GitHub to sync sessions to the cloud.</p>';
+    html += '<button class="btn" onclick="githubConnect()">Connect GitHub</button>';
+    html += '</div>';
+    container.innerHTML = html;
+    return;
+  }
+
+  html += '<div style="margin-bottom:16px;padding:12px;background:var(--card-bg);border:1px solid var(--border);border-radius:8px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">';
+  html += '<img src="' + profile.avatar + '" style="width:32px;height:32px;border-radius:50%;">';
+  html += '<div><strong>' + (profile.name || profile.username) + '</strong><br><span class="dim">@' + profile.username + '</span></div>';
+  html += '<div style="margin-left:auto;display:flex;gap:8px;align-items:center;">';
+
+  if (!cloudConfigured) {
+    html += '<span class="dim">Run <code>codedash cloud setup</code> first</span>';
+  } else if (!cloudUnlocked) {
+    html += '<input type="password" id="cloudPassphrase" placeholder="Enter passphrase" style="padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);width:180px;" onkeydown="if(event.key===\'Enter\')unlockCloud()">';
+    html += '<button class="btn btn-sm" onclick="unlockCloud()">Unlock</button>';
+  } else {
+    html += '<span style="color:var(--green);font-size:12px;">Unlocked</span>';
+  }
+  html += '<button class="btn btn-sm" onclick="loadCloudData()">Refresh</button>';
+  html += '</div></div>';
+
+  // Stats
+  if (cloudStats && cloudStats.total_sessions > 0) {
+    html += '<div style="display:flex;gap:16px;margin-bottom:16px;flex-wrap:wrap;">';
+    html += '<div class="stat-card"><div class="stat-value">' + (cloudStats.total_sessions || 0) + '</div><div class="stat-label">sessions</div></div>';
+    html += '<div class="stat-card"><div class="stat-value">' + ((cloudStats.total_size || 0) / 1024 / 1024).toFixed(1) + ' MB</div><div class="stat-label">storage</div></div>';
+    var agents = cloudStats.by_agent || {};
+    var agentKeys = Object.keys(agents);
+    for (var i = 0; i < agentKeys.length; i++) {
+      html += '<div class="stat-card"><div class="stat-value">' + agents[agentKeys[i]] + '</div><div class="stat-label">' + agentKeys[i] + '</div></div>';
+    }
+    html += '</div>';
+  }
+
+  // Push all button
+  if (cloudUnlocked) {
+    html += '<div style="margin-bottom:16px;display:flex;gap:8px;">';
+    html += '<button class="btn" onclick="cloudPushAll()" id="cloudPushAllBtn">Push All Sessions to Cloud</button>';
+    html += '<button class="btn" onclick="cloudPullAll()" id="cloudPullAllBtn">Pull All from Cloud</button>';
+    html += '</div>';
+  }
+
+  // Session list
+  if (cloudLoading) {
+    html += '<div class="empty-state">Loading cloud sessions...</div>';
+  } else if (!cloudSessions || cloudSessions.length === 0) {
+    html += '<div class="empty-state">No sessions in cloud yet.</div>';
+  } else {
+    html += '<div class="session-list">';
+    for (var j = 0; j < cloudSessions.length; j++) {
+      var s = cloudSessions[j];
+      var date = s.last_ts ? new Date(s.last_ts).toLocaleString() : 'Unknown';
+      var size = s.blob_size ? (s.blob_size / 1024).toFixed(0) + ' KB' : '?';
+      html += '<div class="session-card" style="display:flex;align-items:center;gap:12px;padding:10px 14px;">';
+      html += '<span class="tool-badge tool-' + s.agent + '">' + s.agent + '</span>';
+      html += '<div style="flex:1;min-width:0;">';
+      html += '<div style="font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escHtml((s.first_message || s.session_id).substring(0, 80)) + '</div>';
+      html += '<div class="dim" style="font-size:12px;">' + escHtml(s.project_short || '') + ' &middot; ' + date + ' &middot; ' + s.message_count + ' msgs &middot; ' + size + '</div>';
+      html += '</div>';
+      if (cloudUnlocked) {
+        html += '<button class="btn btn-sm" onclick="cloudPullOne(\'' + s.session_id + '\',this)" title="Download to this PC">Pull</button>';
+      }
+      html += '<button class="btn btn-sm btn-danger" onclick="deleteCloudSession(\'' + s.session_id + '\')" title="Delete from cloud">&times;</button>';
+      html += '</div>';
+    }
+    html += '</div>';
+  }
+
+  container.innerHTML = html;
+
+  // Auto-load data if not loaded yet
+  if (!cloudSessions && !cloudLoading) {
+    loadCloudData();
+  }
+}
+
+async function checkCloudLockState() {
+  try {
+    var resp = await fetch('/api/cloud/locked');
+    var data = await resp.json();
+    cloudConfigured = data.configured;
+    cloudUnlocked = data.unlocked;
+  } catch (e) {}
+}
+
+async function unlockCloud() {
+  var input = document.getElementById('cloudPassphrase');
+  if (!input || !input.value) return;
+  try {
+    var resp = await fetch('/api/cloud/unlock', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ passphrase: input.value }),
+    });
+    var data = await resp.json();
+    if (data.ok) {
+      cloudUnlocked = true;
+      showToast('Cloud unlocked');
+      applyFilters();
+    } else {
+      showToast(data.error || 'Wrong passphrase', 'error');
+    }
+  } catch (e) {
+    showToast('Error: ' + e.message, 'error');
+  }
+}
+
+async function loadCloudData() {
+  cloudLoading = true;
+  applyFilters();
+
+  try {
+    await checkCloudLockState();
+    var [listResp, statsResp] = await Promise.all([
+      fetch('/api/cloud/list'),
+      fetch('/api/cloud/status'),
+    ]);
+    if (listResp.ok) {
+      var listData = await listResp.json();
+      cloudSessions = listData.sessions || [];
+      cloudSessionIds = new Set(cloudSessions.map(function(s) { return s.session_id; }));
+    }
+    if (statsResp.ok) {
+      cloudStats = await statsResp.json();
+    }
+  } catch (e) {
+    showToast('Cloud: ' + e.message, 'error');
+  }
+
+  cloudLoading = false;
+  applyFilters();
+}
+
+async function cloudPushOne(sessionId, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = '...'; }
+  try {
+    var resp = await fetch('/api/cloud/push', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: sessionId }),
+    });
+    var data = await resp.json();
+    if (data.ok) {
+      showToast('Pushed to cloud (' + (data.size / 1024).toFixed(0) + ' KB)');
+      cloudSessionIds.add(sessionId);
+      if (btn) { btn.textContent = 'In Cloud'; btn.classList.add('active'); }
+    } else {
+      showToast(data.error || 'Push failed', 'error');
+      if (btn) { btn.disabled = false; btn.textContent = 'Push'; }
+    }
+  } catch (e) {
+    showToast('Error: ' + e.message, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Push'; }
+  }
+}
+
+async function cloudPushAll() {
+  var btn = document.getElementById('cloudPushAllBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Pushing...'; }
+
+  try {
+    var resp = await fetch('/api/sessions');
+    var data = await resp.json();
+    var sessions = data || [];
+    if (Array.isArray(sessions)) {
+      var ids = sessions.map(function(s) { return s.id; });
+    } else {
+      var ids = Object.keys(sessions);
+    }
+
+    var ok = 0, fail = 0;
+    for (var i = 0; i < ids.length; i++) {
+      if (btn) btn.textContent = 'Pushing ' + (i + 1) + '/' + ids.length + '...';
+      try {
+        var r = await fetch('/api/cloud/push', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId: ids[i] }),
+        });
+        var d = await r.json();
+        if (d.ok) ok++; else fail++;
+      } catch (e) { fail++; }
+    }
+    showToast('Pushed ' + ok + ' sessions' + (fail > 0 ? ', ' + fail + ' failed' : ''));
+    loadCloudData();
+  } catch (e) {
+    showToast('Error: ' + e.message, 'error');
+  }
+
+  if (btn) { btn.disabled = false; btn.textContent = 'Push All Sessions to Cloud'; }
+}
+
+async function cloudPullAll() {
+  var btn = document.getElementById('cloudPullAllBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Pulling...'; }
+
+  if (!cloudSessions) { showToast('Load cloud data first', 'error'); return; }
+
+  var ok = 0, skip = 0, fail = 0;
+  for (var i = 0; i < cloudSessions.length; i++) {
+    if (btn) btn.textContent = 'Pulling ' + (i + 1) + '/' + cloudSessions.length + '...';
+    try {
+      var r = await fetch('/api/cloud/pull', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: cloudSessions[i].session_id }),
+      });
+      var d = await r.json();
+      if (d.ok) ok++;
+      else if (d.skipped) skip++;
+      else fail++;
+    } catch (e) { fail++; }
+  }
+  showToast('Pulled ' + ok + ', skipped ' + skip + (fail > 0 ? ', failed ' + fail : ''));
+  if (btn) { btn.disabled = false; btn.textContent = 'Pull All from Cloud'; }
+}
+
+async function cloudPullOne(sessionId, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = '...'; }
+  try {
+    var resp = await fetch('/api/cloud/pull', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: sessionId }),
+    });
+    var data = await resp.json();
+    if (data.ok) {
+      showToast('Pulled: ' + sessionId.slice(0, 12));
+      if (btn) { btn.textContent = 'Done'; }
+    } else if (data.skipped) {
+      showToast('Already exists locally');
+      if (btn) { btn.textContent = 'Local'; }
+    } else {
+      showToast(data.error || 'Pull failed', 'error');
+      if (btn) { btn.disabled = false; btn.textContent = 'Pull'; }
+    }
+  } catch (e) {
+    showToast('Error: ' + e.message, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Pull'; }
+  }
+}
+
+async function deleteCloudSession(sessionId) {
+  if (!confirm('Delete session from cloud?')) return;
+  try {
+    var resp = await fetch('/api/cloud/' + encodeURIComponent(sessionId), { method: 'DELETE' });
+    if (resp.ok) {
+      showToast('Deleted from cloud');
+      cloudSessions = null;
+      loadCloudData();
+    } else {
+      var data = await resp.json();
+      showToast(data.error || 'Delete failed', 'error');
+    }
+  } catch (e) {
+    showToast('Error: ' + e.message, 'error');
+  }
+}
+
+// ── Init ────────────────────────────────────
   var savedTheme = localStorage.getItem('codedash-theme') || 'dark';
   setTheme(savedTheme);
 

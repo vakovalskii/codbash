@@ -393,6 +393,11 @@ function startServer(host, port, openBrowser = true) {
       json(res, { ok: true });
     }
 
+    // ── Cloud Sync Proxy ─────────────────────
+    else if (pathname.startsWith('/api/cloud/')) {
+      handleCloudProxy(req, res, pathname).catch(e => json(res, { error: e.message }, 500));
+    }
+
     // ── Changelog ─────────────────────────────
     else if (req.method === 'GET' && pathname === '/api/changelog') {
       json(res, CHANGELOG);
@@ -479,6 +484,157 @@ function autoSync() {
       log('SYNC', 'Auto-sync OK');
     }).catch(() => {});
   } catch {}
+}
+
+// ── Cloud Sync Proxy ────────────────────────
+const { serializeSession, encryptSession, decryptSession, deserializeSession, loadCloudKey, cloudRequest: cloudApiRequest, deriveKey, encrypt, decrypt, CLOUD_API } = require('./cloud');
+const crypto = require('crypto');
+
+// Cached encryption key (in-memory, survives until server restart)
+let _cachedCloudKey = null;
+
+function getCloudKey() {
+  if (_cachedCloudKey) return _cachedCloudKey;
+  return null;
+}
+
+function unlockCloudKey(passphrase) {
+  const keyData = loadCloudKey();
+  if (!keyData || !keyData.salt) return { error: 'Run "codedash cloud setup" in terminal first' };
+
+  const salt = Buffer.from(keyData.salt, 'hex');
+  const key = deriveKey(passphrase, salt);
+
+  // Verify passphrase
+  try {
+    const dec = decrypt(Buffer.from(keyData.verifier, 'hex'), key);
+    if (dec.toString() !== 'codedash-verify') return { error: 'Wrong passphrase' };
+  } catch {
+    return { error: 'Wrong passphrase' };
+  }
+
+  _cachedCloudKey = key;
+  return { ok: true };
+}
+
+async function handleCloudProxy(req, res, pathname) {
+  const profile = loadGitHubProfile();
+  if (!profile || !profile.authenticated) return json(res, { error: 'Connect GitHub first' }, 401);
+
+  // POST /api/cloud/unlock — cache encryption key from passphrase
+  if (req.method === 'POST' && pathname === '/api/cloud/unlock') {
+    return new Promise((resolve) => {
+      readBody(req, (body) => {
+        try {
+          const { passphrase } = JSON.parse(body);
+          if (!passphrase) { json(res, { error: 'passphrase required' }, 400); return resolve(); }
+          const result = unlockCloudKey(passphrase);
+          if (result.error) { json(res, result, 400); return resolve(); }
+          json(res, { ok: true });
+          resolve();
+        } catch (e) { json(res, { error: e.message }, 500); resolve(); }
+      });
+    });
+  }
+
+  // GET /api/cloud/locked — check if key is cached
+  if (req.method === 'GET' && pathname === '/api/cloud/locked') {
+    const keyData = loadCloudKey();
+    json(res, {
+      configured: !!(keyData && keyData.salt),
+      unlocked: !!_cachedCloudKey,
+    });
+    return;
+  }
+
+  // POST /api/cloud/push — encrypt and upload session
+  if (req.method === 'POST' && pathname === '/api/cloud/push') {
+    return new Promise((resolve) => {
+      readBody(req, async (body) => {
+        try {
+          const { sessionId, project } = JSON.parse(body);
+          if (!sessionId) { json(res, { error: 'sessionId required' }, 400); return resolve(); }
+
+          const key = getCloudKey();
+          if (!key) { json(res, { error: 'Cloud locked. Enter passphrase first.' }, 403); return resolve(); }
+
+          const sessions = loadSessions();
+          const canonical = serializeSession(sessionId, sessions);
+          if (!canonical) { json(res, { error: 'Session not found locally' }, 404); return resolve(); }
+
+          const blob = encryptSession(canonical, key);
+          const checksum = crypto.createHash('sha256').update(blob).digest('hex');
+
+          const result = await cloudApiRequest('POST', '/api/sessions/upload', profile.token, blob, {
+            'Content-Type': 'application/octet-stream',
+            'X-Session-Id': sessionId,
+            'X-Agent': canonical.agent,
+            'X-Project-Short': encodeURIComponent(canonical.projectShort || ''),
+            'X-First-Message': encodeURIComponent((canonical.firstMessage || '').slice(0, 200)),
+            'X-First-Ts': String(canonical.firstTs || 0),
+            'X-Last-Ts': String(canonical.lastTs || 0),
+            'X-Message-Count': String(canonical.messageCount || 0),
+            'X-Checksum': checksum,
+          });
+
+          if (result.status === 200) {
+            json(res, { ok: true, size: blob.length });
+          } else {
+            json(res, result.data || { error: 'Upload failed' }, result.status);
+          }
+          resolve();
+        } catch (e) { json(res, { error: e.message }, 500); resolve(); }
+      });
+    });
+  }
+
+  // POST /api/cloud/pull — download and decrypt session
+  if (req.method === 'POST' && pathname === '/api/cloud/pull') {
+    return new Promise((resolve) => {
+      readBody(req, async (body) => {
+        try {
+          const { sessionId } = JSON.parse(body);
+          if (!sessionId) { json(res, { error: 'sessionId required' }, 400); return resolve(); }
+
+          const key = getCloudKey();
+          if (!key) { json(res, { error: 'Cloud locked. Enter passphrase first.' }, 403); return resolve(); }
+
+          const dlRes = await cloudApiRequest('GET', `/api/sessions/${encodeURIComponent(sessionId)}/download`, profile.token);
+          if (dlRes.status !== 200) { json(res, { error: 'Download failed' }, dlRes.status); return resolve(); }
+
+          const canonical = decryptSession(dlRes.data, key);
+          const result = deserializeSession(canonical);
+          json(res, { ok: true, ...result });
+          resolve();
+        } catch (e) { json(res, { error: e.message }, 500); resolve(); }
+      });
+    });
+  }
+
+  // GET /api/cloud/list — proxy to cloud server
+  if (req.method === 'GET' && pathname === '/api/cloud/list') {
+    const result = await cloudApiRequest('GET', '/api/sessions?limit=500', profile.token);
+    json(res, result.data, result.status);
+    return;
+  }
+
+  // GET /api/cloud/status — proxy stats
+  if (req.method === 'GET' && pathname === '/api/cloud/status') {
+    const result = await cloudApiRequest('GET', '/api/sessions/stats', profile.token);
+    json(res, result.data, result.status);
+    return;
+  }
+
+  // DELETE /api/cloud/:id
+  const deleteMatch = pathname.match(/^\/api\/cloud\/([^/]+)$/);
+  if (req.method === 'DELETE' && deleteMatch) {
+    const sid = decodeURIComponent(deleteMatch[1]);
+    const result = await cloudApiRequest('DELETE', `/api/sessions/${encodeURIComponent(sid)}`, profile.token);
+    json(res, result.data, result.status);
+    return;
+  }
+
+  json(res, { error: 'Unknown cloud endpoint' }, 404);
 }
 
 // ── Helpers ─────────────────────────────────

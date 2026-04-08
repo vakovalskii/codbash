@@ -5,6 +5,7 @@ const { startServer } = require('../src/server');
 const { exportArchive, importArchive } = require('../src/migrate');
 const { convertSession } = require('../src/convert');
 const { generateHandoff, quickHandoff } = require('../src/handoff');
+const { cloudCLI } = require('../src/cloud');
 
 const DEFAULT_PORT = 3847;
 const DEFAULT_HOST = 'localhost';
@@ -310,6 +311,14 @@ switch (command) {
     break;
   }
 
+  case 'cloud': {
+    cloudCLI(args.slice(1)).catch(e => {
+      console.error(`  Cloud error: ${e.message}\n`);
+      process.exit(1);
+    });
+    break;
+  }
+
   case 'help':
   case '-h':
   case '--help':
@@ -327,6 +336,7 @@ switch (command) {
     codedash convert <id> <format>       Convert session (claude/codex)
     codedash export [file.tar.gz]        Export all sessions to archive
     codedash import <file.tar.gz>        Import sessions from archive
+    codedash cloud <command>             Cloud session sync (setup/push/pull/list/status)
     codedash update                      Update to latest version
     codedash restart [--port=N]          Restart the server
     codedash stop [--port=N]             Stop the server
