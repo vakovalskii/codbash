@@ -152,6 +152,7 @@ function parseClaudeSessionFile(sessionFile) {
   let customTitle = '';
   let firstTs = stat.mtimeMs;
   let lastTs = stat.mtimeMs;
+  let userMsgCount = 0;
   let entrypointFound = false;
   let worktreeOriginalCwd = '';
   const mcpSet = new Set();
@@ -161,6 +162,7 @@ function parseClaudeSessionFile(sessionFile) {
     try {
       const entry = JSON.parse(line);
       if (entry.type === 'user' || entry.type === 'assistant') msgCount++;
+      if (entry.type === 'user') userMsgCount++;
       if (entry.timestamp) {
         if (entry.timestamp < firstTs) firstTs = entry.timestamp;
         if (entry.timestamp > lastTs) lastTs = entry.timestamp;
@@ -209,6 +211,7 @@ function parseClaudeSessionFile(sessionFile) {
     projectPath,
     tool,
     msgCount,
+    userMsgCount,
     firstMsg,
     customTitle,
     firstTs,
@@ -232,6 +235,7 @@ function mergeClaudeSessionDetail(session, summary, sessionFile) {
   session.has_detail = true;
   session.file_size = summary.fileSize;
   session.detail_messages = summary.msgCount;
+  session.user_messages = summary.userMsgCount || 0;
   session._session_file = sessionFile;
   session.mcp_servers = summary.mcpServers || [];
   session.skills = summary.skills || [];
@@ -947,6 +951,7 @@ function parseCodexSessionFile(sessionFile) {
 
   let projectPath = '';
   let msgCount = 0;
+  let userMsgCount = 0;
   let firstMsg = '';
   let firstTs = stat.mtimeMs;
   let lastTs = stat.mtimeMs;
@@ -985,6 +990,7 @@ function parseCodexSessionFile(sessionFile) {
       if (!content || isSystemMessage(content)) continue;
 
       msgCount++;
+      if (role === 'user') userMsgCount++;
       if (!firstMsg) firstMsg = content.slice(0, 200);
     } catch {}
   }
@@ -992,6 +998,7 @@ function parseCodexSessionFile(sessionFile) {
   return {
     projectPath,
     msgCount,
+    userMsgCount,
     firstMsg,
     firstTs,
     lastTs,
@@ -1062,6 +1069,7 @@ function scanCodexSessions() {
           existing.file_size = summary.fileSize;
           existing.messages = summary.msgCount;
           existing.detail_messages = summary.msgCount;
+          existing.user_messages = summary.userMsgCount || 0;
           if (codexTitles[sid]) {
             existing.first_message = codexTitles[sid];
           } else if (summary.firstMsg && !existing.first_message) {
@@ -1089,6 +1097,7 @@ function scanCodexSessions() {
             has_detail: true,
             file_size: summary.fileSize,
             detail_messages: summary.msgCount,
+            user_messages: summary.userMsgCount || 0,
             mcp_servers: summary.mcpServers || [],
             skills: [],
           });
@@ -1211,13 +1220,31 @@ function _loadCursorVscdbInBackground() {
   const wsMap = buildCursorWorkspaceMap();
   const homedir = os.homedir();
 
-  // Async sqlite3 query — does NOT block the event loop
+  // Async sqlite3 queries — do NOT block the event loop
+  // Query 1: session metadata, Query 2: exact user bubble count per composer
   const query = "SELECT json_extract(value, '$.composerId'), json_extract(value, '$.name'), json_extract(value, '$.createdAt'), json_extract(value, '$.lastUpdatedAt'), json_array_length(json_extract(value, '$.fullConversationHeadersOnly')) FROM cursorDiskKV WHERE key LIKE 'composerData:%'";
 
-  const child = require('child_process').execFile('sqlite3', [
+  const cp = require('child_process');
+  cp.execFile('sqlite3', [
     '-separator', '\t', CURSOR_GLOBAL_DB, query
   ], { encoding: 'utf8', timeout: 15000, maxBuffer: 10 * 1024 * 1024, windowsHide: true },
   function(err, stdout) {
+    // Query 2: count user bubbles (type=1) per composer — key format: bubbleId:<composerId>:<bubbleId>
+    const userCountQuery = "SELECT substr(key, 10, 36), count(*) FROM cursorDiskKV WHERE key LIKE 'bubbleId:%' AND json_extract(value, '$.type') = 1 GROUP BY substr(key, 10, 36)";
+
+    cp.execFile('sqlite3', [
+      '-separator', '\t', CURSOR_GLOBAL_DB, userCountQuery
+    ], { encoding: 'utf8', timeout: 15000, maxBuffer: 10 * 1024 * 1024, windowsHide: true },
+    function(err2, stdout2) {
+    // Build user count map from query 2
+    const userCounts = {};
+    if (stdout2) {
+      for (const row of stdout2.trim().split('\n')) {
+        const tabIdx = row.indexOf('\t');
+        if (tabIdx > 0) userCounts[row.slice(0, tabIdx)] = parseInt(row.slice(tabIdx + 1)) || 0;
+      }
+    }
+
     try {
       const results = [];
       const rows = (stdout || '').trim();
@@ -1242,6 +1269,7 @@ function _loadCursorVscdbInBackground() {
             has_detail: true,
             file_size: 0,
             detail_messages: msgCount,
+            user_messages: userCounts[composerId] || 0,
             _cursor_vscdb: true,
           });
         }
@@ -1275,7 +1303,8 @@ function _loadCursorVscdbInBackground() {
       _sessionsCache = null;
       _sessionsCacheTs = 0;
     }
-  });
+    }); // end execFile query 2
+  }); // end execFile query 1
 }
 
 function loadSessions() {
@@ -2428,9 +2457,19 @@ function getCostAnalytics(sessions) {
   }
 
   for (const s of sessions) {
-    const costData = (s.tool === 'opencode' && opencodeCostCache[s.id])
-      ? opencodeCostCache[s.id]
-      : computeSessionCost(s.id, s.project);
+    let costData;
+    if (s.tool === 'opencode' && opencodeCostCache[s.id]) {
+      costData = opencodeCostCache[s.id];
+    } else if (s.tool === 'cursor' && (s.user_messages > 0 || s.messages > 0)) {
+      // Estimate Cursor cost: avg ~2K input + ~1K output tokens per prompt on Sonnet
+      const userMsgs = s.user_messages || Math.ceil((s.messages || 0) * 0.07);
+      const pricing = getModelPricing('claude-sonnet');
+      const estInput = userMsgs * 2000;
+      const estOutput = userMsgs * 1000;
+      costData = { cost: estInput * pricing.input + estOutput * pricing.output, inputTokens: estInput, outputTokens: estOutput, cacheReadTokens: 0, cacheCreateTokens: 0, contextPctSum: 0, contextTurnCount: 0, model: 'cursor-estimated' };
+    } else {
+      costData = computeSessionCost(s.id, s.project);
+    }
     const cost = costData.cost;
     const tokens = costData.inputTokens + costData.outputTokens + costData.cacheReadTokens + costData.cacheCreateTokens;
     if (cost === 0 && tokens === 0) {
@@ -2452,7 +2491,7 @@ function getCostAnalytics(sessions) {
     byAgent[agent].cost += cost;
     byAgent[agent].sessions++;
     byAgent[agent].tokens += tokens;
-    if (agent === 'codex') byAgent[agent].estimated = true;
+    if (agent === 'codex' || agent === 'cursor') byAgent[agent].estimated = true;
     if (agent === 'opencode' && !costData.model) byAgent[agent].estimated = true;
 
     // Context % across all turns
@@ -2809,9 +2848,13 @@ function getDailyStats(sessions) {
     const day = s.date || fmtLocalDay(s.last_ts);
     const d = ensureDay(day);
     d.sessions++;
-    // Estimate user-only prompts: cursor has ~7% user bubbles, others ~50%
-    const totalMsgEst = s.detail_messages || s.messages || 0;
-    d.messages += Math.ceil(totalMsgEst * (tool === 'cursor' ? 0.07 : 0.5));
+    // Use exact user_messages count if available, otherwise estimate
+    if (s.user_messages > 0) {
+      d.messages += s.user_messages;
+    } else {
+      const totalMsgEst = s.detail_messages || s.messages || 0;
+      d.messages += Math.ceil(totalMsgEst * 0.5);
+    }
     d.hours += Math.min((s.last_ts - s.first_ts) / 3600000, 16);
     d.cost += sessionCost;
     d.agents[tool] = (d.agents[tool] || 0) + 1;
