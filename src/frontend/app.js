@@ -3144,13 +3144,29 @@ function dismissUpdate() {
   startActivePolling();
 
   // Apply saved theme
+  var savedTheme = localStorage.getItem('codedash-theme') || 'dark';
+  setTheme(savedTheme);
+
+  // Set saved theme in selector
+  var themeSel = document.getElementById('themeSelect');
+  if (themeSel) themeSel.value = savedTheme;
+
+  // Set group button state
+  var groupBtn = document.getElementById('groupBtn');
+  if (groupBtn) groupBtn.classList.toggle('active', grouped);
+
+  // Set AI titles toggle
+  var aiToggle = document.getElementById('aiTitlesToggle');
+  if (aiToggle) aiToggle.checked = showAITitles;
+})();
+
 // ── Cloud Sync View ─────────────────────────
 var cloudSessions = null;
 var cloudStats = null;
 var cloudLoading = false;
 var cloudUnlocked = false;
 var cloudConfigured = false;
-var cloudSessionIds = new Set(); // for quick "in cloud" check
+var cloudSessionIds = new Set();
 
 async function renderCloud(container) {
   var profile = null;
@@ -3423,20 +3439,3 @@ async function deleteCloudSession(sessionId) {
     showToast('Error: ' + e.message, 'error');
   }
 }
-
-// ── Init ────────────────────────────────────
-  var savedTheme = localStorage.getItem('codedash-theme') || 'dark';
-  setTheme(savedTheme);
-
-  // Set saved theme in selector
-  var themeSel = document.getElementById('themeSelect');
-  if (themeSel) themeSel.value = savedTheme;
-
-  // Set group button state
-  var groupBtn = document.getElementById('groupBtn');
-  if (groupBtn) groupBtn.classList.toggle('active', grouped);
-
-  // Set AI titles toggle
-  var aiToggle = document.getElementById('aiTitlesToggle');
-  if (aiToggle) aiToggle.checked = showAITitles;
-})();
