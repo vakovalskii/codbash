@@ -359,6 +359,14 @@ function startServer(host, port, openBrowser = true) {
       json(res, stats);
     }
 
+    else if (req.method === 'POST' && pathname === '/api/leaderboard/sync') {
+      syncLeaderboard().then(data => json(res, data)).catch(e => json(res, { error: e.message }, 500));
+    }
+
+    else if (req.method === 'GET' && pathname === '/api/leaderboard/remote') {
+      fetchRemoteLeaderboard().then(data => json(res, data)).catch(e => json(res, { error: e.message }, 500));
+    }
+
     // ── GitHub Auth (Device Flow) ────────────
     else if (req.method === 'POST' && pathname === '/api/github/device-code') {
       githubDeviceCode().then(data => json(res, data)).catch(e => json(res, { error: e.message }, 400));
@@ -555,6 +563,61 @@ function saveGitHubProfile(profile) {
   } else {
     try { fs.unlinkSync(GITHUB_PROFILE_FILE); } catch {}
   }
+}
+
+// ── Leaderboard Sync ──────────────────────
+const LEADERBOARD_API = 'https://codedash-leaderboard.valeriy.workers.dev';
+
+async function syncLeaderboard() {
+  const profile = loadGitHubProfile();
+  if (!profile || !profile.authenticated) throw new Error('Connect GitHub first');
+
+  const stats = getLeaderboardStats();
+  const payload = {
+    username: profile.username,
+    avatar: profile.avatar,
+    name: profile.name,
+    stats: {
+      today: stats.today,
+      totals: stats.totals,
+      agents: stats.agents,
+      streak: stats.streak,
+      activeDays: stats.activeDays,
+    },
+  };
+
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify(payload);
+    const parsed = new URL(LEADERBOARD_API + '/api/stats');
+    const req = https.request({
+      hostname: parsed.hostname, path: parsed.pathname, method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+      timeout: 10000,
+    }, (res) => {
+      let data = '';
+      res.on('data', c => data += c);
+      res.on('end', () => {
+        try {
+          const r = JSON.parse(data);
+          log('SYNC', `Pushed stats to leaderboard as @${profile.username}`);
+          resolve(r);
+        } catch { reject(new Error('Bad response')); }
+      });
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+async function fetchRemoteLeaderboard() {
+  return new Promise((resolve, reject) => {
+    https.get(LEADERBOARD_API + '/api/leaderboard', { timeout: 10000 }, (res) => {
+      let data = '';
+      res.on('data', c => data += c);
+      res.on('end', () => { try { resolve(JSON.parse(data)); } catch { reject(new Error('Parse error')); } });
+    }).on('error', reject);
+  });
 }
 
 // ── LLM Config ─────────────────────────────

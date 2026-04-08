@@ -2638,6 +2638,54 @@ function renderSettings(container) {
   loadLLMSettings();
 }
 
+async function syncLeaderboard() {
+  var btn = document.getElementById('syncBtn');
+  if (btn) btn.textContent = 'Syncing...';
+  try {
+    var resp = await fetch('/api/leaderboard/sync', { method: 'POST' });
+    var data = await resp.json();
+    if (data.ok) {
+      showToast('Stats synced to global leaderboard!');
+      loadGlobalLeaderboard();
+    } else {
+      showToast('Sync failed: ' + (data.error || 'unknown'));
+    }
+  } catch (e) { showToast('Sync error: ' + e.message); }
+  if (btn) btn.textContent = 'Sync to Global Leaderboard';
+}
+
+async function loadGlobalLeaderboard() {
+  var board = document.getElementById('globalBoard');
+  if (!board) return;
+  try {
+    var resp = await fetch('/api/leaderboard/remote');
+    var data = await resp.json();
+    if (!data.users || data.users.length === 0) {
+      board.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted)">No one here yet. Sync your stats to be first!</div>';
+      return;
+    }
+    var html = '';
+    data.users.forEach(function(u, i) {
+      var t = u.stats.today || {};
+      var tot = u.stats.totals || {};
+      html += '<div class="lb-global-row">';
+      html += '<span class="lb-rank' + (i < 3 ? ' lb-rank-' + (i+1) : '') + '">#' + (i+1) + '</span>';
+      html += '<img class="lb-global-avatar" src="' + escHtml(u.avatar || '') + '" alt="">';
+      html += '<div class="lb-global-info">';
+      html += '<div class="lb-global-name">' + escHtml(u.name || u.username) + '</div>';
+      html += '<div class="lb-global-handle">@' + escHtml(u.username) + '</div>';
+      html += '</div>';
+      html += '<div class="lb-global-stats">';
+      html += '<span><strong>' + (t.messages || 0) + '</strong> today</span>';
+      html += '<span><strong>' + (tot.messages || 0).toLocaleString() + '</strong> total</span>';
+      html += '<span><strong>' + (tot.hours || 0) + 'h</strong></span>';
+      if (u.stats.streak > 1) html += '<span class="lb-streak-badge">' + u.stats.streak + 'd streak</span>';
+      html += '</div></div>';
+    });
+    board.innerHTML = html;
+  } catch { board.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted)">Could not load global leaderboard</div>'; }
+}
+
 async function githubConnect() {
   try {
     showToast('Starting GitHub auth...');
@@ -2779,10 +2827,24 @@ async function renderLeaderboard(container) {
     });
     html += '</div>';
 
-    html += '<div class="lb-footer">Active days: ' + data.activeDays + ' | ID: ' + escHtml(data.anon.name) + '</div>';
+    // Sync button + Global leaderboard
+    if (gh.authenticated) {
+      html += '<div style="text-align:center;margin:20px 0">';
+      html += '<button class="lb-github-btn" onclick="syncLeaderboard()" id="syncBtn">Sync to Global Leaderboard</button>';
+      html += '</div>';
+    }
+
+    // Global leaderboard
+    html += '<div class="lb-section-title">Global Leaderboard</div>';
+    html += '<div id="globalBoard"><div class="loading">Loading...</div></div>';
+
+    html += '<div class="lb-footer">Active days: ' + data.activeDays + ' | <a href="https://codedash-leaderboard.valeriy.workers.dev" target="_blank" style="color:var(--accent-blue)">View public leaderboard</a></div>';
     html += '</div>';
 
     container.innerHTML = html;
+
+    // Load global leaderboard async
+    loadGlobalLeaderboard();
   } catch (e) {
     container.innerHTML = '<div class="empty-state">Failed to load stats: ' + escHtml(e.message) + '</div>';
   }
