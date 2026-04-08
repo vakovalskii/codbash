@@ -98,13 +98,46 @@ function parseOpenCodeMcpServer(toolName) {
   return toolName.slice(0, idx);
 }
 
+// Disk cache for parsed Claude session files (keyed by path + mtime + size)
+const PARSED_CACHE_FILE = path.join(os.tmpdir(), 'codedash-parsed-cache.json');
+let _parsedDiskCache = null;
+let _parsedDiskCacheDirty = false;
+
+function _loadParsedDiskCache() {
+  if (_parsedDiskCache) return;
+  try {
+    if (fs.existsSync(PARSED_CACHE_FILE)) {
+      _parsedDiskCache = JSON.parse(fs.readFileSync(PARSED_CACHE_FILE, 'utf8'));
+    }
+  } catch {}
+  if (!_parsedDiskCache) _parsedDiskCache = {};
+}
+
+function _saveParsedDiskCache() {
+  if (!_parsedDiskCacheDirty || !_parsedDiskCache) return;
+  try {
+    fs.writeFileSync(PARSED_CACHE_FILE, JSON.stringify(_parsedDiskCache));
+    _parsedDiskCacheDirty = false;
+  } catch {}
+}
+
 function parseClaudeSessionFile(sessionFile) {
   if (!fs.existsSync(sessionFile)) return null;
 
   let stat;
-  let lines;
   try {
     stat = fs.statSync(sessionFile);
+  } catch {
+    return null;
+  }
+
+  // Check disk cache (keyed by file path + mtime + size)
+  _loadParsedDiskCache();
+  const cacheKey = sessionFile + '|' + stat.mtimeMs + '|' + stat.size;
+  if (_parsedDiskCache[cacheKey]) return _parsedDiskCache[cacheKey];
+
+  let lines;
+  try {
     lines = readLines(sessionFile);
   } catch {
     return null;
@@ -169,7 +202,7 @@ function parseClaudeSessionFile(sessionFile) {
     } catch {}
   }
 
-  return {
+  const result = {
     projectPath,
     tool,
     msgCount,
@@ -182,6 +215,11 @@ function parseClaudeSessionFile(sessionFile) {
     mcpServers: Array.from(mcpSet),
     skills: Array.from(skillSet),
   };
+
+  // Cache to disk
+  _parsedDiskCache[cacheKey] = result;
+  _parsedDiskCacheDirty = true;
+  return result;
 }
 
 function mergeClaudeSessionDetail(session, summary, sessionFile) {
@@ -1071,10 +1109,36 @@ function scanCodexSessions() {
 //      from the session cwd string. Works without git for standard worktree layouts.
 
 const _gitRootCache = {};
+const GIT_ROOT_CACHE_FILE = path.join(os.tmpdir(), 'codedash-gitroot-cache.json');
+let _gitRootDiskCache = null;
+
+function _loadGitRootDiskCache() {
+  if (_gitRootDiskCache) return;
+  try {
+    if (fs.existsSync(GIT_ROOT_CACHE_FILE)) {
+      _gitRootDiskCache = JSON.parse(fs.readFileSync(GIT_ROOT_CACHE_FILE, 'utf8'));
+      // Pre-fill memory cache from disk
+      Object.assign(_gitRootCache, _gitRootDiskCache);
+    }
+  } catch {}
+  if (!_gitRootDiskCache) _gitRootDiskCache = {};
+}
+
+function _saveGitRootDiskCache() {
+  try {
+    fs.writeFileSync(GIT_ROOT_CACHE_FILE, JSON.stringify(_gitRootCache));
+  } catch {}
+}
 
 function resolveGitRoot(projectPath) {
   if (!projectPath) return '';
+  _loadGitRootDiskCache();
   if (_gitRootCache[projectPath] !== undefined) return _gitRootCache[projectPath];
+  // Skip remote/non-existent paths
+  if (!fs.existsSync(projectPath)) {
+    _gitRootCache[projectPath] = '';
+    return '';
+  }
   try {
     const root = execFileSync('git', ['-C', projectPath, 'rev-parse', '--show-toplevel'], {
       encoding: 'utf8', timeout: 2000, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe']
@@ -1082,7 +1146,6 @@ function resolveGitRoot(projectPath) {
     _gitRootCache[projectPath] = root;
     return root;
   } catch {
-    // git not available or project path not mounted (e.g. containerised env) — fall back gracefully
     _gitRootCache[projectPath] = '';
     return '';
   }
@@ -1360,29 +1423,25 @@ function loadSessions() {
   }
 
   // Enrich Claude sessions with detail file info
+  // Build file index once to avoid O(sessions*projects) existsSync scans
+  _buildSessionFileIndex();
   for (const [sid, s] of Object.entries(sessions)) {
     if (s.tool !== 'claude' && s.tool !== 'claude-ext') continue;
     let sessionFile = '';
-    if (s._session_file && fs.existsSync(s._session_file)) {
+    if (s._session_file) {
       sessionFile = s._session_file;
-    } else if (s.project) {
-      const claudeDir = s._claude_dir || CLAUDE_DIR;
-      const projectsDir = path.join(claudeDir, 'projects');
-      const projectKey = s.project.replace(/[^a-zA-Z0-9-]/g, '-');
-      const candidate = path.join(projectsDir, projectKey, `${sid}.jsonl`);
-      if (fs.existsSync(candidate)) sessionFile = candidate;
-    }
-    if (!sessionFile) {
-      const found = findSessionFile(sid, s.project);
-      if (found && found.format === 'claude') sessionFile = found.file;
+    } else {
+      // Use pre-built index instead of scanning dirs
+      const indexed = _sessionFileIndex[sid];
+      if (indexed && indexed.format === 'claude') sessionFile = indexed.file;
     }
 
-    if (fs.existsSync(sessionFile)) {
+    if (sessionFile) {
       const summary = parseClaudeSessionFile(sessionFile);
       if (summary) mergeClaudeSessionDetail(s, summary, sessionFile);
       else {
         s.has_detail = true;
-        s.file_size = fs.statSync(sessionFile).size;
+        try { s.file_size = fs.statSync(sessionFile).size; } catch { s.file_size = 0; }
         s._session_file = sessionFile;
       }
     } else if (!s.has_detail) {
@@ -1468,6 +1527,10 @@ function loadSessions() {
 
   // Flag for frontend: true = cursor vscdb still loading, will have more data soon
   result._loading = !_cursorVscdbSessions && _cursorVscdbLoading;
+
+  // Flush disk caches
+  _saveParsedDiskCache();
+  _saveGitRootDiskCache();
 
   _sessionsCache = result;
   _sessionsCacheTs = Date.now();
@@ -1683,32 +1746,92 @@ function exportSessionMarkdown(sessionId, project) {
 
 // ── Session Preview (first N messages, lightweight) ────────
 
+// Session file index: sessionId -> file path (built once, avoids O(sessions*projects) scans)
+let _sessionFileIndex = null;
+let _sessionFileIndexTs = 0;
+const SESSION_FILE_INDEX_TTL = 30000; // 30 seconds
+
+function _buildSessionFileIndex() {
+  const now = Date.now();
+  if (_sessionFileIndex && (now - _sessionFileIndexTs) < SESSION_FILE_INDEX_TTL) return;
+
+  _sessionFileIndex = {};
+  // Index Claude project files
+  const allProjectDirs = [PROJECTS_DIR];
+  for (const extraDir of EXTRA_CLAUDE_DIRS) {
+    allProjectDirs.push(path.join(extraDir, 'projects'));
+  }
+  for (const projDir of allProjectDirs) {
+    if (!fs.existsSync(projDir)) continue;
+    try {
+      for (const proj of fs.readdirSync(projDir)) {
+        const dir = path.join(projDir, proj);
+        try {
+          if (!fs.statSync(dir).isDirectory()) continue;
+          for (const file of fs.readdirSync(dir)) {
+            if (!file.endsWith('.jsonl')) continue;
+            const sid = file.replace('.jsonl', '');
+            if (!_sessionFileIndex[sid]) {
+              _sessionFileIndex[sid] = { file: path.join(dir, file), format: 'claude' };
+            }
+          }
+        } catch {}
+      }
+    } catch {}
+  }
+
+  // Index Cursor transcript files
+  if (fs.existsSync(CURSOR_PROJECTS)) {
+    try {
+      for (const proj of fs.readdirSync(CURSOR_PROJECTS)) {
+        const transcriptsDir = path.join(CURSOR_PROJECTS, proj, 'agent-transcripts');
+        if (!fs.existsSync(transcriptsDir)) continue;
+        try {
+          for (const sessDir of fs.readdirSync(transcriptsDir)) {
+            const f = path.join(transcriptsDir, sessDir, sessDir + '.jsonl');
+            if (fs.existsSync(f)) _sessionFileIndex[sessDir] = { file: f, format: 'cursor' };
+          }
+        } catch {}
+      }
+    } catch {}
+  }
+
+  // Index Cursor chat files
+  if (fs.existsSync(CURSOR_CHATS)) {
+    try {
+      for (const chatDir of fs.readdirSync(CURSOR_CHATS)) {
+        const fullDir = path.join(CURSOR_CHATS, chatDir);
+        try {
+          if (!fs.statSync(fullDir).isDirectory()) continue;
+          for (const f of fs.readdirSync(fullDir)) {
+            if (f.endsWith('.jsonl') || f.endsWith('.json')) {
+              _sessionFileIndex[chatDir] = { file: path.join(fullDir, f), format: 'cursor' };
+              break;
+            }
+          }
+        } catch {}
+      }
+    } catch {}
+  }
+
+  _sessionFileIndexTs = now;
+}
+
 function findSessionFile(sessionId, project) {
-  // Try Claude projects dir
+  _buildSessionFileIndex();
+
+  // Fast index lookup
+  if (_sessionFileIndex[sessionId]) return _sessionFileIndex[sessionId];
+
+  // Try Claude projects dir (direct path if project known)
   if (project) {
     const projectKey = project.replace(/[^a-zA-Z0-9-]/g, '-');
     const claudeFile = path.join(PROJECTS_DIR, projectKey, `${sessionId}.jsonl`);
     if (fs.existsSync(claudeFile)) return { file: claudeFile, format: 'claude' };
   }
 
-  // Try all Claude project dirs
-  if (fs.existsSync(PROJECTS_DIR)) {
-    for (const proj of fs.readdirSync(PROJECTS_DIR)) {
-      const f = path.join(PROJECTS_DIR, proj, `${sessionId}.jsonl`);
-      if (fs.existsSync(f)) return { file: f, format: 'claude' };
-    }
-  }
-
-  // WSL: try extra Claude dirs
-  for (const extraDir of EXTRA_CLAUDE_DIRS) {
-    const extraProjects = path.join(extraDir, 'projects');
-    if (fs.existsSync(extraProjects)) {
-      for (const proj of fs.readdirSync(extraProjects)) {
-        const f = path.join(extraProjects, proj, `${sessionId}.jsonl`);
-        if (fs.existsSync(f)) return { file: f, format: 'claude' };
-      }
-    }
-  }
+  // Extra Claude dirs and Cursor files are already in the index.
+  // Only Codex (date tree) and SQLite agents need fallback lookup.
 
   // Try Codex sessions dir (walk year/month/day)
   const codexSessionsDir = path.join(CODEX_DIR, 'sessions');
@@ -1734,27 +1857,7 @@ function findSessionFile(sessionId, project) {
     return { file: OPENCODE_DB, format: 'opencode', sessionId: sessionId };
   }
 
-  // Try Cursor
-  if (fs.existsSync(CURSOR_PROJECTS) || fs.existsSync(CURSOR_CHATS)) {
-    // Check projects
-    if (fs.existsSync(CURSOR_PROJECTS)) {
-      for (const proj of fs.readdirSync(CURSOR_PROJECTS)) {
-        const f = path.join(CURSOR_PROJECTS, proj, 'agent-transcripts', sessionId, sessionId + '.jsonl');
-        if (fs.existsSync(f)) return { file: f, format: 'cursor' };
-      }
-    }
-    // Check chats
-    if (fs.existsSync(CURSOR_CHATS)) {
-      const chatDir = path.join(CURSOR_CHATS, sessionId);
-      if (fs.existsSync(chatDir)) {
-        for (const f of fs.readdirSync(chatDir)) {
-          if (f.endsWith('.jsonl') || f.endsWith('.json')) {
-            return { file: path.join(chatDir, f), format: 'cursor' };
-          }
-        }
-      }
-    }
-  }
+  // Cursor JSONL files are already in the index. Only check vscdb fallback.
 
   // Try Cursor global vscdb
   if (fs.existsSync(CURSOR_GLOBAL_DB)) {
