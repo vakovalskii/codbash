@@ -570,16 +570,26 @@ function decodeCursorProjectFolderKey(proj) {
   return cwd;
 }
 
-// Build composerId -> project path mapping from Cursor workspace storage (cached 5 min)
+// Build composerId -> project path mapping from Cursor workspace storage
+// Uses disk cache to avoid querying 190+ SQLite files on every startup
 let _cursorWsMapCache = null;
-let _cursorWsMapCacheTs = 0;
-const CURSOR_WS_MAP_TTL = 300000; // 5 minutes
+const CURSOR_WS_MAP_CACHE_FILE = path.join(os.tmpdir(), 'codedash-cursor-ws-map.json');
+const CURSOR_WS_MAP_TTL = 600000; // 10 minutes
 
 function buildCursorWorkspaceMap() {
-  const now = Date.now();
-  if (_cursorWsMapCache && (now - _cursorWsMapCacheTs) < CURSOR_WS_MAP_TTL) {
-    return _cursorWsMapCache;
-  }
+  if (_cursorWsMapCache) return _cursorWsMapCache;
+
+  // Try loading from disk cache first (~1ms vs ~1500ms full rebuild)
+  try {
+    if (fs.existsSync(CURSOR_WS_MAP_CACHE_FILE)) {
+      const cached = JSON.parse(fs.readFileSync(CURSOR_WS_MAP_CACHE_FILE, 'utf8'));
+      if (cached._ts && (Date.now() - cached._ts) < CURSOR_WS_MAP_TTL) {
+        delete cached._ts;
+        _cursorWsMapCache = cached;
+        return cached;
+      }
+    }
+  } catch {}
 
   const map = {}; // composerId -> projectPath
   if (!fs.existsSync(CURSOR_WORKSPACE_STORAGE)) return map;
@@ -621,7 +631,12 @@ function buildCursorWorkspaceMap() {
   } catch {}
 
   _cursorWsMapCache = map;
-  _cursorWsMapCacheTs = now;
+
+  // Save to disk cache for fast startup next time
+  try {
+    fs.writeFileSync(CURSOR_WS_MAP_CACHE_FILE, JSON.stringify(Object.assign({ _ts: Date.now() }, map)));
+  } catch {}
+
   return map;
 }
 
@@ -733,62 +748,8 @@ function scanCursorSessions() {
     } catch {}
   }
 
-  // Scan Cursor global state.vscdb (composerData + bubbleId entries)
-  if (fs.existsSync(CURSOR_GLOBAL_DB)) {
-    try {
-      // Build workspace -> project mapping for project association
-      const wsMap = buildCursorWorkspaceMap();
-
-      // Use json_extract + json_array_length for lightweight query (~215KB vs ~48MB full values)
-      const rows = execFileSync('sqlite3', [
-        '-separator', '\t',
-        CURSOR_GLOBAL_DB,
-        "SELECT json_extract(value, '$.composerId'), json_extract(value, '$.name'), json_extract(value, '$.createdAt'), json_extract(value, '$.lastUpdatedAt'), json_array_length(json_extract(value, '$.fullConversationHeadersOnly')) FROM cursorDiskKV WHERE key LIKE 'composerData:%'"
-      ], { encoding: 'utf8', timeout: 15000, maxBuffer: 10 * 1024 * 1024, windowsHide: true }).trim();
-
-      if (rows) {
-        for (const row of rows.split('\n')) {
-          const cols = row.split('\t');
-          if (cols.length < 5) continue;
-
-          try {
-            const composerId = cols[0];
-            if (!composerId || seenIds.has(composerId)) continue;
-
-            const name = cols[1] || '';
-            const createdAt = parseInt(cols[2]) || 0;
-            const lastUpdatedAt = parseInt(cols[3]) || createdAt;
-            const msgCount = parseInt(cols[4]) || 0;
-
-            // Skip empty sessions (no messages at all)
-            if (msgCount === 0) continue;
-
-            // Get first user message text from the session name (Cursor auto-names sessions)
-            const firstMsg = name.slice(0, 200);
-
-            // Resolve project path from workspace mapping
-            const projectPath = wsMap[composerId] || '';
-
-            seenIds.add(composerId);
-            sessions.push({
-              id: composerId,
-              tool: 'cursor',
-              project: projectPath,
-              project_short: projectPath ? projectPath.replace(os.homedir(), '~') : '',
-              first_ts: createdAt,
-              last_ts: lastUpdatedAt,
-              messages: msgCount,
-              first_message: firstMsg,
-              has_detail: true,
-              file_size: 0,
-              detail_messages: msgCount,
-              _cursor_vscdb: true,
-            });
-          } catch {}
-        }
-      }
-    } catch {}
-  }
+  // Cursor vscdb sessions are loaded via background task (see _loadCursorVscdbInBackground)
+  // and merged into loadSessions() result when ready
 
   return sessions;
 }
@@ -1171,6 +1132,86 @@ let _sessionsCache = null;
 let _sessionsCacheTs = 0;
 const SESSIONS_CACHE_TTL = 10000; // 10 seconds
 
+// Progressive loading: cursor vscdb sessions load in background
+let _cursorVscdbSessions = null;
+let _cursorVscdbLoading = false;
+
+function _loadCursorVscdbInBackground() {
+  if (_cursorVscdbLoading || _cursorVscdbSessions) return;
+  if (!fs.existsSync(CURSOR_GLOBAL_DB)) { _cursorVscdbSessions = []; return; }
+  _cursorVscdbLoading = true;
+
+  // Workspace map from disk cache is instant (~1ms), only global DB query is slow
+  const wsMap = buildCursorWorkspaceMap();
+  const homedir = os.homedir();
+
+  // Async sqlite3 query — does NOT block the event loop
+  const query = "SELECT json_extract(value, '$.composerId'), json_extract(value, '$.name'), json_extract(value, '$.createdAt'), json_extract(value, '$.lastUpdatedAt'), json_array_length(json_extract(value, '$.fullConversationHeadersOnly')) FROM cursorDiskKV WHERE key LIKE 'composerData:%'";
+
+  const child = require('child_process').execFile('sqlite3', [
+    '-separator', '\t', CURSOR_GLOBAL_DB, query
+  ], { encoding: 'utf8', timeout: 15000, maxBuffer: 10 * 1024 * 1024, windowsHide: true },
+  function(err, stdout) {
+    try {
+      const results = [];
+      const rows = (stdout || '').trim();
+      if (rows) {
+        for (const row of rows.split('\n')) {
+          const cols = row.split('\t');
+          if (cols.length < 5) continue;
+          const composerId = cols[0];
+          if (!composerId) continue;
+          const msgCount = parseInt(cols[4]) || 0;
+          if (msgCount === 0) continue;
+          const projectPath = wsMap[composerId] || '';
+          results.push({
+            id: composerId,
+            tool: 'cursor',
+            project: projectPath,
+            project_short: projectPath ? projectPath.replace(homedir, '~') : '',
+            first_ts: parseInt(cols[2]) || 0,
+            last_ts: parseInt(cols[3]) || parseInt(cols[2]) || 0,
+            messages: msgCount,
+            first_message: (cols[1] || '').slice(0, 200),
+            has_detail: true,
+            file_size: 0,
+            detail_messages: msgCount,
+            _cursor_vscdb: true,
+          });
+        }
+      }
+      _cursorVscdbSessions = results;
+    } catch {
+      _cursorVscdbSessions = [];
+    }
+    _cursorVscdbLoading = false;
+    // Merge into existing cache instead of full invalidation
+    if (_sessionsCache && _cursorVscdbSessions && _cursorVscdbSessions.length > 0) {
+      const existingIds = new Set(_sessionsCache.map(function(s) { return s.id; }));
+      const newSessions = [];
+      for (var i = 0; i < _cursorVscdbSessions.length; i++) {
+        var cs = _cursorVscdbSessions[i];
+        if (existingIds.has(cs.id)) continue;
+        cs.first_time = new Date(cs.first_ts).toLocaleString('sv-SE').slice(0, 16);
+        cs.last_time = new Date(cs.last_ts).toLocaleString('sv-SE').slice(0, 16);
+        var dt = new Date(cs.last_ts);
+        cs.date = dt.getFullYear() + '-' + String(dt.getMonth()+1).padStart(2,'0') + '-' + String(dt.getDate()).padStart(2,'0');
+        cs.git_root = '';
+        if (!cs.mcp_servers) cs.mcp_servers = [];
+        if (!cs.skills) cs.skills = [];
+        newSessions.push(cs);
+      }
+      if (newSessions.length > 0) {
+        _sessionsCache = _sessionsCache.concat(newSessions).sort(function(a, b) { return b.last_ts - a.last_ts; });
+        // Keep the same cache timestamp — no full rebuild needed
+      }
+    } else {
+      _sessionsCache = null;
+      _sessionsCacheTs = 0;
+    }
+  });
+}
+
 function loadSessions() {
   const now = Date.now();
   if (_sessionsCache && (now - _sessionsCacheTs) < SESSIONS_CACHE_TTL) {
@@ -1399,6 +1440,17 @@ function loadSessions() {
     if (!s.skills) s.skills = [];
   }
 
+  // Merge background-loaded Cursor vscdb sessions (progressive loading)
+  const existingIds = new Set(Object.keys(sessions));
+  if (_cursorVscdbSessions) {
+    for (const cs of _cursorVscdbSessions) {
+      if (!existingIds.has(cs.id)) sessions[cs.id] = cs;
+    }
+  } else {
+    // Kick off background loading if not started yet
+    _loadCursorVscdbInBackground();
+  }
+
   const result = Object.values(sessions).sort((a, b) => b.last_ts - a.last_ts);
 
   // Collect unique project paths and resolve git roots in one pass
@@ -1413,6 +1465,9 @@ function loadSessions() {
     // Priority: worktree-state.originalCwd (container-safe) > git rev-parse > path heuristic (frontend)
     s.git_root = s.worktree_original_cwd || (s.project ? (_gitRootCache[s.project] || '') : '');
   }
+
+  // Flag for frontend: true = cursor vscdb still loading, will have more data soon
+  result._loading = !_cursorVscdbSessions && _cursorVscdbLoading;
 
   _sessionsCache = result;
   _sessionsCacheTs = Date.now();

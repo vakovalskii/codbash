@@ -390,6 +390,10 @@ async function loadSessions() {
     var resp = await fetch('/api/sessions');
     allSessions = await resp.json();
     applyFilters();
+    // Progressive loading: if server is still loading cursor vscdb sessions, auto-refresh
+    if (resp.headers.get('X-Loading') === '1') {
+      setTimeout(loadSessions, 2000);
+    }
   } catch (e) {
     document.getElementById('content').innerHTML = '<div class="empty-state">Failed to load sessions. Is the server running?</div>';
   }

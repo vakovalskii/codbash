@@ -68,7 +68,9 @@ function startServer(host, port, openBrowser = true) {
       const sessions = loadSessions();
       const byTool = {};
       sessions.forEach(s => { byTool[s.tool] = (byTool[s.tool] || 0) + 1; });
-      log('DATA', `loaded ${sessions.length} sessions`, byTool);
+      log('DATA', `loaded ${sessions.length} sessions${sessions._loading ? ' (cursor loading...)' : ''}`, byTool);
+      // Send _loading flag as header to avoid polluting array response
+      if (sessions._loading) res.setHeader('X-Loading', '1');
       json(res, sessions);
     }
 
