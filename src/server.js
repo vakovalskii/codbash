@@ -573,10 +573,13 @@ async function syncLeaderboard() {
   if (!profile || !profile.authenticated) throw new Error('Connect GitHub first');
 
   const stats = getLeaderboardStats();
+  const anon = stats.anon || {};
   const payload = {
     username: profile.username,
     avatar: profile.avatar,
     name: profile.name,
+    deviceId: anon.id || require('crypto').randomUUID(),
+    token: profile.token, // for server-side GitHub verification
     stats: {
       today: stats.today,
       totals: stats.totals,
