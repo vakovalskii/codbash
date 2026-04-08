@@ -2656,10 +2656,18 @@ async function syncLeaderboard() {
 
 var _lbRemoteData = null;
 var _lbCurrentTab = 'today';
+var _lbSortBy = 'messages';
 
 function switchLbTab(tab, btn) {
   _lbCurrentTab = tab;
   document.querySelectorAll('.lb-tab').forEach(function(t) { t.classList.remove('active'); });
+  if (btn) btn.classList.add('active');
+  renderGlobalBoard();
+}
+
+function switchLbSort(sortBy, btn) {
+  _lbSortBy = sortBy;
+  document.querySelectorAll('.lb-sort').forEach(function(t) { t.classList.remove('active'); });
   if (btn) btn.classList.add('active');
   renderGlobalBoard();
 }
@@ -2673,14 +2681,15 @@ function renderGlobalBoard() {
     return;
   }
 
-  // Sort by tab
+  // Sort by tab + sort metric
   var sorted = data.users.slice();
+  var sortKey = _lbSortBy || 'messages';
   if (_lbCurrentTab === 'today') {
-    sorted.sort(function(a,b) { return (b.stats?.today?.messages||0) - (a.stats?.today?.messages||0); });
+    sorted.sort(function(a,b) { return (b.stats?.today?.[sortKey]||0) - (a.stats?.today?.[sortKey]||0); });
   } else if (_lbCurrentTab === 'week') {
-    sorted.sort(function(a,b) { return (b.stats?.week?.messages||0) - (a.stats?.week?.messages||0); });
+    sorted.sort(function(a,b) { return (b.stats?.week?.[sortKey]||0) - (a.stats?.week?.[sortKey]||0); });
   } else {
-    sorted.sort(function(a,b) { return (b.stats?.totals?.messages||0) - (a.stats?.totals?.messages||0); });
+    sorted.sort(function(a,b) { return (b.stats?.totals?.[sortKey]||0) - (a.stats?.totals?.[sortKey]||0); });
   }
 
   var html = '';
@@ -2714,9 +2723,9 @@ function renderGlobalBoard() {
     }
     html += '</div>';
     html += '<div class="lb-global-stats">';
-    html += '<span title="Prompts ' + label + '"><strong>' + msgs.toLocaleString() + '</strong> prompts</span>';
-    html += '<span title="Agent hours ' + label + '"><strong>' + hours.toFixed(1) + 'h</strong> coded</span>';
-    html += '<span title="API cost ' + label + '"><strong>$' + cost.toFixed(0) + '</strong> spent</span>';
+    html += '<span class="' + (sortKey === 'messages' ? 'lb-sort-active' : '') + '" title="Prompts ' + label + '"><strong>' + msgs.toLocaleString() + '</strong> prompts</span>';
+    html += '<span class="' + (sortKey === 'hours' ? 'lb-sort-active' : '') + '" title="Agent hours ' + label + '"><strong>' + hours.toFixed(1) + 'h</strong> coded</span>';
+    html += '<span class="' + (sortKey === 'cost' ? 'lb-sort-active' : '') + '" title="API cost ' + label + '"><strong>$' + cost.toFixed(0) + '</strong> spent</span>';
     if (u.stats?.streak > 1) html += '<span class="lb-streak-badge" title="Coding streak — days in a row with activity">&#128293; ' + u.stats.streak + 'd streak</span>';
     html += '</div></div>';
   });
@@ -2895,10 +2904,18 @@ async function renderLeaderboard(container) {
 
     // Global leaderboard with tabs
     html += '<div class="lb-section-title">Global Leaderboard</div>';
+    html += '<div class="lb-tabs-row">';
     html += '<div class="lb-tabs">';
     html += '<button class="lb-tab active" onclick="switchLbTab(\'today\',this)">Today</button>';
     html += '<button class="lb-tab" onclick="switchLbTab(\'week\',this)">Week</button>';
     html += '<button class="lb-tab" onclick="switchLbTab(\'alltime\',this)">All Time</button>';
+    html += '</div>';
+    html += '<div class="lb-tabs lb-sort-tabs">';
+    html += '<span class="lb-sort-label">Sort by:</span>';
+    html += '<button class="lb-sort active" onclick="switchLbSort(\'messages\',this)">Prompts</button>';
+    html += '<button class="lb-sort" onclick="switchLbSort(\'hours\',this)">Hours</button>';
+    html += '<button class="lb-sort" onclick="switchLbSort(\'cost\',this)">Cost</button>';
+    html += '</div>';
     html += '</div>';
     html += '<div id="globalBoard"><div class="loading">Loading...</div></div>';
 

@@ -2154,6 +2154,20 @@ body {
 .lb-tab.active { background: var(--accent-blue); color: #fff; border-color: var(--accent-blue); }
 .lb-tab:hover:not(.active) { border-color: var(--accent-blue); color: var(--text-primary); }
 
+.lb-tabs-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+.lb-tabs-row .lb-tabs { margin-bottom: 0; }
+.lb-sort-tabs { display: flex; align-items: center; gap: 4px; }
+.lb-sort-label { font-size: 12px; color: var(--text-muted); margin-right: 2px; }
+.lb-sort {
+    padding: 4px 12px; border: 1px solid var(--border); border-radius: 6px;
+    background: none; color: var(--text-muted); cursor: pointer; font-size: 12px; font-weight: 600;
+    transition: all 0.15s;
+}
+.lb-sort.active { background: var(--accent-purple); color: #fff; border-color: var(--accent-purple); }
+.lb-sort:hover:not(.active) { border-color: var(--accent-purple); color: var(--text-primary); }
+.lb-sort-active { color: var(--accent-purple); }
+.lb-sort-active strong { border-bottom: 2px solid var(--accent-purple); padding-bottom: 1px; }
+
 .lb-global-name a { color: var(--text-primary); text-decoration: none; }
 .lb-global-name a:hover { color: var(--accent-blue); text-decoration: underline; }
 
