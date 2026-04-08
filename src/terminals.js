@@ -1,6 +1,8 @@
 'use strict';
 
 const fs = require('fs');
+const path = require('path');
+const os = require('os');
 const { execSync, exec } = require('child_process');
 
 // Run cmux CLI command via osascript — needed because codedash runs as a detached server
@@ -28,10 +30,11 @@ function detectTerminals() {
     terminals.push({ id: 'terminal', name: 'Terminal.app', available: true });
     // Check Warp
     try {
-      if (fs.existsSync('/Applications/Warp.app')) {
-        terminals.push({ id: 'warp', name: 'Warp', available: true });
-      }
-    } catch {}
+      const warpInstalled = fs.existsSync('/Applications/Warp.app');
+      terminals.push({ id: 'warp', name: 'Warp', available: warpInstalled });
+    } catch {
+      terminals.push({ id: 'warp', name: 'Warp', available: false });
+    }
     // Check Kitty
     try {
       execSync('which kitty', { stdio: 'pipe' });
@@ -110,13 +113,32 @@ function openInTerminal(sessionId, tool, flags, projectDir, terminalId) {
           do script "${escapedCmd}"
         end tell'`);
         break;
-      case 'warp':
-        execSync(`osascript -e 'tell application "Warp"
-          activate
-        end tell'`);
-        // Warp doesn't have great AppleScript support, use open
-        setTimeout(() => exec(`osascript -e 'tell application "System Events" to keystroke "${fullCmd}" & return'`), 500);
+      case 'warp': {
+        // Warp Launch Configurations API — write temp YAML, open via URI scheme
+        const warpConfigDir = path.join(os.homedir(), '.warp', 'launch_configurations');
+        const warpConfigName = `codedash-${Date.now()}`;
+        const warpConfigPath = path.join(warpConfigDir, `${warpConfigName}.yaml`);
+        fs.mkdirSync(warpConfigDir, { recursive: true });
+        const warpYaml = [
+          '---',
+          `name: ${warpConfigName}`,
+          'windows:',
+          '  - tabs:',
+          '      - layout:',
+          `          cwd: "${projectDir || ''}"`,
+          '          commands:',
+          `            - exec: "${cmd.replace(/"/g, '\\"')}"`,
+        ].join('\n') + '\n';
+        fs.writeFileSync(warpConfigPath, warpYaml);
+        try {
+          execSync(`open "warp://launch/${warpConfigName}"`, { stdio: 'pipe', timeout: 3000 });
+        } catch {
+          // Fallback to Terminal.app
+          execSync(`osascript -e 'tell application "Terminal" to do script "${escapedCmd}"'`);
+        }
+        setTimeout(() => { try { fs.unlinkSync(warpConfigPath); } catch {} }, 3000);
         break;
+      }
       case 'kitty':
         exec(`kitty --single-instance bash -c '${fullCmd}; exec bash'`);
         break;
