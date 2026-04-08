@@ -2,15 +2,15 @@
 
 const CHANGELOG = [
   {
-    version: '6.14.5',
+    version: '6.14.6',
     date: '2026-04-08',
-    title: 'Cursor sessions + 11x faster loading',
+    title: 'Cursor sessions + massive performance boost',
     changes: [
       'Scan 400+ Cursor sessions from globalStorage state.vscdb',
       'Progressive loading: fast sessions first, Cursor vscdb in background',
-      'Disk cache for parsed sessions, git roots, workspace mapping',
+      'Disk cache for sessions, costs, git roots, daily stats, workspace map',
       'Session file index eliminates 15K+ filesystem calls',
-      'Cold start 5.6s→2.2s, warm start 5.6s→0.5s',
+      'Analytics/leaderboard: was hanging 5-10 min, now loads in ~2s',
     ],
   },
   {
