@@ -8,6 +8,7 @@ let filteredSessions = [];
 let currentView = 'sessions';  // sessions, projects, timeline, activity, starred
 let grouped = true;
 let layout = localStorage.getItem('codedash-layout') || 'grid'; // 'grid' or 'list'
+let groupingMode = normalizeGroupingMode(localStorage.getItem('codedash-grouping-mode'));
 let searchQuery = '';
 let toolFilter = null;  // null, 'claude', 'codex'
 let tagFilter = '';
@@ -55,18 +56,38 @@ function getProjectName(fullPath) {
   return parts[parts.length - 1] || 'unknown';
 }
 
-// Returns the git repo name from session data.
-// Prefers s.git_root resolved by the backend (git rev-parse --show-toplevel),
-// falls back to path-based heuristic for sessions without it.
+function normalizeGroupingMode(mode) {
+  return mode === 'repo' ? 'repo' : 'folder';
+}
+
+function getRepoInfo(fullPath, gitRoot) {
+  var repoRoot = '';
+  if (gitRoot) {
+    repoRoot = gitRoot.replace(/\/+$/, '');
+  } else if (fullPath) {
+    var cleaned = fullPath.replace(/\/+$/, '');
+    var wt = cleaned.match(/^(.*?)\/.claude\/worktrees\//);
+    var codex = cleaned.match(/^(.*?)\/.codex\//);
+    repoRoot = wt ? wt[1] : (codex ? codex[1] : cleaned);
+  }
+
+  var name = repoRoot ? repoRoot.split('/').pop() : 'unknown';
+  return {
+    key: repoRoot || 'unknown',
+    name: name || 'unknown'
+  };
+}
+
 function getGitProjectName(fullPath, gitRoot) {
-  if (gitRoot) return gitRoot.replace(/\/+$/, '').split('/').pop() || 'unknown';
-  if (!fullPath) return 'unknown';
-  var cleaned = fullPath.replace(/\/+$/, '');
-  var wt = cleaned.match(/^(.*?)\/.claude\/worktrees\//);
-  if (wt) return wt[1].split('/').pop() || 'unknown';
-  var codex = cleaned.match(/^(.*?)\/.codex\//);
-  if (codex) return codex[1].split('/').pop() || 'unknown';
-  return cleaned.split('/').pop() || 'unknown';
+  return getRepoInfo(fullPath, gitRoot).name;
+}
+
+function getSessionGroupInfo(session) {
+  if (groupingMode === 'repo') {
+    return getRepoInfo(session.project, session.git_root);
+  }
+  var name = getProjectName(session.project);
+  return { key: name, name: name };
 }
 
 // ── Utilities ──────────────────────────────────────────────────
@@ -304,6 +325,12 @@ function toggleStar(id) {
 function toggleAITitles(checked) {
   showAITitles = checked;
   localStorage.setItem('codedash-ai-titles', checked ? 'true' : 'false');
+  render();
+}
+
+function saveGroupingMode(mode) {
+  groupingMode = normalizeGroupingMode(mode);
+  localStorage.setItem('codedash-grouping-mode', groupingMode);
   render();
 }
 
@@ -922,6 +949,21 @@ function renderCard(s, idx) {
     html += '<button class="card-expand-btn" onclick="event.stopPropagation();toggleExpand(\'' + s.id + '\',\'' + escHtml(s.project || '').replace(/'/g, "\\'") + '\',this)" title="Preview messages">&#9662;</button>';
   }
   html += '</div>';
+  // MCP/Skills footer
+  if ((s.mcp_servers && s.mcp_servers.length > 0) || (s.skills && s.skills.length > 0)) {
+    html += '<div class="card-tools">';
+    if (s.mcp_servers) {
+      s.mcp_servers.forEach(function(m) {
+        html += '<span class="tool-badge badge-mcp">' + escHtml(m) + '</span>';
+      });
+    }
+    if (s.skills) {
+      s.skills.forEach(function(sk) {
+        html += '<span class="tool-badge badge-skill">' + escHtml(sk) + '</span>';
+      });
+    }
+    html += '</div>';
+  }
   // Expandable preview area (hidden by default)
   html += '<div class="card-preview-area" id="preview-' + s.id + '"></div>';
   html += '</div>';
@@ -956,6 +998,16 @@ function renderListCard(s, idx) {
   var html = '<div class="' + classes + '" data-id="' + s.id + '" onclick="onCardClick(\'' + s.id + '\', event)">';
   var listToolLabel = s.tool === 'claude-ext' ? 'claude ext' : s.tool;
   html += '<span class="tool-badge tool-' + s.tool + '">' + escHtml(listToolLabel) + '</span>';
+  if (s.mcp_servers && s.mcp_servers.length > 0) {
+    s.mcp_servers.forEach(function(m) {
+      html += '<span class="tool-badge badge-mcp">' + escHtml(m) + '</span>';
+    });
+  }
+  if (s.skills && s.skills.length > 0) {
+    s.skills.forEach(function(sk) {
+      html += '<span class="tool-badge badge-skill">' + escHtml(sk) + '</span>';
+    });
+  }
   html += '<span class="list-project" style="color:' + projColor + '">' + escHtml(projName) + '</span>';
   html += '<span class="list-msg">' + escHtml((s.first_message || '').slice(0, 80)) + '</span>';
   html += '<span class="list-meta">' + s.messages + ' msgs</span>';
@@ -1109,6 +1161,11 @@ function render() {
     return;
   }
 
+  if (currentView === 'leaderboard') {
+    renderLeaderboard(content);
+    return;
+  }
+
   if (currentView === 'settings') {
     renderSettings(content);
     return;
@@ -1173,29 +1230,30 @@ function renderGrouped(container, sessions, renderFn) {
   renderFn = renderFn || renderCard;
   var groups = {};
   sessions.forEach(function(s) {
-    var key = getProjectName(s.project);
-    if (!groups[key]) groups[key] = [];
-    groups[key].push(s);
+    var group = getSessionGroupInfo(s);
+    if (!groups[group.key]) groups[group.key] = { name: group.name, sessions: [] };
+    groups[group.key].sessions.push(s);
   });
 
   var sortedKeys = Object.keys(groups).sort(function(a, b) {
-    return groups[b][0].last_ts - groups[a][0].last_ts;
+    return groups[b].sessions[0].last_ts - groups[a].sessions[0].last_ts;
   });
 
   var globalIdx = 0;
   var html = '';
   sortedKeys.forEach(function(key) {
+    var group = groups[key];
     var color = getProjectColor(key);
     html += '<div class="group">';
     html += '<div class="group-header" onclick="this.parentElement.classList.toggle(\'collapsed\')">';
     html += '<span class="group-dot" style="background:' + color + '"></span>';
-    html += '<span class="group-name">' + escHtml(key) + '</span>';
-    html += '<span class="group-count">' + groups[key].length + '</span>';
+    html += '<span class="group-name">' + escHtml(group.name) + '</span>';
+    html += '<span class="group-count">' + group.sessions.length + '</span>';
     html += '<span class="group-chevron">&#9660;</span>';
     html += '</div>';
     var bodyClass = layout === 'list' ? 'group-body group-body-list' : 'group-body';
     html += '<div class="' + bodyClass + '">';
-    groups[key].forEach(function(s) {
+    group.sessions.forEach(function(s) {
       html += renderFn(s, globalIdx++);
     });
     html += '</div></div>';
@@ -1543,6 +1601,22 @@ async function openDetail(s) {
   });
   infoHtml += '<button class="tag-add-btn" onclick="showTagDropdown(event, \'' + s.id + '\')">+</button>';
   infoHtml += '</span></div>';
+  // MCP servers row
+  if (s.mcp_servers && s.mcp_servers.length > 0) {
+    infoHtml += '<div class="detail-row"><span class="detail-label">MCP</span><span style="display:flex;gap:4px;flex-wrap:wrap">';
+    s.mcp_servers.forEach(function(m) {
+      infoHtml += '<span class="tool-badge badge-mcp">' + escHtml(m) + '</span>';
+    });
+    infoHtml += '</span></div>';
+  }
+  // Skills row
+  if (s.skills && s.skills.length > 0) {
+    infoHtml += '<div class="detail-row"><span class="detail-label">Skills</span><span style="display:flex;gap:4px;flex-wrap:wrap">';
+    s.skills.forEach(function(sk) {
+      infoHtml += '<span class="tool-badge badge-skill">' + escHtml(sk) + '</span>';
+    });
+    infoHtml += '</span></div>';
+  }
   infoHtml += '</div>';
 
   // Action buttons
@@ -1586,9 +1660,23 @@ async function openDetail(s) {
         data.messages.forEach(function(m) {
           var roleClass = m.role === 'user' ? 'msg-user' : 'msg-assistant';
           var roleLabel = m.role === 'user' ? 'You' : 'Assistant';
-          msgsHtml += '<div class="message ' + roleClass + '">';
+          var hasTools = m.tools && m.tools.length > 0;
+          msgsHtml += '<div class="message ' + roleClass + (hasTools ? ' has-tools' : '') + '">';
+          msgsHtml += '<div class="msg-inner">';
           msgsHtml += '<div class="msg-role">' + roleLabel + '</div>';
           msgsHtml += '<div class="msg-content">' + escHtml(m.content) + '</div>';
+          msgsHtml += '</div>';
+          if (hasTools) {
+            msgsHtml += '<div class="msg-tools">';
+            m.tools.forEach(function(t) {
+              if (t.type === 'mcp') {
+                msgsHtml += '<span class="tool-badge badge-mcp">' + escHtml(t.tool) + '</span>';
+              } else if (t.type === 'skill') {
+                msgsHtml += '<span class="tool-badge badge-skill">' + escHtml(t.skill) + '</span>';
+              }
+            });
+            msgsHtml += '</div>';
+          }
           msgsHtml += '</div>';
         });
         msgContainer.innerHTML = msgsHtml;
@@ -2023,72 +2111,117 @@ document.addEventListener('keydown', function(e) {
   }
 });
 
-// ── Running Sessions View ──────────────────────────────────────
+// ── Running Sessions View (Kanban) ─────────────────────────────
+
+function renderRunningCard(a, s) {
+  var projName = s ? getProjectName(s.project) : (a.cwd ? a.cwd.split('/').pop() : 'unknown');
+  var projColor = getProjectColor(projName);
+  var statusClass = a.status === 'waiting' ? 'running-waiting' : 'running-active';
+  var uptime = a.startedAt ? formatDuration(Date.now() - a.startedAt) : '';
+  var sid = a.sessionId;
+
+  var html = '<div class="running-card ' + statusClass + '">';
+  html += '<div class="running-card-header">';
+  html += '<span class="live-badge live-' + a.status + '">' + (a.status === 'waiting' ? 'WAITING' : 'LIVE') + '</span>';
+  html += '<span class="running-project" style="color:' + projColor + '">' + escHtml(projName) + '</span>';
+  html += '<span class="running-tool">' + escHtml(a.entrypoint || a.kind || 'claude') + '</span>';
+  html += '</div>';
+  html += '<div class="running-stats">';
+  html += '<div class="running-stat"><span class="running-stat-val">' + a.cpu.toFixed(1) + '%</span><span class="running-stat-label">CPU</span></div>';
+  html += '<div class="running-stat"><span class="running-stat-val">' + a.memoryMB + 'MB</span><span class="running-stat-label">MEM</span></div>';
+  if (uptime) html += '<div class="running-stat"><span class="running-stat-val">' + uptime + '</span><span class="running-stat-label">Uptime</span></div>';
+  html += '</div>';
+  if (s && s.first_message) html += '<div class="running-msg">' + escHtml(s.first_message.slice(0, 120)) + '</div>';
+  html += '<div class="running-actions">';
+  html += '<button class="launch-btn" style="background:var(--accent-green);color:#000" onclick="focusSession(\'' + sid + '\')">Focus</button>';
+  if (s) {
+    html += '<button class="launch-btn btn-secondary" onclick="var ss=allSessions.find(function(x){return x.id===\'' + sid + '\'});if(ss)openDetail(ss);">Details</button>';
+    html += '<button class="launch-btn btn-secondary" onclick="closeDetail();openReplay(\'' + sid + '\',\'' + escHtml((s.project || '').replace(/'/g, "\\'")) + '\')">Replay</button>';
+  }
+  html += '</div>';
+  html += '</div>';
+  return html;
+}
+
+function renderDoneCard(s) {
+  var projName = getProjectName(s.project);
+  var projColor = getProjectColor(projName);
+  var html = '<div class="running-card running-done">';
+  html += '<div class="running-card-header">';
+  html += '<span class="live-badge live-done">DONE</span>';
+  html += '<span class="running-project" style="color:' + projColor + '">' + escHtml(projName) + '</span>';
+  html += '<span class="running-tool tool-' + (s.tool || 'claude') + '">' + escHtml(s.tool || 'claude') + '</span>';
+  html += '</div>';
+  if (s.first_message) html += '<div class="running-msg">' + escHtml(s.first_message.slice(0, 120)) + '</div>';
+  html += '<div class="running-stats">';
+  html += '<div class="running-stat"><span class="running-stat-val">' + (s.messages || 0) + '</span><span class="running-stat-label">msgs</span></div>';
+  if (s.last_time) html += '<div class="running-stat"><span class="running-stat-val">' + s.last_time.slice(11) + '</span><span class="running-stat-label">ended</span></div>';
+  html += '</div>';
+  html += '<div class="running-actions">';
+  html += '<button class="launch-btn btn-secondary" onclick="openDetail(' + JSON.stringify({id: s.id, project: s.project || '', tool: s.tool || ''}) + ')">Details</button>';
+  html += '</div>';
+  html += '</div>';
+  return html;
+}
 
 function renderRunning(container, sessions) {
-  var activeIds = Object.keys(activeSessions);
+  var allActiveIds = Object.keys(activeSessions);
+  var running = allActiveIds.filter(function(sid) { return activeSessions[sid].status !== 'waiting'; });
+  var waiting = allActiveIds.filter(function(sid) { return activeSessions[sid].status === 'waiting'; });
+  var cutoff = Date.now() - 4 * 3600 * 1000;
+  var done = sessions.filter(function(s) {
+    return !activeSessions[s.id] && s.last_ts >= cutoff;
+  }).slice(0, 8);
 
-  if (activeIds.length === 0) {
+  if (allActiveIds.length === 0 && done.length === 0) {
     container.innerHTML = '<div class="empty-state">No running sessions detected.<br><span style="font-size:12px;color:var(--text-muted)">Start a Claude Code or Codex session and it will appear here.</span></div>';
     return;
   }
 
-  // Running cards at top
   var html = '<div class="running-container">';
-  html += '<h2 class="heatmap-title">Running Sessions (' + activeIds.length + ')</h2>';
-  html += '<div class="running-grid">';
+  html += '<h2 class="heatmap-title">Agent Board</h2>';
+  html += '<div class="kanban-board">';
 
-  activeIds.forEach(function(sid) {
-    var a = activeSessions[sid];
-    var s = allSessions.find(function(x) { return x.id === sid; });
-    var projName = s ? getProjectName(s.project) : (a.cwd ? a.cwd.split('/').pop() : 'unknown');
-    var projColor = getProjectColor(projName);
-    var statusClass = a.status === 'waiting' ? 'running-waiting' : 'running-active';
-    var uptime = a.startedAt ? formatDuration(Date.now() - a.startedAt) : '';
-
-    html += '<div class="running-card ' + statusClass + '">';
-    html += '<div class="running-card-header">';
-    html += '<span class="live-badge live-' + a.status + '">' + (a.status === 'waiting' ? 'WAITING' : 'LIVE') + '</span>';
-    html += '<span class="running-project" style="color:' + projColor + '">' + escHtml(projName) + '</span>';
-    html += '<span class="running-tool">' + escHtml(a.entrypoint || a.kind || 'claude') + '</span>';
-    html += '</div>';
-
-    html += '<div class="running-stats">';
-    html += '<div class="running-stat"><span class="running-stat-val">' + a.cpu.toFixed(1) + '%</span><span class="running-stat-label">CPU</span></div>';
-    html += '<div class="running-stat"><span class="running-stat-val">' + a.memoryMB + 'MB</span><span class="running-stat-label">Memory</span></div>';
-    html += '<div class="running-stat"><span class="running-stat-val">' + a.pid + '</span><span class="running-stat-label">PID</span></div>';
-    if (uptime) {
-      html += '<div class="running-stat"><span class="running-stat-val">' + uptime + '</span><span class="running-stat-label">Uptime</span></div>';
-    }
-    html += '</div>';
-
-    if (s && s.first_message) {
-      html += '<div class="running-msg">' + escHtml(s.first_message.slice(0, 150)) + '</div>';
-    }
-
-    html += '<div class="running-actions">';
-    html += '<button class="launch-btn" style="background:var(--accent-green);color:#000" onclick="focusSession(\'' + sid + '\')">Focus</button>';
-    if (s) {
-      html += '<button class="launch-btn btn-secondary" onclick="var ss=allSessions.find(function(x){return x.id===\'' + sid + '\'});if(ss)openDetail(ss);">Details</button>';
-      html += '<button class="launch-btn btn-secondary" onclick="closeDetail();openReplay(\'' + sid + '\',\'' + escHtml((s.project || '').replace(/'/g, "\\'")) + '\')">Replay</button>';
-    }
-    html += '</div>';
-    html += '</div>';
-  });
-
-  html += '</div>';
-
-  // Also show recent non-active sessions below
-  var recentInactive = sessions.filter(function(s) { return !activeSessions[s.id]; }).slice(0, 6);
-  if (recentInactive.length > 0) {
-    html += '<h3 style="margin:24px 0 12px;font-size:14px;color:var(--text-secondary)">Recently Inactive</h3>';
-    html += '<div class="grid-view">';
-    var idx = 0;
-    recentInactive.forEach(function(s) { html += renderCard(s, idx++); });
-    html += '</div>';
+  // ── Running column ──────────────────────────────────────────
+  html += '<div class="kanban-col">';
+  html += '<div class="kanban-col-header kanban-running"><span class="kanban-col-title">Running</span><span class="kanban-col-count">' + running.length + '</span></div>';
+  if (running.length === 0) {
+    html += '<div class="kanban-empty">No active sessions</div>';
+  } else {
+    running.forEach(function(sid) {
+      var a = activeSessions[sid];
+      var s = allSessions.find(function(x) { return x.id === sid; });
+      html += renderRunningCard(a, s);
+    });
   }
-
   html += '</div>';
+
+  // ── Waiting column ──────────────────────────────────────────
+  html += '<div class="kanban-col">';
+  html += '<div class="kanban-col-header kanban-waiting"><span class="kanban-col-title">Waiting for input</span><span class="kanban-col-count">' + waiting.length + '</span></div>';
+  if (waiting.length === 0) {
+    html += '<div class="kanban-empty">No sessions waiting</div>';
+  } else {
+    waiting.forEach(function(sid) {
+      var a = activeSessions[sid];
+      var s = allSessions.find(function(x) { return x.id === sid; });
+      html += renderRunningCard(a, s);
+    });
+  }
+  html += '</div>';
+
+  // ── Done column ─────────────────────────────────────────────
+  html += '<div class="kanban-col">';
+  html += '<div class="kanban-col-header kanban-done"><span class="kanban-col-title">Done (last 4h)</span><span class="kanban-col-count">' + done.length + '</span></div>';
+  if (done.length === 0) {
+    html += '<div class="kanban-empty">No recent sessions</div>';
+  } else {
+    done.forEach(function(s) { html += renderDoneCard(s); });
+  }
+  html += '</div>';
+
+  html += '</div>'; // kanban-board
+  html += '</div>'; // running-container
   container.innerHTML = html;
 }
 
@@ -2222,6 +2355,27 @@ async function renderAnalytics(container) {
     html += '<div class="analytics-card"><span class="analytics-val">' + formatTokens(data.totalTokens) + '</span><span class="analytics-label">Total tokens</span></div>';
     html += '<div class="analytics-card"><span class="analytics-val">$' + (data.dailyRate || 0).toFixed(2) + '</span><span class="analytics-label">Avg per day (' + (data.days || 1) + ' days)</span></div>';
     html += '<div class="analytics-card"><span class="analytics-val">' + data.totalSessions + '</span><span class="analytics-label">Sessions</span></div>';
+    html += '</div>';
+
+    // ── Burn rate ──────────────────────────────────────────────
+    var todayCost = data.todayCost || 0;
+    var last1hCost = data.last1hCost || 0;
+    var dailyRate = data.dailyRate || 0;
+    var hoursElapsed = data.hoursElapsedToday || 1;
+    // Project today's pace to a full day for comparison
+    var projectedDaily = todayCost / (hoursElapsed / 24);
+    var paceRatio = dailyRate > 0 ? projectedDaily / dailyRate : 0;
+    var burnClass = paceRatio >= 2 ? 'burn-high' : paceRatio >= 1.3 ? 'burn-medium' : 'burn-low';
+    var paceLabel = paceRatio >= 2 ? '🔥 ' + Math.round(paceRatio) + 'x avg' : paceRatio >= 1.3 ? '↑ ' + paceRatio.toFixed(1) + 'x avg' : dailyRate > 0 ? '✓ normal' : '';
+    html += '<div class="burn-rate-bar">';
+    html += '<div class="burn-rate-title">Burn Rate</div>';
+    html += '<div class="burn-rate-stats">';
+    html += '<div class="burn-stat"><span class="burn-val ' + burnClass + '">$' + todayCost.toFixed(3) + '</span><span class="burn-label">today</span>' + (paceLabel ? '<span class="burn-pace ' + burnClass + '">' + paceLabel + '</span>' : '') + '</div>';
+    html += '<div class="burn-stat"><span class="burn-val">$' + last1hCost.toFixed(3) + '</span><span class="burn-label">last hour</span></div>';
+    if (dailyRate > 0) {
+      html += '<div class="burn-stat"><span class="burn-val">$' + projectedDaily.toFixed(2) + '</span><span class="burn-label">projected today</span></div>';
+    }
+    html += '</div>';
     html += '</div>';
 
     // ── Data coverage note ────────────────────────────────────
@@ -2442,6 +2596,7 @@ function renderSettings(container) {
   var savedTheme = localStorage.getItem('codedash-theme') || 'dark';
   var savedTerminal = localStorage.getItem('codedash-terminal') || '';
   var aiTitlesOn = localStorage.getItem('codedash-ai-titles') === 'true';
+  var savedGroupingMode = normalizeGroupingMode(localStorage.getItem('codedash-grouping-mode'));
 
   var html = '<div class="settings-page">';
   html += '<h2 style="margin:0 0 24px;font-size:18px;font-weight:600">Settings</h2>';
@@ -2480,6 +2635,19 @@ function renderSettings(container) {
   html += '</div>';
   html += '</div>';
 
+  // Grouping
+  html += '<div class="settings-group">';
+  html += '<label class="settings-label">Grouping</label>';
+  html += '<div class="settings-theme-btns">';
+  ['folder', 'repo'].forEach(function(mode) {
+    var active = savedGroupingMode === mode ? ' active' : '';
+    var label = mode === 'repo' ? 'Repository' : 'Folder';
+    html += '<button class="theme-btn' + active + '" onclick="saveGroupingMode(\'' + mode + '\')">' + label + '</button>';
+  });
+  html += '</div>';
+  html += '<p style="font-size:12px;color:var(--text-muted);margin:10px 0 0">Applies to grouped session views like All Sessions and Claude Code. Projects always stay repository-based.</p>';
+  html += '</div>';
+
   // LLM Configuration
   html += '<div class="settings-group">';
   html += '<label class="settings-label">LLM Configuration</label>';
@@ -2500,6 +2668,218 @@ function renderSettings(container) {
 
   // Load LLM config into the inputs
   loadLLMSettings();
+}
+
+async function syncLeaderboard() {
+  var btn = document.getElementById('syncBtn');
+  if (btn) btn.textContent = 'Syncing...';
+  try {
+    var resp = await fetch('/api/leaderboard/sync', { method: 'POST' });
+    var data = await resp.json();
+    if (data.ok) {
+      showToast('Stats synced to global leaderboard!');
+      loadGlobalLeaderboard();
+    } else {
+      showToast('Sync failed: ' + (data.error || 'unknown'));
+    }
+  } catch (e) { showToast('Sync error: ' + e.message); }
+  if (btn) btn.textContent = 'Sync to Global Leaderboard';
+}
+
+async function loadGlobalLeaderboard() {
+  var board = document.getElementById('globalBoard');
+  if (!board) return;
+  try {
+    var resp = await fetch('/api/leaderboard/remote');
+    var data = await resp.json();
+    if (!data.users || data.users.length === 0) {
+      board.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted)">No one here yet. Sync your stats to be first!</div>';
+      return;
+    }
+    var html = '';
+    data.users.forEach(function(u, i) {
+      var t = u.stats.today || {};
+      var tot = u.stats.totals || {};
+      html += '<div class="lb-global-row">';
+      html += '<span class="lb-rank' + (i < 3 ? ' lb-rank-' + (i+1) : '') + '">#' + (i+1) + '</span>';
+      html += '<img class="lb-global-avatar" src="' + escHtml(u.avatar || '') + '" alt="">';
+      html += '<div class="lb-global-info">';
+      html += '<div class="lb-global-name">' + escHtml(u.name || u.username) + '</div>';
+      html += '<div class="lb-global-handle">@' + escHtml(u.username) + '</div>';
+      html += '</div>';
+      html += '<div class="lb-global-stats">';
+      html += '<span><strong>' + (t.messages || 0) + '</strong> today</span>';
+      html += '<span><strong>' + (tot.messages || 0).toLocaleString() + '</strong> total</span>';
+      html += '<span><strong>' + (tot.hours || 0) + 'h</strong></span>';
+      if (u.stats.streak > 1) html += '<span class="lb-streak-badge">' + u.stats.streak + 'd streak</span>';
+      html += '</div></div>';
+    });
+    board.innerHTML = html;
+  } catch { board.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted)">Could not load global leaderboard</div>'; }
+}
+
+async function githubConnect() {
+  try {
+    showToast('Starting GitHub auth...');
+    var resp = await fetch('/api/github/device-code', { method: 'POST' });
+    var data = await resp.json();
+    if (data.error) { showToast('Error: ' + data.error); return; }
+
+    // Show modal with code
+    var modal = document.getElementById('githubAuthModal');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.id = 'githubAuthModal';
+      modal.className = 'confirm-overlay';
+      modal.style.display = 'flex';
+      modal.innerHTML = '<div class="confirm-box" style="max-width:380px;text-align:center">' +
+        '<h3>Connect GitHub</h3>' +
+        '<p style="font-size:13px;margin:12px 0">Copy this code and enter it at:</p>' +
+        '<div class="lb-auth-code" id="githubAuthCode"></div>' +
+        '<a id="githubAuthLink" href="" target="_blank" class="lb-github-btn" style="display:inline-flex;margin:12px 0">Open GitHub</a>' +
+        '<p style="font-size:12px;color:var(--text-muted)" id="githubAuthStatus">Waiting for authorization...</p>' +
+        '<button class="btn-cancel" onclick="this.parentElement.parentElement.style.display=\'none\'" style="margin-top:8px">Cancel</button>' +
+        '</div>';
+      document.body.appendChild(modal);
+    } else {
+      modal.style.display = 'flex';
+    }
+    document.getElementById('githubAuthCode').textContent = data.user_code;
+    document.getElementById('githubAuthLink').href = data.verification_uri;
+
+    // Copy code to clipboard
+    try { navigator.clipboard.writeText(data.user_code); } catch {}
+
+    // Poll for token
+    var interval = (data.interval || 5) * 1000;
+    var maxTries = Math.ceil((data.expires_in || 900) / (interval / 1000));
+    for (var i = 0; i < maxTries; i++) {
+      await new Promise(function(r) { setTimeout(r, interval); });
+      if (modal.style.display === 'none') return; // cancelled
+      try {
+        var pollResp = await fetch('/api/github/poll-token', {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ device_code: data.device_code })
+        });
+        var pollData = await pollResp.json();
+        if (pollData.status === 'ok') {
+          modal.style.display = 'none';
+          showToast('Connected as @' + pollData.profile.username);
+          render();
+          return;
+        } else if (pollData.status === 'expired') {
+          document.getElementById('githubAuthStatus').textContent = 'Code expired. Try again.';
+          return;
+        }
+      } catch {}
+    }
+  } catch (e) { showToast('Auth error: ' + e.message); }
+}
+
+async function githubLogout() {
+  await fetch('/api/github/logout', { method: 'POST' });
+  showToast('GitHub disconnected');
+  render();
+}
+
+async function renderLeaderboard(container) {
+  container.innerHTML = '<div class="loading">Loading stats...</div>';
+  try {
+    var resp = await fetch('/api/leaderboard');
+    var data = await resp.json();
+    var ghResp = await fetch('/api/github/profile');
+    var gh = await ghResp.json();
+
+    var html = '<div class="leaderboard-container">';
+
+    // Header card — GitHub profile or anonymous
+    html += '<div class="lb-hero">';
+    if (gh.authenticated) {
+      html += '<img class="lb-avatar-img" src="' + escHtml(gh.avatar) + '" alt="">';
+      html += '<div class="lb-hero-info">';
+      html += '<div class="lb-name">' + escHtml(gh.name || gh.username) + '</div>';
+      html += '<div class="lb-username">@' + escHtml(gh.username) + '</div>';
+      html += '<div class="lb-streak">' + data.streak + ' day streak</div>';
+      html += '</div>';
+      html += '<button class="toolbar-btn" style="margin-left:auto;font-size:11px" onclick="githubLogout()">Disconnect</button>';
+    } else {
+      html += '<div class="lb-avatar">' + escHtml(data.anon.name.split('-').map(function(w){return w[0].toUpperCase()}).join('')) + '</div>';
+      html += '<div class="lb-hero-info">';
+      html += '<div class="lb-name">' + escHtml(data.anon.name) + '</div>';
+      html += '<div class="lb-streak">' + data.streak + ' day streak</div>';
+      html += '</div>';
+      html += '<button class="lb-github-btn" onclick="githubConnect()"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg> Connect GitHub</button>';
+    }
+    html += '</div>';
+
+    // Today stats
+    html += '<div class="lb-section-title">Today</div>';
+    html += '<div class="lb-stats-grid">';
+    html += '<div class="lb-stat"><div class="lb-stat-value">' + data.today.messages + '</div><div class="lb-stat-label">prompts</div></div>';
+    html += '<div class="lb-stat"><div class="lb-stat-value">' + data.today.hours.toFixed(1) + 'h</div><div class="lb-stat-label">agent time</div></div>';
+    html += '<div class="lb-stat"><div class="lb-stat-value">' + data.today.sessions + '</div><div class="lb-stat-label">sessions</div></div>';
+    html += '<div class="lb-stat"><div class="lb-stat-value">$' + data.today.cost.toFixed(2) + '</div><div class="lb-stat-label">cost</div></div>';
+    html += '</div>';
+
+    // All time
+    html += '<div class="lb-section-title">All Time</div>';
+    html += '<div class="lb-stats-grid">';
+    html += '<div class="lb-stat"><div class="lb-stat-value">' + data.totals.messages.toLocaleString() + '</div><div class="lb-stat-label">prompts</div></div>';
+    html += '<div class="lb-stat"><div class="lb-stat-value">' + data.totals.hours.toFixed(0) + 'h</div><div class="lb-stat-label">agent time</div></div>';
+    html += '<div class="lb-stat"><div class="lb-stat-value">' + data.totals.sessions + '</div><div class="lb-stat-label">sessions</div></div>';
+    html += '<div class="lb-stat"><div class="lb-stat-value">$' + data.totals.cost.toFixed(2) + '</div><div class="lb-stat-label">cost</div></div>';
+    html += '</div>';
+
+    // Agents breakdown
+    html += '<div class="lb-section-title">Agents</div>';
+    html += '<div class="lb-agents">';
+    var agentEntries = Object.entries(data.agents).sort(function(a,b){return b[1]-a[1]});
+    agentEntries.forEach(function(e) {
+      var pct = data.totals.sessions > 0 ? Math.round(e[1] / data.totals.sessions * 100) : 0;
+      html += '<div class="lb-agent-row">';
+      html += '<span class="tool-badge tool-' + e[0] + '">' + escHtml(e[0]) + '</span>';
+      html += '<div class="lb-agent-bar"><div class="lb-agent-bar-fill" style="width:' + pct + '%"></div></div>';
+      html += '<span class="lb-agent-count">' + e[1] + ' (' + pct + '%)</span>';
+      html += '</div>';
+    });
+    html += '</div>';
+
+    // Daily chart (last 14 days)
+    html += '<div class="lb-section-title">Last 14 Days</div>';
+    html += '<div class="lb-daily-chart">';
+    var last14 = data.daily.slice(0, 14).reverse();
+    var maxMsg = Math.max.apply(null, last14.map(function(d){return d.messages})) || 1;
+    last14.forEach(function(d) {
+      var h = Math.max(4, Math.round(d.messages / maxMsg * 120));
+      var dayLabel = d.date.slice(5); // MM-DD
+      html += '<div class="lb-bar-col">';
+      html += '<div class="lb-bar" style="height:' + h + 'px" title="' + d.date + ': ' + d.messages + ' msgs, ' + d.hours.toFixed(1) + 'h, $' + d.cost.toFixed(2) + '"></div>';
+      html += '<div class="lb-bar-label">' + dayLabel + '</div>';
+      html += '</div>';
+    });
+    html += '</div>';
+
+    // Sync button + Global leaderboard
+    if (gh.authenticated) {
+      html += '<div style="text-align:center;margin:20px 0">';
+      html += '<button class="lb-github-btn" onclick="syncLeaderboard()" id="syncBtn">Sync to Global Leaderboard</button>';
+      html += '</div>';
+    }
+
+    // Global leaderboard
+    html += '<div class="lb-section-title">Global Leaderboard</div>';
+    html += '<div id="globalBoard"><div class="loading">Loading...</div></div>';
+
+    html += '<div class="lb-footer">Active days: ' + data.activeDays + ' | <a href="https://codedash-leaderboard.valeriy.workers.dev" target="_blank" style="color:var(--accent-blue)">View public leaderboard</a></div>';
+    html += '</div>';
+
+    container.innerHTML = html;
+
+    // Load global leaderboard async
+    loadGlobalLeaderboard();
+  } catch (e) {
+    container.innerHTML = '<div class="empty-state">Failed to load stats: ' + escHtml(e.message) + '</div>';
+  }
 }
 
 async function renderChangelog(container) {

@@ -3,7 +3,7 @@ const http = require('http');
 const https = require('https');
 const { URL } = require('url');
 const { exec, execFile } = require('child_process');
-const { loadSessions, loadSessionDetail, deleteSession, getGitCommits, exportSessionMarkdown, getSessionPreview, searchFullText, getActiveSessions, getSessionReplay, getCostAnalytics, computeSessionCost, getProjectGitInfo } = require('./data');
+const { loadSessions, loadSessionDetail, deleteSession, getGitCommits, exportSessionMarkdown, getSessionPreview, searchFullText, getActiveSessions, getSessionReplay, getCostAnalytics, computeSessionCost, getProjectGitInfo, getLeaderboardStats } = require('./data');
 const { detectTerminals, openInTerminal, focusTerminalByPid } = require('./terminals');
 const { convertSession } = require('./convert');
 const { generateHandoff } = require('./handoff');
@@ -357,6 +357,44 @@ function startServer(host, port, openBrowser = true) {
       });
     }
 
+    // ── Leaderboard stats ────────────────────
+    else if (req.method === 'GET' && pathname === '/api/leaderboard') {
+      const stats = getLeaderboardStats();
+      json(res, stats);
+    }
+
+    else if (req.method === 'POST' && pathname === '/api/leaderboard/sync') {
+      syncLeaderboard().then(data => json(res, data)).catch(e => json(res, { error: e.message }, 500));
+    }
+
+    else if (req.method === 'GET' && pathname === '/api/leaderboard/remote') {
+      fetchRemoteLeaderboard().then(data => json(res, data)).catch(e => json(res, { error: e.message }, 500));
+    }
+
+    // ── GitHub Auth (Device Flow) ────────────
+    else if (req.method === 'POST' && pathname === '/api/github/device-code') {
+      githubDeviceCode().then(data => json(res, data)).catch(e => json(res, { error: e.message }, 400));
+    }
+
+    else if (req.method === 'POST' && pathname === '/api/github/poll-token') {
+      readBody(req, body => {
+        try {
+          const { device_code } = JSON.parse(body);
+          githubPollToken(device_code).then(data => json(res, data)).catch(e => json(res, { error: e.message }, 400));
+        } catch (e) { json(res, { error: e.message }, 400); }
+      });
+    }
+
+    else if (req.method === 'GET' && pathname === '/api/github/profile') {
+      const profile = loadGitHubProfile();
+      json(res, profile || { authenticated: false });
+    }
+
+    else if (req.method === 'POST' && pathname === '/api/github/logout') {
+      saveGitHubProfile(null);
+      json(res, { ok: true });
+    }
+
     // ── Changelog ─────────────────────────────
     else if (req.method === 'GET' && pathname === '/api/changelog') {
       json(res, CHANGELOG);
@@ -460,10 +498,153 @@ function isNewer(latest, current) {
   return false;
 }
 
-// ── LLM Config ─────────────────────────────
+// ── GitHub Auth (Device Flow) ──────────────
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+
+const GITHUB_CLIENT_ID = 'Ov23liBD3XGfBBIZiyK6';
+const GITHUB_PROFILE_FILE = path.join(os.homedir(), '.codedash', 'github-profile.json');
+
+function githubRequest(hostname, reqPath, method, body) {
+  return new Promise((resolve, reject) => {
+    const bodyStr = typeof body === 'string' ? body : (body ? JSON.stringify(body) : '');
+    const options = {
+      hostname, path: reqPath, method: method || 'POST',
+      headers: { 'Accept': 'application/json', 'Content-Type': 'application/json', 'User-Agent': 'codedash' },
+      timeout: 15000,
+    };
+    if (bodyStr) options.headers['Content-Length'] = Buffer.byteLength(bodyStr);
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', c => data += c);
+      res.on('end', () => { try { resolve(JSON.parse(data)); } catch { resolve({ raw: data }); } });
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+    if (bodyStr) req.write(bodyStr);
+    req.end();
+  });
+}
+
+async function githubDeviceCode() {
+  const data = await githubRequest('github.com', '/login/device/code', 'POST',
+    JSON.stringify({ client_id: GITHUB_CLIENT_ID, scope: 'read:user' }));
+  if (data.error) throw new Error(data.error_description || data.error);
+  log('AUTH', `Device code: ${data.user_code} → ${data.verification_uri}`);
+  return { user_code: data.user_code, verification_uri: data.verification_uri, device_code: data.device_code, interval: data.interval || 5, expires_in: data.expires_in };
+}
+
+async function githubPollToken(deviceCode) {
+  const data = await githubRequest('github.com', '/login/oauth/access_token', 'POST',
+    JSON.stringify({ client_id: GITHUB_CLIENT_ID, device_code: deviceCode, grant_type: 'urn:ietf:params:oauth:grant-type:device_code' }));
+  if (data.error === 'authorization_pending') return { status: 'pending' };
+  if (data.error === 'slow_down') return { status: 'slow_down' };
+  if (data.error === 'expired_token') return { status: 'expired' };
+  if (data.error) throw new Error(data.error_description || data.error);
+  if (!data.access_token) throw new Error('No access token received');
+
+  // Fetch user profile with token
+  const user = await new Promise((resolve, reject) => {
+    const req = https.request({ hostname: 'api.github.com', path: '/user', method: 'GET',
+      headers: { 'Authorization': `Bearer ${data.access_token}`, 'Accept': 'application/json', 'User-Agent': 'codedash' },
+      timeout: 10000,
+    }, (res) => { let d = ''; res.on('data', c => d += c); res.on('end', () => { try { resolve(JSON.parse(d)); } catch { reject(new Error('parse error')); } }); });
+    req.on('error', reject);
+    req.end();
+  });
+  // Override headers for auth
+  const profile = {
+    authenticated: true,
+    username: user.login,
+    avatar: user.avatar_url,
+    name: user.name || user.login,
+    url: user.html_url,
+    token: data.access_token,
+    connectedAt: new Date().toISOString(),
+  };
+  saveGitHubProfile(profile);
+  log('AUTH', `GitHub connected: @${profile.username}`);
+  return { status: 'ok', profile: { username: profile.username, avatar: profile.avatar, name: profile.name, url: profile.url } };
+}
+
+function loadGitHubProfile() {
+  try {
+    const data = JSON.parse(fs.readFileSync(GITHUB_PROFILE_FILE, 'utf8'));
+    if (data.authenticated) return { authenticated: true, username: data.username, avatar: data.avatar, name: data.name, url: data.url };
+  } catch {}
+  return null;
+}
+
+function saveGitHubProfile(profile) {
+  const dir = path.dirname(GITHUB_PROFILE_FILE);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  if (profile) {
+    fs.writeFileSync(GITHUB_PROFILE_FILE, JSON.stringify(profile, null, 2));
+  } else {
+    try { fs.unlinkSync(GITHUB_PROFILE_FILE); } catch {}
+  }
+}
+
+// ── Leaderboard Sync ──────────────────────
+const LEADERBOARD_API = 'https://codedash-leaderboard.valeriy.workers.dev';
+
+async function syncLeaderboard() {
+  const profile = loadGitHubProfile();
+  if (!profile || !profile.authenticated) throw new Error('Connect GitHub first');
+
+  const stats = getLeaderboardStats();
+  const anon = stats.anon || {};
+  const payload = {
+    username: profile.username,
+    avatar: profile.avatar,
+    name: profile.name,
+    deviceId: anon.id || require('crypto').randomUUID(),
+    token: profile.token, // for server-side GitHub verification
+    stats: {
+      today: stats.today,
+      totals: stats.totals,
+      agents: stats.agents,
+      streak: stats.streak,
+      activeDays: stats.activeDays,
+    },
+  };
+
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify(payload);
+    const parsed = new URL(LEADERBOARD_API + '/api/stats');
+    const req = https.request({
+      hostname: parsed.hostname, path: parsed.pathname, method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+      timeout: 10000,
+    }, (res) => {
+      let data = '';
+      res.on('data', c => data += c);
+      res.on('end', () => {
+        try {
+          const r = JSON.parse(data);
+          log('SYNC', `Pushed stats to leaderboard as @${profile.username}`);
+          resolve(r);
+        } catch { reject(new Error('Bad response')); }
+      });
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+async function fetchRemoteLeaderboard() {
+  return new Promise((resolve, reject) => {
+    https.get(LEADERBOARD_API + '/api/leaderboard', { timeout: 10000 }, (res) => {
+      let data = '';
+      res.on('data', c => data += c);
+      res.on('end', () => { try { resolve(JSON.parse(data)); } catch { reject(new Error('Parse error')); } });
+    }).on('error', reject);
+  });
+}
+
+// ── LLM Config ─────────────────────────────
 
 const LLM_CONFIG_FILE = path.join(os.homedir(), '.claude', 'codedash-llm.json');
 

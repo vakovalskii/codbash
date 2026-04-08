@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { execSync } = require('child_process');
+const { execSync, execFileSync } = require('child_process');
 
 // ── Constants ──────────────────────────────────────────────
 
@@ -71,6 +71,25 @@ function readLines(filePath) {
   return fs.readFileSync(filePath, 'utf8').split('\n').map(l => l.replace(/\r$/, '')).filter(Boolean);
 }
 
+// OpenCode built-in tools that should NOT be treated as MCP servers
+const OPENCODE_BUILTIN_TOOLS = new Set([
+  'read', 'write', 'edit', 'bash', 'glob', 'grep', 'task', 'todowrite',
+  'delegate_task', 'apply_patch', 'webfetch', 'websearch', 'slashcommand',
+  'question', 'background_task', 'background_output', 'background_cancel',
+  'lsp_diagnostics', 'ast_grep_search', 'ast_grep_replace', 'session_read',
+  'skill', 'skill_mcp', 'call_omo_agent',
+]);
+
+// OpenCode tool names like "chrome-devtools_take_screenshot" → server "chrome-devtools"
+// Returns null if it's a built-in tool, otherwise the server name (first segment).
+function parseOpenCodeMcpServer(toolName) {
+  if (!toolName || OPENCODE_BUILTIN_TOOLS.has(toolName)) return null;
+  // Match server_tool or server-with-dashes_tool
+  const idx = toolName.indexOf('_');
+  if (idx <= 0) return null;
+  return toolName.slice(0, idx);
+}
+
 function parseClaudeSessionFile(sessionFile) {
   if (!fs.existsSync(sessionFile)) return null;
 
@@ -91,6 +110,8 @@ function parseClaudeSessionFile(sessionFile) {
   let lastTs = stat.mtimeMs;
   let entrypointFound = false;
   let worktreeOriginalCwd = '';
+  const mcpSet = new Set();
+  const skillSet = new Set();
 
   for (const line of lines) {
     try {
@@ -120,6 +141,23 @@ function parseClaudeSessionFile(sessionFile) {
         const content = extractContent(entry.message.content).trim();
         if (content) firstMsg = content.slice(0, 200);
       }
+      // MCP/Skill extraction from assistant tool_use blocks
+      if (entry.type === 'assistant') {
+        const aContent = (entry.message || {}).content;
+        if (Array.isArray(aContent)) {
+          for (const block of aContent) {
+            if (!block || block.type !== 'tool_use') continue;
+            const name = block.name || '';
+            if (name.startsWith('mcp__')) {
+              const parts = name.split('__');
+              if (parts.length >= 3) mcpSet.add(parts[1]);
+            } else if (name === 'Skill') {
+              const sk = (block.input || {}).skill;
+              if (sk) skillSet.add(sk.includes(':') ? sk.split(':')[0] : sk);
+            }
+          }
+        }
+      }
     } catch {}
   }
 
@@ -133,6 +171,8 @@ function parseClaudeSessionFile(sessionFile) {
     lastTs,
     fileSize: stat.size,
     worktreeOriginalCwd,
+    mcpServers: Array.from(mcpSet),
+    skills: Array.from(skillSet),
   };
 }
 
@@ -144,6 +184,8 @@ function mergeClaudeSessionDetail(session, summary, sessionFile) {
   session.file_size = summary.fileSize;
   session.detail_messages = summary.msgCount;
   session._session_file = sessionFile;
+  session.mcp_servers = summary.mcpServers || [];
+  session.skills = summary.skills || [];
 
   if (!session.project && summary.projectPath) {
     session.project = summary.projectPath;
@@ -222,12 +264,50 @@ function scanOpenCodeSessions() {
   try {
     // Use sqlite3 CLI with tab separator — session titles can contain pipes
     // (e.g. "review changes [commit|branch|pr]") which break the default | separator
-    const rows = execSync(
-      `sqlite3 -separator $'\\t' "${OPENCODE_DB}" "SELECT s.id, s.title, s.directory, s.time_created, s.time_updated, COUNT(m.id) as msg_count FROM session s LEFT JOIN message m ON m.session_id = s.id GROUP BY s.id ORDER BY s.time_updated DESC"`,
-      { encoding: 'utf8', timeout: 5000 }
-    ).trim();
+    const rows = execFileSync('sqlite3', [
+      '-separator', '\t',
+      OPENCODE_DB,
+      'SELECT s.id, s.title, s.directory, s.time_created, s.time_updated, COUNT(m.id) as msg_count FROM session s LEFT JOIN message m ON m.session_id = s.id GROUP BY s.id ORDER BY s.time_updated DESC'
+    ], { encoding: 'utf8', timeout: 5000, windowsHide: true }).trim();
 
     if (!rows) return sessions;
+
+    // Get MCP/Skills usage per session in one query
+    const sessionMcp = {};
+    const sessionSkills = {};
+    try {
+      const toolRows = execSync(
+        `sqlite3 -separator $'\\t' "${OPENCODE_DB}" "SELECT session_id, json_extract(data, '\\$.tool'), json_extract(data, '\\$.state.input.name') FROM part WHERE json_extract(data, '\\$.type') = 'tool'"`,
+        { encoding: 'utf8', timeout: 10000, maxBuffer: 50 * 1024 * 1024 }
+      ).trim();
+      if (toolRows) {
+        for (const tr of toolRows.split('\n')) {
+          const cols = tr.split('\t');
+          if (cols.length < 2) continue;
+          const sid = cols[0];
+          const toolName = cols[1];
+          const skillName = cols[2];
+          if (!sid || !toolName) continue;
+          // Skill tool: collect skill name
+          if (toolName === 'skill' || toolName === 'skill_mcp') {
+            if (skillName) {
+              if (!sessionSkills[sid]) sessionSkills[sid] = new Set();
+              // Plugin prefix: "superpowers:writing-plans" -> "superpowers"
+              // For OpenCode keep full name (e.g. "openspec-propose", "chrome-devtools")
+              const sk = skillName.includes(':') ? skillName.split(':')[0] : skillName;
+              sessionSkills[sid].add(sk);
+            }
+            continue;
+          }
+          // MCP tool: extract server name
+          const server = parseOpenCodeMcpServer(toolName);
+          if (server) {
+            if (!sessionMcp[sid]) sessionMcp[sid] = new Set();
+            sessionMcp[sid].add(server);
+          }
+        }
+      }
+    } catch {}
 
     for (const row of rows.split('\n')) {
       const parts = row.split('\t');
@@ -246,6 +326,8 @@ function scanOpenCodeSessions() {
         has_detail: true,
         file_size: 0,
         detail_messages: parseInt(msgCount) || 0,
+        mcp_servers: sessionMcp[id] ? Array.from(sessionMcp[id]) : [],
+        skills: sessionSkills[id] ? Array.from(sessionSkills[id]) : [],
       });
     }
   } catch {}
@@ -258,10 +340,10 @@ function loadOpenCodeDetail(sessionId) {
 
   try {
     // Get messages with parts joined
-    const rows = execSync(
-      `sqlite3 "${OPENCODE_DB}" "SELECT m.data, GROUP_CONCAT(p.data, '|||') FROM message m LEFT JOIN part p ON p.message_id = m.id WHERE m.session_id = '${sessionId.replace(/'/g, "''")}' GROUP BY m.id ORDER BY m.time_created"`,
-      { encoding: 'utf8', timeout: 10000 }
-    ).trim();
+    const rows = execFileSync('sqlite3', [
+      OPENCODE_DB,
+      `SELECT m.data, GROUP_CONCAT(p.data, '|||') FROM message m LEFT JOIN part p ON p.message_id = m.id WHERE m.session_id = '${sessionId.replace(/'/g, "''")}' GROUP BY m.id ORDER BY m.time_created`
+    ], { encoding: 'utf8', timeout: 10000, windowsHide: true }).trim();
 
     if (!rows) return { messages: [] };
 
@@ -291,14 +373,39 @@ function loadOpenCodeDetail(sessionId) {
       const role = msgData.role;
       if (role !== 'user' && role !== 'assistant') continue;
 
-      // Extract text from parts
+      // Extract text + tools from parts
       let content = '';
+      const tools = [];
+      const toolSeen = new Set();
       if (partsRaw) {
         for (const partStr of partsRaw.split('|||')) {
           try {
             const part = JSON.parse(partStr);
             if (part.type === 'text' && part.text) {
               content += part.text + '\n';
+            } else if (part.type === 'tool' && part.tool) {
+              const toolName = part.tool;
+              if (toolName === 'skill' || toolName === 'skill_mcp') {
+                const skillRaw = part.state && part.state.input && part.state.input.name;
+                if (skillRaw) {
+                  const sk = skillRaw.includes(':') ? skillRaw.split(':')[0] : skillRaw;
+                  const key = 'skill:' + sk;
+                  if (!toolSeen.has(key)) {
+                    toolSeen.add(key);
+                    tools.push({ type: 'skill', skill: sk });
+                  }
+                }
+              } else {
+                const server = parseOpenCodeMcpServer(toolName);
+                if (server) {
+                  const tool = toolName.slice(server.length + 1);
+                  const key = 'mcp:' + server + ':' + tool;
+                  if (!toolSeen.has(key)) {
+                    toolSeen.add(key);
+                    tools.push({ type: 'mcp', server: server, tool: tool });
+                  }
+                }
+              }
             }
           } catch {}
         }
@@ -309,13 +416,15 @@ function loadOpenCodeDetail(sessionId) {
 
       const tokens = msgData.tokens || {};
 
-      messages.push({
+      const msg = {
         role: role,
         content: content.slice(0, 2000),
         uuid: '',
         model: msgData.modelID || msgData.model?.modelID || '',
         tokens: tokens,
-      });
+      };
+      if (tools.length > 0) msg.tools = tools;
+      messages.push(msg);
     }
 
     return { messages: messages.slice(0, 200) };
@@ -329,10 +438,11 @@ function scanKiroSessions() {
   if (!fs.existsSync(KIRO_DB)) return sessions;
 
   try {
-    const rows = execSync(
-      `sqlite3 -separator $'\\t' "${KIRO_DB}" "SELECT key, conversation_id, created_at, updated_at, substr(value, 1, 500), length(value) FROM conversations_v2 ORDER BY updated_at DESC"`,
-      { encoding: 'utf8', timeout: 5000 }
-    ).trim();
+    const rows = execFileSync('sqlite3', [
+      '-separator', '\t',
+      KIRO_DB,
+      'SELECT key, conversation_id, created_at, updated_at, substr(value, 1, 500), length(value) FROM conversations_v2 ORDER BY updated_at DESC'
+    ], { encoding: 'utf8', timeout: 5000, windowsHide: true }).trim();
 
     if (!rows) return sessions;
 
@@ -376,10 +486,10 @@ function loadKiroDetail(conversationId) {
   if (!fs.existsSync(KIRO_DB)) return { messages: [] };
 
   try {
-    const raw = execSync(
-      `sqlite3 "${KIRO_DB}" "SELECT value FROM conversations_v2 WHERE conversation_id = '${conversationId.replace(/'/g, "''")}';"`,
-      { encoding: 'utf8', timeout: 10000 }
-    ).trim();
+    const raw = execFileSync('sqlite3', [
+      KIRO_DB,
+      `SELECT value FROM conversations_v2 WHERE conversation_id = '${conversationId.replace(/'/g, "''")}';`
+    ], { encoding: 'utf8', timeout: 10000, windowsHide: true }).trim();
 
     if (!raw) return { messages: [] };
 
@@ -646,6 +756,7 @@ function parseCodexSessionFile(sessionFile) {
   let firstMsg = '';
   let firstTs = stat.mtimeMs;
   let lastTs = stat.mtimeMs;
+  const mcpSet = new Set();
 
   for (const line of lines) {
     try {
@@ -662,6 +773,17 @@ function parseCodexSessionFile(sessionFile) {
       }
 
       if (entry.type !== 'response_item' || !entry.payload) continue;
+
+      // MCP function_call extraction
+      if (entry.payload.type === 'function_call') {
+        const name = entry.payload.name || '';
+        if (name.startsWith('mcp__')) {
+          const parts = name.split('__');
+          if (parts.length >= 3) mcpSet.add(parts[1]);
+        }
+        continue;
+      }
+
       const role = entry.payload.role;
       if (role !== 'user' && role !== 'assistant') continue;
 
@@ -680,6 +802,7 @@ function parseCodexSessionFile(sessionFile) {
     firstTs,
     lastTs,
     fileSize: stat.size,
+    mcpServers: Array.from(mcpSet),
   };
 }
 
@@ -756,6 +879,9 @@ function scanCodexSessions() {
           }
           existing.first_ts = Math.min(existing.first_ts, summary.firstTs);
           existing.last_ts = Math.max(existing.last_ts, summary.lastTs);
+          if (summary.mcpServers && summary.mcpServers.length > 0) {
+            existing.mcp_servers = summary.mcpServers;
+          }
         } else {
           sessions.push({
             id: sid,
@@ -769,6 +895,8 @@ function scanCodexSessions() {
             has_detail: true,
             file_size: summary.fileSize,
             detail_messages: summary.msgCount,
+            mcp_servers: summary.mcpServers || [],
+            skills: [],
           });
         }
       }
@@ -795,8 +923,8 @@ function resolveGitRoot(projectPath) {
   if (!projectPath) return '';
   if (_gitRootCache[projectPath] !== undefined) return _gitRootCache[projectPath];
   try {
-    const root = execSync(`git -C "${projectPath}" rev-parse --show-toplevel 2>/dev/null`, {
-      encoding: 'utf8', timeout: 2000
+    const root = execFileSync('git', ['-C', projectPath, 'rev-parse', '--show-toplevel'], {
+      encoding: 'utf8', timeout: 2000, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe']
     }).trim();
     _gitRootCache[projectPath] = root;
     return root;
@@ -822,22 +950,22 @@ function getProjectGitInfo(projectPath) {
   if (!gitRoot) return null;
 
   const cwd = gitRoot;
-  const opts = { encoding: 'utf8', timeout: 3000, stdio: ['pipe', 'pipe', 'pipe'] };
+  const opts = { encoding: 'utf8', timeout: 3000, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] };
   const info = { gitRoot, branch: '', remoteUrl: '', lastCommit: '', lastCommitDate: '', isDirty: false, _ts: now };
 
-  try { info.branch = execSync(`git -C "${cwd}" rev-parse --abbrev-ref HEAD 2>/dev/null`, opts).trim(); } catch {}
-  try { info.remoteUrl = execSync(`git -C "${cwd}" config --get remote.origin.url 2>/dev/null`, opts).trim(); } catch {}
+  try { info.branch = execFileSync('git', ['-C', cwd, 'rev-parse', '--abbrev-ref', 'HEAD'], opts).trim(); } catch {}
+  try { info.remoteUrl = execFileSync('git', ['-C', cwd, 'config', '--get', 'remote.origin.url'], opts).trim(); } catch {}
   try {
-    const log = execSync(`git -C "${cwd}" log -1 --format="%h %s" 2>/dev/null`, opts).trim();
+    const log = execFileSync('git', ['-C', cwd, 'log', '-1', '--format=%h %s'], opts).trim();
     if (log) {
       const sp = log.indexOf(' ');
       info.lastCommit = sp > 0 ? log.slice(sp + 1).slice(0, 80) : log;
       info.lastCommitHash = sp > 0 ? log.slice(0, sp) : '';
     }
   } catch {}
-  try { info.lastCommitDate = execSync(`git -C "${cwd}" log -1 --format="%ci" 2>/dev/null`, opts).trim(); } catch {}
+  try { info.lastCommitDate = execFileSync('git', ['-C', cwd, 'log', '-1', '--format=%ci'], opts).trim(); } catch {}
   try {
-    const status = execSync(`git -C "${cwd}" status --porcelain 2>/dev/null`, opts).trim();
+    const status = execFileSync('git', ['-C', cwd, 'status', '--porcelain'], opts).trim();
     info.isDirty = status.length > 0;
   } catch {}
 
@@ -1028,6 +1156,8 @@ function loadSessions() {
       s.has_detail = false;
       s.file_size = 0;
       s.detail_messages = 0;
+      s.mcp_servers = [];
+      s.skills = [];
     }
   }
 
@@ -1060,6 +1190,8 @@ function loadSessions() {
             has_detail: true,
             file_size: summary.fileSize,
             detail_messages: summary.msgCount,
+            mcp_servers: summary.mcpServers,
+            skills: summary.skills,
             _claude_dir: CLAUDE_DIR,
             _session_file: filePath,
             worktree_original_cwd: summary.worktreeOriginalCwd || '',
@@ -1067,6 +1199,12 @@ function loadSessions() {
         }
       }
     } catch {}
+  }
+
+  // Ensure all sessions have mcp_servers/skills (defaults for non-Claude)
+  for (const s of Object.values(sessions)) {
+    if (!s.mcp_servers) s.mcp_servers = [];
+    if (!s.skills) s.skills = [];
   }
 
   const result = Object.values(sessions).sort((a, b) => b.last_ts - a.last_ts);
@@ -1119,11 +1257,21 @@ function loadSessionDetail(sessionId, project) {
         if (entry.type === 'user' || entry.type === 'assistant') {
           const content = extractContent((entry.message || {}).content);
           if (content) {
-            messages.push({ role: entry.type, content: content.slice(0, 2000), uuid: entry.uuid || '' });
+            const msg = { role: entry.type, content: content.slice(0, 2000), uuid: entry.uuid || '' };
+            if (entry.type === 'assistant') {
+              const rawContent = (entry.message || {}).content;
+              if (Array.isArray(rawContent)) {
+                const tools = extractTools(rawContent);
+                if (tools.length > 0) msg.tools = tools;
+              }
+            }
+            messages.push(msg);
           }
         }
       } else {
+        // Codex format: response_item with payload
         if (entry.type === 'response_item' && entry.payload) {
+          const pType = entry.payload.type;
           const role = entry.payload.role;
           if (role === 'user' || role === 'assistant') {
             const content = extractContent(entry.payload.content);
@@ -1131,9 +1279,34 @@ function loadSessionDetail(sessionId, project) {
               messages.push({ role: role, content: content.slice(0, 2000), uuid: '' });
             }
           }
+          // Codex function_call → attach as tool to last assistant message
+          if (pType === 'function_call') {
+            const name = entry.payload.name || '';
+            if (name.startsWith('mcp__')) {
+              const parts = name.split('__');
+              if (parts.length >= 3) {
+                const lastMsg = messages.length > 0 ? messages[messages.length - 1] : null;
+                if (lastMsg && lastMsg.role === 'assistant') {
+                  if (!lastMsg.tools) lastMsg.tools = [];
+                  if (!lastMsg._toolSeen) lastMsg._toolSeen = new Set();
+                  const tool = parts.slice(2).join('__');
+                  const key = 'mcp:' + parts[1] + ':' + tool;
+                  if (!lastMsg._toolSeen.has(key)) {
+                    lastMsg._toolSeen.add(key);
+                    lastMsg.tools.push({ type: 'mcp', server: parts[1], tool: tool });
+                  }
+                }
+              }
+            }
+          }
         }
       }
     } catch {}
+  }
+
+  // Clean up internal markers from Codex
+  for (const m of messages) {
+    if (m._toolSeen) delete m._toolSeen;
   }
 
   return { messages: messages.slice(0, 200) };
@@ -1191,10 +1364,9 @@ function getGitCommits(projectDir, fromTs, toTs) {
     const afterDate = new Date(fromTs).toISOString();
     const beforeDate = new Date(toTs).toISOString();
 
-    const output = execSync(
-      `git log --oneline --after="${afterDate}" --before="${beforeDate}"`,
-      { cwd: projectDir, encoding: 'utf8', timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }
-    ).trim();
+    const output = execFileSync('git', [
+      'log', '--oneline', `--after=${afterDate}`, `--before=${beforeDate}`
+    ], { cwd: projectDir, encoding: 'utf8', timeout: 5000, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }).trim();
 
     if (!output) return [];
 
@@ -1322,10 +1494,10 @@ function findSessionFile(sessionId, project) {
   // Try Kiro (SQLite)
   if (fs.existsSync(KIRO_DB)) {
     try {
-      const check = execSync(
-        `sqlite3 "${KIRO_DB}" "SELECT COUNT(*) FROM conversations_v2 WHERE conversation_id = '${sessionId.replace(/'/g, "''")}';"`,
-        { encoding: 'utf8', timeout: 3000 }
-      ).trim();
+      const check = execFileSync('sqlite3', [
+        KIRO_DB,
+        `SELECT COUNT(*) FROM conversations_v2 WHERE conversation_id = '${sessionId.replace(/'/g, "''")}';`
+      ], { encoding: 'utf8', timeout: 3000, windowsHide: true }).trim();
       if (parseInt(check) > 0) {
         return { file: KIRO_DB, format: 'kiro', sessionId: sessionId };
       }
@@ -1360,6 +1532,41 @@ function extractContent(raw) {
       .join('\n');
   }
   return String(raw);
+}
+
+// Extract MCP/Skill tool_use blocks from a Claude assistant message content array.
+// Returns deduplicated array of { type, server, tool } or { type, skill }.
+function extractTools(contentBlocks) {
+  if (!Array.isArray(contentBlocks)) return [];
+  const tools = [];
+  const seen = new Set();
+  for (const block of contentBlocks) {
+    if (!block || block.type !== 'tool_use') continue;
+    const name = block.name || '';
+    if (name.startsWith('mcp__')) {
+      const parts = name.split('__');
+      if (parts.length >= 3) {
+        const tool = parts.slice(2).join('__');
+        const key = 'mcp:' + parts[1] + ':' + tool;
+        if (!seen.has(key)) {
+          seen.add(key);
+          tools.push({ type: 'mcp', server: parts[1], tool: tool });
+        }
+      }
+    } else if (name === 'Skill') {
+      const skillRaw = (block.input || {}).skill;
+      if (skillRaw) {
+        // Use plugin name only (e.g. "superpowers:writing-plans" -> "superpowers")
+        const skill = skillRaw.includes(':') ? skillRaw.split(':')[0] : skillRaw;
+        const key = 'skill:' + skill;
+        if (!seen.has(key)) {
+          seen.add(key);
+          tools.push({ type: 'skill', skill: skill });
+        }
+      }
+    }
+  }
+  return tools;
 }
 
 function getSessionPreview(sessionId, project, limit) {
@@ -1625,10 +1832,10 @@ function computeSessionCost(sessionId, project) {
     const safeId = /^[a-zA-Z0-9_-]+$/.test(found.sessionId) ? found.sessionId : '';
     if (!safeId) return { cost: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0, contextPctSum: 0, contextTurnCount: 0, model: '' };
     try {
-      const rows = execSync(
-        `sqlite3 "${OPENCODE_DB}" "SELECT data FROM message WHERE session_id = '${safeId}' AND json_extract(data, '$.role') = 'assistant' ORDER BY time_created"`,
-        { encoding: 'utf8', timeout: 10000 }
-      ).trim();
+      const rows = execFileSync('sqlite3', [
+        OPENCODE_DB,
+        `SELECT data FROM message WHERE session_id = '${safeId}' AND json_extract(data, '$.role') = 'assistant' ORDER BY time_created`
+      ], { encoding: 'utf8', timeout: 10000, windowsHide: true }).trim();
       if (rows) {
         for (const row of rows.split('\n')) {
           try {
@@ -1745,10 +1952,10 @@ function getCostAnalytics(sessions) {
   const opencodeSessions = sessions.filter(s => s.tool === 'opencode');
   if (opencodeSessions.length > 0 && fs.existsSync(OPENCODE_DB)) {
     try {
-      const batchRows = execSync(
-        `sqlite3 "${OPENCODE_DB}" "SELECT session_id, data FROM message WHERE json_extract(data, '$.role') = 'assistant' ORDER BY time_created"`,
-        { encoding: 'utf8', timeout: 30000 }
-      ).trim();
+      const batchRows = execFileSync('sqlite3', [
+        OPENCODE_DB,
+        `SELECT session_id, data FROM message WHERE json_extract(data, '$.role') = 'assistant' ORDER BY time_created`
+      ], { encoding: 'utf8', timeout: 30000, windowsHide: true }).trim();
       if (batchRows) {
         for (const row of batchRows.split('\n')) {
           const sepIdx = row.indexOf('|');
@@ -1841,7 +2048,7 @@ function getCostAnalytics(sessions) {
     byProject[proj].sessions++;
     byProject[proj].tokens += tokens;
 
-    sessionCosts.push({ id: s.id, cost, project: proj, date: s.date });
+    sessionCosts.push({ id: s.id, cost, project: proj, date: s.date, last_ts: s.last_ts || 0 });
   }
 
   // Sort top sessions by cost
@@ -1850,6 +2057,17 @@ function getCostAnalytics(sessions) {
   const days = firstDate && lastDate
     ? Math.max(1, Math.round((new Date(lastDate) - new Date(firstDate)) / 86400000) + 1)
     : 1;
+
+  // Burn rate: derived from already-computed sessionCosts — no extra IO
+  const now = Date.now();
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const hoursElapsedToday = (now - new Date(todayStr).getTime()) / 3600000;
+  let last1hCost = 0;
+  let todayCost = 0;
+  for (const sc of sessionCosts) {
+    if (sc.last_ts >= now - 3600000) last1hCost += sc.cost;
+    if (sc.date === todayStr) todayCost += sc.cost;
+  }
 
   return {
     totalCost,
@@ -1870,6 +2088,9 @@ function getCostAnalytics(sessions) {
     topSessions: sessionCosts.slice(0, 10),
     byAgent,
     agentNoCostData,
+    last1hCost,
+    todayCost,
+    hoursElapsedToday: Math.max(1, hoursElapsedToday),
   };
 }
 
@@ -1993,10 +2214,195 @@ function getActiveSessions() {
   return active;
 }
 
+// ── Leaderboard stats ─────────────────────────────────────
+
+const ANON_NAMES_ADJ = ['brave','swift','calm','bold','keen','wise','cool','fast','wild','epic','rare','pure','warm','dark','deep','fair','free','glad','gold','iron'];
+const ANON_NAMES_NOUN = ['fox','owl','cat','wolf','bear','hawk','lion','deer','hare','crow','lynx','moth','seal','wren','dove','frog','newt','crab','swan','kite'];
+
+function getOrCreateAnonId() {
+  const configDir = path.join(os.homedir(), '.codedash');
+  const idFile = path.join(configDir, 'anon-id.json');
+  try {
+    const data = JSON.parse(fs.readFileSync(idFile, 'utf8'));
+    if (data.id && data.name) return data;
+  } catch {}
+  // Generate new
+  const id = require('crypto').randomUUID();
+  const adj = ANON_NAMES_ADJ[Math.floor(Math.random() * ANON_NAMES_ADJ.length)];
+  const noun = ANON_NAMES_NOUN[Math.floor(Math.random() * ANON_NAMES_NOUN.length)];
+  const num = Math.floor(Math.random() * 100);
+  const name = adj + '-' + noun + '-' + num;
+  const data = { id, name, createdAt: new Date().toISOString() };
+  if (!fs.existsSync(configDir)) fs.mkdirSync(configDir, { recursive: true });
+  fs.writeFileSync(idFile, JSON.stringify(data, null, 2));
+  return data;
+}
+
+const fmtLocalDay = (ts) => {
+  const d = new Date(ts);
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+};
+
+function getDailyStats(sessions) {
+  const byDay = {};
+  const ensureDay = (date) => {
+    if (!byDay[date]) byDay[date] = { date, sessions: 0, messages: 0, hours: 0, cost: 0, agents: {} };
+    return byDay[date];
+  };
+
+  for (const s of sessions) {
+    if (!s.first_ts || !s.last_ts) continue;
+    const tool = s.tool || 'unknown';
+
+    // Cost per session
+    const costData = computeSessionCost(s.id, s.project);
+    const sessionCost = (costData && costData.cost) || 0;
+
+    // For sessions with detail files — read actual message timestamps
+    const found = s.has_detail ? findSessionFile(s.id, s.project) : null;
+    if (found && found.format !== 'opencode' && found.format !== 'kiro' && fs.existsSync(found.file)) {
+      // Read timestamps from session file for accurate per-day breakdown
+      const msgsByDay = {};
+      const tsByDay = {};
+      try {
+        const lines = readLines(found.file);
+        for (const line of lines) {
+          try {
+            const entry = JSON.parse(line);
+            // Detect user message across formats
+            let isUser = false;
+            let hasText = false;
+            let ts = 0;
+
+            if (found.format === 'claude') {
+              if (entry.type !== 'user') continue;
+              isUser = true;
+              if (entry.timestamp) ts = typeof entry.timestamp === 'number' ? entry.timestamp : new Date(entry.timestamp).getTime();
+              const c = entry.message && entry.message.content;
+              if (typeof c === 'string' && c.trim()) hasText = true;
+              else if (Array.isArray(c)) { for (const p of c) { if (p.type === 'text' && p.text && p.text.trim()) { hasText = true; break; } } }
+            } else if (found.format === 'cursor') {
+              if (entry.role !== 'user') continue;
+              isUser = true;
+              ts = s.first_ts; // Cursor has no per-message timestamps, use session time
+              const c = (entry.message || {}).content;
+              if (Array.isArray(c)) { for (const p of c) { if (p.type === 'text' && p.text && p.text.replace(/<\/?user_query>/g,'').trim()) { hasText = true; break; } } }
+              else if (typeof c === 'string' && c.trim()) hasText = true;
+            } else if (found.format === 'codex') {
+              if (entry.type === 'response_item' && entry.payload && entry.payload.role === 'user') {
+                isUser = true;
+                ts = s.first_ts;
+                const c = entry.payload.content;
+                if (Array.isArray(c)) { for (const p of c) { if ((p.text || '').trim()) { hasText = true; break; } } }
+              } else continue;
+            }
+
+            if (!isUser || !hasText) continue;
+            if (!ts || ts < 1000000000000) ts = s.first_ts;
+            const day = (found.format === 'claude' && ts) ? fmtLocalDay(ts) : (s.date || fmtLocalDay(s.last_ts));
+            msgsByDay[day] = (msgsByDay[day] || 0) + 1;
+            if (!tsByDay[day]) tsByDay[day] = { first: ts, last: ts };
+            if (ts < tsByDay[day].first) tsByDay[day].first = ts;
+            if (ts > tsByDay[day].last) tsByDay[day].last = ts;
+          } catch {}
+        }
+      } catch {}
+
+      const dayKeys = Object.keys(msgsByDay);
+      if (dayKeys.length > 0) {
+        const totalMsgs = dayKeys.reduce((a, k) => a + msgsByDay[k], 0) || 1;
+        for (const day of dayKeys) {
+          const d = ensureDay(day);
+          d.sessions++;
+          d.messages += msgsByDay[day];
+          const dayHours = tsByDay[day] ? Math.min((tsByDay[day].last - tsByDay[day].first) / 3600000, 16) : 0;
+          d.hours += dayHours;
+          d.cost += sessionCost * (msgsByDay[day] / totalMsgs); // cost proportional to messages
+          d.agents[tool] = (d.agents[tool] || 0) + 1;
+        }
+        continue; // done with this session
+      }
+    }
+
+    // Fallback for non-Claude or sessions without detail: single-day attribution
+    const day = s.date || fmtLocalDay(s.last_ts);
+    const d = ensureDay(day);
+    d.sessions++;
+    // Estimate user-only prompts: roughly half of total messages
+    d.messages += Math.ceil((s.detail_messages || s.messages || 0) / 2);
+    d.hours += Math.min((s.last_ts - s.first_ts) / 3600000, 16);
+    d.cost += sessionCost;
+    d.agents[tool] = (d.agents[tool] || 0) + 1;
+  }
+
+  // Round
+  for (const d of Object.values(byDay)) {
+    d.hours = Math.round(d.hours * 10) / 10;
+    d.cost = Math.round(d.cost * 100) / 100;
+  }
+  return Object.values(byDay).sort((a, b) => b.date.localeCompare(a.date));
+}
+
+let _lbCache = null;
+let _lbCacheTs = 0;
+const LB_CACHE_TTL = 60000; // 60 seconds
+
+function getLeaderboardStats() {
+  const now = Date.now();
+  if (_lbCache && (now - _lbCacheTs) < LB_CACHE_TTL) return _lbCache;
+
+  const sessions = loadSessions();
+  const anon = getOrCreateAnonId();
+  const daily = getDailyStats(sessions);
+
+  // Totals
+  let totalMessages = 0, totalHours = 0, totalCost = 0, totalSessions = sessions.length;
+  const agentTotals = {};
+  for (const d of daily) {
+    totalMessages += d.messages;
+    totalHours += d.hours;
+    totalCost += d.cost;
+    for (const [agent, count] of Object.entries(d.agents)) {
+      agentTotals[agent] = (agentTotals[agent] || 0) + count;
+    }
+  }
+
+  // Today
+  const today = new Date().toISOString().slice(0, 10);
+  const todayStats = daily.find(d => d.date === today) || { sessions: 0, messages: 0, hours: 0, cost: 0, agents: {} };
+
+  // Streak (consecutive days with sessions)
+  let streak = 0;
+  const dt = new Date();
+  for (let i = 0; i < 365; i++) {
+    const day = dt.toISOString().slice(0, 10);
+    if (daily.find(d => d.date === day)) {
+      streak++;
+      dt.setDate(dt.getDate() - 1);
+    } else {
+      break;
+    }
+  }
+
+  const result = {
+    anon,
+    today: todayStats,
+    totals: { sessions: totalSessions, messages: totalMessages, hours: Math.round(totalHours * 10) / 10, cost: Math.round(totalCost * 100) / 100 },
+    agents: agentTotals,
+    streak,
+    daily: daily.slice(0, 30), // last 30 days
+    activeDays: daily.length,
+  };
+  _lbCache = result;
+  _lbCacheTs = Date.now();
+  return result;
+}
+
 module.exports = {
   loadSessions,
   loadSessionDetail,
   getProjectGitInfo,
+  getLeaderboardStats,
   deleteSession,
   getGitCommits,
   exportSessionMarkdown,
