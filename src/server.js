@@ -2,7 +2,7 @@
 const http = require('http');
 const https = require('https');
 const { URL } = require('url');
-const { exec } = require('child_process');
+const { exec, execFile } = require('child_process');
 const { loadSessions, loadSessionDetail, deleteSession, getGitCommits, exportSessionMarkdown, getSessionPreview, searchFullText, getActiveSessions, getSessionReplay, getCostAnalytics, computeSessionCost, getProjectGitInfo, getLeaderboardStats } = require('./data');
 const { detectTerminals, openInTerminal, focusTerminalByPid } = require('./terminals');
 const { convertSession } = require('./convert');
@@ -12,6 +12,7 @@ const { getHTML } = require('./html');
 
 // ── Logging ──────────────────────────────────
 const LOG_VERBOSE = process.env.CODEDASH_LOG !== '0';
+const DEFAULT_HOST = '127.0.0.1';
 
 function log(tag, msg, data) {
   if (!LOG_VERBOSE && tag !== 'ERROR') return;
@@ -26,8 +27,11 @@ function log(tag, msg, data) {
 }
 
 function startServer(host, port, openBrowser = true) {
+  const browserUrl = getBrowserUrl(host, port);
   const server = http.createServer((req, res) => {
-    const parsed = new URL(req.url, `http://${host}:${port}`);
+    // req.url is usually relative, so this base is only for URL parsing.
+    // Keep it stable instead of reusing the bind host, which may be a wildcard listen address.
+    const parsed = new URL(req.url, `http://localhost:${port}`);
     const pathname = parsed.pathname;
     const reqStart = Date.now();
 
@@ -422,26 +426,23 @@ function startServer(host, port, openBrowser = true) {
     }
   });
 
-  const bindAddr = host === 'localhost' ? '127.0.0.1' : host;
-  const displayHost = host === '0.0.0.0' ? 'localhost' : host;
-  const displayUrl = `http://${displayHost}:${port}`;
-
+  const bindAddr = host === 'localhost' ? DEFAULT_HOST : host;
   server.listen(port, bindAddr, () => {
     console.log('');
     console.log('  \x1b[36m\x1b[1mcodedash\x1b[0m — Claude & Codex Sessions Dashboard');
-    console.log(`  \x1b[2m${displayUrl}\x1b[0m`);
-    if (host === '0.0.0.0') {
+    console.log(`  \x1b[2mbind ${bindAddr}:${port}\x1b[0m`);
+    console.log(`  \x1b[2m${browserUrl}\x1b[0m`);
+    if (host === '0.0.0.0' || host === '::' || host === '[::]') {
       console.log('  \x1b[2mListening on all interfaces\x1b[0m');
     }
     console.log('  \x1b[2mPress Ctrl+C to stop\x1b[0m');
     console.log('');
 
     if (openBrowser) {
-      const browserUrl = `http://localhost:${port}`;
       if (process.platform === 'darwin') {
-        exec(`open ${browserUrl}`);
+        execFile('open', [browserUrl]);
       } else if (process.platform === 'linux') {
-        exec(`xdg-open ${browserUrl}`);
+        execFile('xdg-open', [browserUrl]);
       }
     }
 
@@ -756,6 +757,26 @@ function readBody(req, cb) {
   let body = '';
   req.on('data', chunk => body += chunk);
   req.on('end', () => cb(body));
+}
+
+function getBrowserUrl(host, port) {
+  const browserHost = getBrowserHost(host);
+  const wrappedHost = browserHost.includes(':') && !browserHost.startsWith('[')
+    ? `[${browserHost}]`
+    : browserHost;
+  return `http://${wrappedHost}:${port}`;
+}
+
+function getBrowserHost(host) {
+  if (!host || host === DEFAULT_HOST || host === 'localhost' || host === '::1') {
+    return 'localhost';
+  }
+  if (host === '0.0.0.0' || host === '::' || host === '[::]') {
+    // This URL is only used to show/open the app locally on the machine that started it.
+    // Wildcard bind addresses are valid listen targets, but they are not usable browser hosts.
+    return 'localhost';
+  }
+  return host;
 }
 
 // ── npm version check ───────────────────
