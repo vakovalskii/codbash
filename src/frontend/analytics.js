@@ -1,16 +1,29 @@
 // ── Cost Analytics ────────────────────────────────────────────
 
+var _analyticsHtmlCache = null;
+var _analyticsCacheUrl = null;
+
 async function renderAnalytics(container) {
+  // Check frontend cache first — show instantly if same filters
+  var url = '/api/analytics/cost';
+  var params = [];
+  if (dateFrom) params.push('from=' + dateFrom);
+  if (dateTo) params.push('to=' + dateTo);
+  if (params.length) url += '?' + params.join('&');
+
+  if (_analyticsHtmlCache && _analyticsCacheUrl === url) {
+    container.innerHTML = _analyticsHtmlCache;
+    return;
+  }
+
   container.innerHTML = '<div class="loading">Loading analytics...</div>';
 
   try {
-    var url = '/api/analytics/cost';
-    var params = [];
-    if (dateFrom) params.push('from=' + dateFrom);
-    if (dateTo) params.push('to=' + dateTo);
-    if (params.length) url += '?' + params.join('&');
     var resp = await fetch(url);
     var data = await resp.json();
+
+    // Guard: if user navigated away during fetch, don't overwrite
+    if (currentView !== 'analytics') return;
 
     var html = '<div class="analytics-container">';
     html += '<h2 class="heatmap-title">Cost Analytics</h2>';
@@ -20,7 +33,7 @@ async function renderAnalytics(container) {
     html += '<div class="analytics-card"><span class="analytics-val">$' + data.totalCost.toFixed(2) + '</span><span class="analytics-label">Total cost (API-equivalent)</span></div>';
     html += '<div class="analytics-card"><span class="analytics-val">' + formatTokens(data.totalTokens) + '</span><span class="analytics-label">Total tokens</span></div>';
     html += '<div class="analytics-card"><span class="analytics-val">$' + (data.dailyRate || 0).toFixed(2) + '</span><span class="analytics-label">Avg per day (' + (data.days || 1) + ' days)</span></div>';
-    html += '<div class="analytics-card"><span class="analytics-val">' + data.totalSessions + '</span><span class="analytics-label">Sessions</span></div>';
+    html += '<div class="analytics-card"><span class="analytics-val">' + data.totalSessions + '</span><span class="analytics-label">Sessions with cost data' + (data.totalSessionsAll > data.totalSessions ? ' / ' + data.totalSessionsAll + ' total' : '') + '</span></div>';
     html += '</div>';
 
     // ── Burn rate ──────────────────────────────────────────────
@@ -222,6 +235,8 @@ async function renderAnalytics(container) {
 
     html += '</div>';
     container.innerHTML = html;
+    _analyticsHtmlCache = html;
+    _analyticsCacheUrl = url;
   } catch (e) {
     container.innerHTML = '<div class="empty-state">Failed to load analytics.</div>';
   }

@@ -175,6 +175,9 @@ async function renderLeaderboard(container) {
     var ghResp = await fetch('/api/github/profile');
     var gh = await ghResp.json();
 
+    // Guard: if user navigated away during fetch, don't overwrite
+    if (currentView !== 'leaderboard') return;
+
     var html = '<div class="leaderboard-container">';
 
     // Header card — GitHub profile or anonymous

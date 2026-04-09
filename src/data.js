@@ -2690,6 +2690,7 @@ function _computeCostAnalytics(sessions) {
     lastDate,
     days,
     totalSessions: sessionsWithData,
+    totalSessionsAll: sessions.length,
     byDay,
     byWeek,
     byProject,
