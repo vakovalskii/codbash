@@ -53,6 +53,12 @@ const CURSOR_APP_DATA = process.platform === 'darwin'
     : path.join(ALL_HOMES[0], '.config', 'Cursor');
 const CURSOR_GLOBAL_DB = path.join(CURSOR_APP_DATA, 'User', 'globalStorage', 'state.vscdb');
 const CURSOR_WORKSPACE_STORAGE = path.join(CURSOR_APP_DATA, 'User', 'workspaceStorage');
+const VSCODE_APP_DATA = process.platform === 'darwin'
+  ? path.join(ALL_HOMES[0], 'Library', 'Application Support', 'Code')
+  : process.platform === 'win32'
+    ? path.join(ALL_HOMES[0], 'AppData', 'Roaming', 'Code')
+    : path.join(ALL_HOMES[0], '.config', 'Code');
+const COPILOT_WORKSPACE_STORAGE = path.join(VSCODE_APP_DATA, 'User', 'workspaceStorage');
 const HISTORY_FILE = path.join(CLAUDE_DIR, 'history.jsonl');
 const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
 
@@ -60,6 +66,9 @@ const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
 const EXTRA_CLAUDE_DIRS = ALL_HOMES.slice(1).map(h => path.join(h, '.claude')).filter(d => fs.existsSync(d));
 const EXTRA_CODEX_DIRS = ALL_HOMES.slice(1).map(h => path.join(h, '.codex')).filter(d => fs.existsSync(d));
 const EXTRA_CURSOR_DIRS = ALL_HOMES.slice(1).map(h => path.join(h, '.cursor')).filter(d => fs.existsSync(d));
+const EXTRA_COPILOT_WS_STORAGE = ALL_HOMES.slice(1)
+  .map(h => path.join(h, 'AppData', 'Roaming', 'Code', 'User', 'workspaceStorage'))
+  .filter(d => fs.existsSync(d));
 
 // Extra OpenCode/Kiro DBs on Windows side
 const EXTRA_OPENCODE_DBS = ALL_HOMES.slice(1).map(h => path.join(h, 'AppData', 'Local', 'opencode', 'opencode.db')).filter(d => fs.existsSync(d));
@@ -70,6 +79,7 @@ if (IS_WSL) {
   if (EXTRA_CLAUDE_DIRS.length) console.log('  \x1b[36m[WSL]\x1b[0m Extra Claude dirs:', EXTRA_CLAUDE_DIRS.join(', '));
   if (EXTRA_CODEX_DIRS.length) console.log('  \x1b[36m[WSL]\x1b[0m Extra Codex dirs:', EXTRA_CODEX_DIRS.join(', '));
   if (EXTRA_CURSOR_DIRS.length) console.log('  \x1b[36m[WSL]\x1b[0m Extra Cursor dirs:', EXTRA_CURSOR_DIRS.join(', '));
+  if (EXTRA_COPILOT_WS_STORAGE.length) console.log('  \x1b[36m[WSL]\x1b[0m Extra Copilot WS dirs:', EXTRA_COPILOT_WS_STORAGE.join(', '));
 }
 
 // ── Helpers ────────────────────────────────────────────────
@@ -686,6 +696,182 @@ function buildCursorWorkspaceMap() {
   return map;
 }
 
+// ── GitHub Copilot Chat ──────────────────────────────────
+
+// Extract text from Copilot response parts array
+// Parts without a `kind` field carry the actual markdown text in `part.value`
+function extractCopilotResponseText(responseParts) {
+  if (!Array.isArray(responseParts)) return '';
+  const parts = [];
+  for (const part of responseParts) {
+    if (!part) continue;
+    // Current format: markdown text and thinking chunks are stored in value.
+    if (typeof part.value === 'string' && part.value.trim() && (part.kind === undefined || part.kind === '' || part.kind === 'thinking')) {
+      parts.push(part.value.trim());
+    } else if ((part.kind === 'agentTurnSummary' || part.kind === 'markdownContent') && part.content) {
+      // Older format fallback
+      parts.push(typeof part.content === 'string' ? part.content : (part.content.value || ''));
+    }
+  }
+  return parts.join('\n').trim();
+}
+
+function setByPath(root, pathArr, value) {
+  if (!root || !Array.isArray(pathArr) || pathArr.length === 0) return;
+  let cur = root;
+  for (let i = 0; i < pathArr.length - 1; i++) {
+    const key = pathArr[i];
+    const nextKey = pathArr[i + 1];
+    if (cur[key] === undefined || cur[key] === null) {
+      cur[key] = typeof nextKey === 'number' ? [] : {};
+    }
+    cur = cur[key];
+  }
+  cur[pathArr[pathArr.length - 1]] = value;
+}
+
+function appendByPath(root, pathArr, items) {
+  if (!root || !Array.isArray(pathArr) || pathArr.length === 0 || !Array.isArray(items)) return;
+  let cur = root;
+  for (let i = 0; i < pathArr.length; i++) {
+    const key = pathArr[i];
+    const isLeaf = i === pathArr.length - 1;
+    if (isLeaf) {
+      if (!Array.isArray(cur[key])) cur[key] = [];
+      cur[key].push(...items);
+      return;
+    }
+    const nextKey = pathArr[i + 1];
+    if (cur[key] === undefined || cur[key] === null) {
+      cur[key] = typeof nextKey === 'number' ? [] : {};
+    }
+    cur = cur[key];
+  }
+}
+
+// Read Copilot session requests from either .json or .jsonl file
+function readCopilotRequests(filePath) {
+  const raw = fs.readFileSync(filePath, 'utf8');
+  // .json files are plain JSON objects
+  if (filePath.endsWith('.json')) {
+    try {
+      const d = JSON.parse(raw);
+      return { requests: d.requests || [], creationDate: d.creationDate || 0, lastMessageDate: d.lastMessageDate || 0 };
+    } catch { return { requests: [], creationDate: 0, lastMessageDate: 0 }; }
+  }
+  // .jsonl files use kind:0/1/2 delta format
+  let state = { requests: [] };
+  for (const line of raw.split('\n').map(l => l.replace(/\r$/, '')).filter(Boolean)) {
+    try {
+      const entry = JSON.parse(line);
+      if (entry.kind === 0 && entry.v) {
+        state = entry.v;
+        if (!Array.isArray(state.requests)) state.requests = [];
+      } else if (entry.kind === 1 && Array.isArray(entry.k)) {
+        setByPath(state, entry.k, entry.v);
+      } else if (entry.kind === 2 && Array.isArray(entry.k) && Array.isArray(entry.v)) {
+        appendByPath(state, entry.k, entry.v);
+      }
+    } catch {}
+  }
+  return {
+    requests: Array.isArray(state.requests) ? state.requests : [],
+    creationDate: state.creationDate || 0,
+    lastMessageDate: state.lastMessageDate || 0,
+  };
+}
+
+// Parse session file to extract metadata (fast path — reads file once)
+function parseCopilotSessionMeta(filePath) {
+  let parsed;
+  try { parsed = readCopilotRequests(filePath); } catch { return { creationDate: 0, lastTs: 0, requestCount: 0, firstMessage: '' }; }
+  const { requests, creationDate, lastMessageDate } = parsed;
+  const firstMessage = requests.length > 0 && requests[0].message
+    ? (requests[0].message.text || '').slice(0, 200) : '';
+  const lastTs = lastMessageDate || (requests.length > 0 ? (requests[requests.length - 1].timestamp || 0) : 0);
+  return { creationDate, lastTs: lastTs || creationDate, requestCount: requests.length, firstMessage };
+}
+
+// Load detail messages from a Copilot session file
+function loadCopilotDetailFromFile(filePath) {
+  let parsed;
+  try { parsed = readCopilotRequests(filePath); } catch { return { messages: [] }; }
+  const messages = [];
+  for (const req of parsed.requests) {
+    const userText = req.message && req.message.text ? req.message.text.trim() : '';
+    if (userText) {
+      messages.push({ role: 'user', content: userText.slice(0, 2000), uuid: req.requestId || '' });
+    }
+    const assistantText = extractCopilotResponseText(req.response);
+    if (assistantText) {
+      messages.push({ role: 'assistant', content: assistantText.slice(0, 2000), uuid: req.responseId || '' });
+    }
+  }
+  return { messages: messages.slice(0, 200) };
+}
+
+// Scan all Copilot chat sessions across all VS Code workspace storages
+function scanCopilotSessions() {
+  const sessions = [];
+  const allWsDirs = [COPILOT_WORKSPACE_STORAGE].concat(EXTRA_COPILOT_WS_STORAGE);
+
+  for (const wsDir of allWsDirs) {
+    if (!fs.existsSync(wsDir)) continue;
+    let hashes;
+    try { hashes = fs.readdirSync(wsDir); } catch { continue; }
+
+    for (const hash of hashes) {
+      const chatSessionsDir = path.join(wsDir, hash, 'chatSessions');
+      if (!fs.existsSync(chatSessionsDir)) continue;
+
+      // Resolve workspace hash → project path
+      let projectPath = '';
+      try {
+        const wsData = JSON.parse(fs.readFileSync(path.join(wsDir, hash, 'workspace.json'), 'utf8'));
+        let folder = wsData.folder || '';
+        if (folder.startsWith('file:///')) {
+          folder = decodeURIComponent(folder.slice(8));
+          // Windows: /d:/path → d:/path
+          if (process.platform === 'win32' && /^\/[a-zA-Z]:\//.test(folder)) {
+            folder = folder.slice(1);
+          }
+        }
+        projectPath = folder;
+      } catch {}
+
+      let files;
+      try { files = fs.readdirSync(chatSessionsDir); } catch { continue; }
+
+      for (const file of files) {
+        if (!file.endsWith('.jsonl') && !file.endsWith('.json')) continue;
+        const sessionId = file.endsWith('.jsonl') ? file.replace('.jsonl', '') : file.replace('.json', '');
+        const filePath = path.join(chatSessionsDir, file);
+        try {
+          const stat = fs.statSync(filePath);
+          const meta = parseCopilotSessionMeta(filePath);
+          sessions.push({
+            id: sessionId,
+            tool: 'copilot',
+            project: projectPath,
+            project_short: projectPath ? projectPath.replace(os.homedir(), '~') : '',
+            first_ts: meta.creationDate || stat.mtimeMs,
+            last_ts: meta.lastTs || stat.mtimeMs,
+            messages: meta.requestCount,
+            first_message: meta.firstMessage,
+            has_detail: true,
+            file_size: stat.size,
+            detail_messages: meta.requestCount * 2,
+            mcp_servers: [],
+            skills: [],
+            _file: filePath,
+          });
+        } catch {}
+      }
+    }
+  }
+  return sessions;
+}
+
 function scanCursorSessions() {
   const sessions = [];
   const seenIds = new Set();
@@ -1241,6 +1427,18 @@ function _updateScanMarkers() {
   } catch {}
 }
 
+function _invalidateRuntimeCaches() {
+  _sessionsCache = null;
+  _sessionsCacheTs = 0;
+  _sessionFileIndex = null;
+  _sessionFileIndexTs = 0;
+  searchIndex = null;
+  searchIndexBuiltAt = 0;
+  for (const k in _costMemCache) delete _costMemCache[k];
+  _analyticsCacheResult = null;
+  _analyticsCacheKey = null;
+}
+
 // Progressive loading: cursor vscdb sessions load in background
 let _cursorVscdbSessions = null;
 let _cursorVscdbLoading = false;
@@ -1454,6 +1652,14 @@ function loadSessions() {
     }
   } catch {}
 
+  // Load Copilot sessions
+  try {
+    const copilotSessions = scanCopilotSessions();
+    for (const cs of copilotSessions) {
+      sessions[cs.id] = cs;
+    }
+  } catch {}
+
   // WSL: also load from Windows-side dirs
   for (const extraClaudeDir of EXTRA_CLAUDE_DIRS) {
     try {
@@ -1660,6 +1866,11 @@ function loadSessionDetail(sessionId, project) {
     return loadKiroDetail(sessionId);
   }
 
+  // Copilot
+  if (found.format === 'copilot') {
+    return loadCopilotDetailFromFile(found.file);
+  }
+
   const messages = [];
   const lines = readLines(found.file);
 
@@ -1727,7 +1938,55 @@ function loadSessionDetail(sessionId, project) {
 }
 
 function deleteSession(sessionId, project) {
+  project = project || '';
   const deleted = [];
+
+  // For copilot: remove matching session file(s) from all workspaceStorage roots.
+  _buildSessionFileIndex();
+  const foundForDelete = _sessionFileIndex[sessionId];
+  if (foundForDelete && foundForDelete.format === 'copilot') {
+    const allCopilotWsDirs = [COPILOT_WORKSPACE_STORAGE].concat(EXTRA_COPILOT_WS_STORAGE);
+    const seenFiles = new Set();
+
+    // Delete from indexed file first
+    if (foundForDelete.file && fs.existsSync(foundForDelete.file)) {
+      fs.unlinkSync(foundForDelete.file);
+      seenFiles.add(foundForDelete.file);
+      deleted.push('copilot session file');
+    }
+
+    // Also delete same session id across all known workspace hashes (defensive)
+    for (const wsDir of allCopilotWsDirs) {
+      if (!fs.existsSync(wsDir)) continue;
+      let hashes;
+      try { hashes = fs.readdirSync(wsDir); } catch { continue; }
+
+      for (const hash of hashes) {
+        const chatDir = path.join(wsDir, hash, 'chatSessions');
+        if (fs.existsSync(chatDir)) {
+          for (const ext of ['.jsonl', '.json']) {
+            const fp = path.join(chatDir, sessionId + ext);
+            if (!seenFiles.has(fp) && fs.existsSync(fp)) {
+              fs.unlinkSync(fp);
+              seenFiles.add(fp);
+              deleted.push('copilot session file');
+            }
+          }
+        }
+
+        // Remove chatEditingSessions sibling if present
+        const editDir = path.join(wsDir, hash, 'chatEditingSessions', sessionId);
+        if (fs.existsSync(editDir)) {
+          fs.rmSync(editDir, { recursive: true, force: true });
+          deleted.push('copilot editing session');
+        }
+      }
+    }
+
+    if (!deleted.length) throw new Error('Session file not found');
+    _invalidateRuntimeCaches();
+    return deleted;
+  }
 
   // 1. Remove session JSONL file from project dir
   const projectKey = project.replace(/[^a-zA-Z0-9-]/g, '-');
@@ -1765,6 +2024,9 @@ function deleteSession(sessionId, project) {
     fs.unlinkSync(envFile);
     deleted.push('env file');
   }
+
+  if (!deleted.length) throw new Error('Session file not found');
+  _invalidateRuntimeCaches();
 
   return deleted;
 }
@@ -1911,6 +2173,27 @@ function _buildSessionFileIndex() {
             if (f.endsWith('.jsonl') || f.endsWith('.json')) {
               _sessionFileIndex[chatDir] = { file: path.join(fullDir, f), format: 'cursor' };
               break;
+            }
+          }
+        } catch {}
+      }
+    } catch {}
+  }
+
+  // Index Copilot chatSessions files
+  const allCopilotWsDirs = [COPILOT_WORKSPACE_STORAGE].concat(EXTRA_COPILOT_WS_STORAGE);
+  for (const wsDir of allCopilotWsDirs) {
+    if (!fs.existsSync(wsDir)) continue;
+    try {
+      for (const hash of fs.readdirSync(wsDir)) {
+        const chatDir = path.join(wsDir, hash, 'chatSessions');
+        if (!fs.existsSync(chatDir)) continue;
+        try {
+          for (const file of fs.readdirSync(chatDir)) {
+            if (!file.endsWith('.jsonl') && !file.endsWith('.json')) continue;
+            const sid = file.endsWith('.jsonl') ? file.replace('.jsonl', '') : file.replace('.json', '');
+            if (!_sessionFileIndex[sid]) {
+              _sessionFileIndex[sid] = { file: path.join(chatDir, file), format: 'copilot' };
             }
           }
         } catch {}
@@ -2076,6 +2359,14 @@ function getSessionPreview(sessionId, project, limit) {
     });
   }
 
+  // Copilot
+  if (found.format === 'copilot') {
+    var detail = loadCopilotDetailFromFile(found.file);
+    return detail.messages.slice(0, limit).map(function(m) {
+      return { role: m.role, content: m.content.slice(0, 300) };
+    });
+  }
+
   // OpenCode: use loadOpenCodeDetail and slice
   if (found.format === 'opencode') {
     const detail = loadOpenCodeDetail(sessionId);
@@ -2227,6 +2518,15 @@ function getSessionReplay(sessionId, project) {
   const found = findSessionFile(sessionId, project);
   if (!found) return { messages: [], duration: 0 };
 
+  // Copilot: reconstruct from request objects (no per-message ISO timestamps)
+  if (found.format === 'copilot') {
+    const detail = loadCopilotDetailFromFile(found.file);
+    const msgs = detail.messages.map(function(m) {
+      return { role: m.role, content: m.content, timestamp: '', ms: 0 };
+    });
+    return { messages: msgs, startMs: 0, endMs: 0, duration: 0 };
+  }
+
   const messages = [];
   const lines = readLines(found.file);
 
@@ -2334,7 +2634,7 @@ function computeSessionCost(sessionId, project) {
   if (!found) { _costMemCache[sessionId] = EMPTY_COST; return EMPTY_COST; }
 
   // Skip formats that never have cost data
-  if (found.format === 'cursor' || found.format === 'kiro') { _costMemCache[sessionId] = EMPTY_COST; return EMPTY_COST; }
+  if (found.format === 'cursor' || found.format === 'kiro' || found.format === 'copilot') { _costMemCache[sessionId] = EMPTY_COST; return EMPTY_COST; }
 
   // Check disk cache (keyed by file path + mtime + size for JSONL, sessionId for SQLite)
   _loadCostDiskCache();
