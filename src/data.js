@@ -789,9 +789,14 @@ async function parseClaudeSessionFileAsync(sessionFile) {
       const entry = JSON.parse(line);
       if (entry.type === 'user' || entry.type === 'assistant') msgCount++;
       if (entry.type === 'user' && isRealUserPromptAsync(entry)) userMsgCount++;
-      if (entry.timestamp) {
-        if (entry.timestamp < firstTs) firstTs = entry.timestamp;
-        if (entry.timestamp > lastTs) lastTs = entry.timestamp;
+      const rawTimestamp = entry.timestamp;
+      const normalizedTimestamp =
+        typeof rawTimestamp === 'number'
+          ? rawTimestamp
+          : (typeof rawTimestamp === 'string' ? Date.parse(rawTimestamp) : NaN);
+      if (Number.isFinite(normalizedTimestamp)) {
+        if (normalizedTimestamp < firstTs) firstTs = normalizedTimestamp;
+        if (normalizedTimestamp > lastTs) lastTs = normalizedTimestamp;
       }
       if (!projectPath && entry.type === 'user' && entry.cwd) projectPath = entry.cwd;
       if (!worktreeOriginalCwd && entry.type === 'worktree-state' && entry.worktreeSession && entry.worktreeSession.originalCwd) {
