@@ -3565,15 +3565,16 @@ function buildOpencodeCostCache(sessions) {
   if (opencodeSessions.length === 0 || !fs.existsSync(OPENCODE_DB)) return cache;
   try {
     const batchRows = execFileSync('sqlite3', [
+      '-json',
       OPENCODE_DB,
       `SELECT session_id, data FROM message WHERE json_extract(data, '$.role') = 'assistant' ORDER BY time_created`
     ], { encoding: 'utf8', timeout: 30000, windowsHide: true }).trim();
     if (batchRows) {
-      for (const row of batchRows.split('\n')) {
-        const sepIdx = row.indexOf('|');
-        if (sepIdx < 0) continue;
-        const sessId = row.slice(0, sepIdx);
-        const jsonStr = row.slice(sepIdx + 1);
+      const rows = JSON.parse(batchRows);
+      for (const row of rows) {
+        const sessId = row.session_id;
+        const jsonStr = row.data;
+        if (!sessId || typeof jsonStr !== 'string') continue;
         try {
           const msgData = JSON.parse(jsonStr);
           const t = msgData.tokens || {};
