@@ -2,7 +2,7 @@
 
 ## Overview
 
-CodeDash is a zero-dependency Node.js dashboard for AI coding agent sessions. Supports 6 agents: Claude Code, Claude Extension, Codex, Cursor, OpenCode, Kiro. Single process serves a web UI at `localhost:3847`.
+CodeDash is a zero-dependency Node.js dashboard for AI coding agent sessions. Supports 7 agents: Claude Code, Claude Extension, Codex, Cursor, GitHub Copilot, OpenCode, Kiro. Single process serves a web UI at `localhost:3847`.
 
 ```
 Browser (localhost:3847)            Node.js Server
@@ -21,10 +21,11 @@ Browser (localhost:3847)            Node.js Server
        | convert/export/   |        |    +-- changelog.js            |
        | import/update     |        +-------------------------------+
        +-------------------+                    |
-                                   reads from 5 locations:
-                              ~/.claude/  ~/.codex/  ~/.cursor/
-                              ~/.local/share/opencode/opencode.db
-                              ~/Library/Application Support/kiro-cli/data.sqlite3
+                                  reads from 6 locations:
+                                ~/.claude/  ~/.codex/  ~/.cursor/
+                                VS Code workspaceStorage/chatSessions
+                                ~/.local/share/opencode/opencode.db
+                                ~/Library/Application Support/kiro-cli/data.sqlite3
 ```
 
 ## Project Structure
@@ -170,7 +171,28 @@ GROUP BY m.id ORDER BY m.time_created
 
 Tables: `session`, `message`, `part`. Message `data` is JSON with `{role, tokens, model}`. Part `data` is JSON with `{type, text}`.
 
-### 6. Kiro CLI
+### 6. GitHub Copilot (VS Code Chat)
+
+| Item | Location |
+|------|----------|
+| Session files | `%APPDATA%/Code/User/workspaceStorage/<HASH>/chatSessions/<SESSION_ID>.jsonl` |
+| Workspace map | `%APPDATA%/Code/User/workspaceStorage/<HASH>/workspace.json` |
+| Editing sessions (optional) | `%APPDATA%/Code/User/workspaceStorage/<HASH>/chatEditingSessions/<SESSION_ID>/` |
+
+On macOS/Linux, the base path follows VS Code app data convention (`~/Library/Application Support/Code/User/workspaceStorage` or `~/.config/Code/User/workspaceStorage`).
+
+**Session JSONL uses delta updates**:
+- `kind: 0` initializes base state (`creationDate`, `requests`, etc.)
+- `kind: 1` updates a value by path (`k` array)
+- `kind: 2` appends array items by path (`k` array)
+
+CodeDash reconstructs requests from these deltas, then extracts:
+- user text from `requests[n].message.text`
+- assistant text from `requests[n].response[*].value` (including streamed chunks)
+
+Copilot has no stable token usage in this format, so cost is reported as unavailable.
+
+### 7. Kiro CLI
 
 | Item | Location |
 |------|----------|
@@ -208,12 +230,13 @@ FROM conversations_v2 ORDER BY updated_at DESC
 2. scanCodexSessions() → merge into sessions{} (tool: "codex")
 3. scanOpenCodeSessions() → merge (tool: "opencode")
 4. scanCursorSessions() → merge (tool: "cursor")
-5. scanKiroSessions() → merge (tool: "kiro")
-6. Enrich Claude sessions with detail files:
+5. scanCopilotSessions() → merge (tool: "copilot")
+6. scanKiroSessions() → merge (tool: "kiro")
+7. Enrich Claude sessions with detail files:
    - Count messages, get file size
    - Check entrypoint → change tool to "claude-ext" if not "cli"
-7. Scan orphan sessions from ~/.claude/projects/ (Claude Extension)
-8. Sort by last_ts DESC, format dates
+8. Scan orphan sessions from ~/.claude/projects/ (Claude Extension)
+9. Sort by last_ts DESC, format dates
 ```
 
 ### Search Index
@@ -235,12 +258,13 @@ cost = input_tokens * input_price
 
 Model pricing in `MODEL_PRICING` object (per-token rates for opus, sonnet, haiku, codex-mini, gpt-5).
 Codex fallback: estimate from file size (~4 bytes per token).
+Formats without reliable token usage (`cursor`, `kiro`, `copilot`) are reported as no token data.
 
 ### Active Session Detection
 
 ```
 1. Read ~/.claude/sessions/*.json → PID-to-session map
-2. ps aux | grep "claude|codex|opencode|kiro-cli|cursor-agent"
+2. ps aux | grep "claude|codex|opencode|kiro-cli|cursor-agent|copilot"
 3. For each process: parse PID, CPU%, memory, state
 4. Status: "active" (CPU >= 1%) or "waiting" (sleeping/stopped)
 5. Map PID → sessionId via PID files

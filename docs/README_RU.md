@@ -1,6 +1,6 @@
 # CodeDash
 
-Дашборд + CLI для сессий AI-агентов. 5 агентов: Claude Code, Codex, Cursor, OpenCode, Kiro.
+Дашборд + CLI для сессий AI-агентов. 6 агентов: Claude Code, Codex, Cursor, GitHub Copilot (VS Code), OpenCode, Kiro.
 
 [English](../README.md) | [Chinese / 中文](README_ZH.md)
 
@@ -17,6 +17,7 @@ npm i -g codedash-app && codedash run
 | Claude Code | JSONL | LIVE/WAITING | Да | Терминал / cmux |
 | Codex CLI | JSONL | LIVE/WAITING | Да | Терминал |
 | Cursor | JSONL | LIVE/WAITING | - | Open in Cursor |
+| GitHub Copilot (VS Code) | JSONL | - | - | Open in VS Code |
 | OpenCode | SQLite | LIVE/WAITING | - | Терминал |
 | Kiro CLI | SQLite | LIVE/WAITING | - | Терминал |
 
@@ -24,7 +25,7 @@ npm i -g codedash-app && codedash run
 
 - Grid/List, группировка по проектам, trigram поиск + deep search
 - GitHub-стиль SVG heatmap активности со стриками
-- LIVE/WAITING бейджи для всех 5 агентов, анимированная рамка
+- LIVE/WAITING бейджи для локальных agent-процессов, анимированная рамка
 - Session Replay с ползунком, hover превью, раскрытие карточек
 - Аналитика стоимости из реальных usage данных
 - Конвертация сессий Claude <-> Codex, Handoff между агентами
