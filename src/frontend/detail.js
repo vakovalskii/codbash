@@ -16,13 +16,15 @@ async function openDetail(s) {
   var terminal = localStorage.getItem('codedash-terminal') || '';
 
   var infoHtml = '<div class="detail-info">';
-  // AI Title row
+  // Name row: prefer locally generated AI name, then session metadata name
   var aiTitle = sessionTitles[s.id];
+  var sessionName = s.first_message || '';
+  var displayName = aiTitle || (sessionName ? sessionName.slice(0, 55) : '');
   var escProject = escHtml(s.project || '').replace(/'/g, "\\'");
-  if (aiTitle) {
-    infoHtml += '<div class="detail-row"><span class="detail-label">AI Title</span><span style="font-weight:600;flex:1">' + escHtml(aiTitle) + '</span><button class="toolbar-btn" style="font-size:10px;padding:1px 6px" onclick="generateTitle(\'' + s.id + '\',\'' + escProject + '\')" title="Regenerate">&#8635;</button></div>';
+  if (displayName) {
+    infoHtml += '<div class="detail-row"><span class="detail-label">Name</span><span style="font-weight:600;flex:1">' + escHtml(displayName) + '</span><button class="toolbar-btn" style="font-size:10px;padding:1px 6px" onclick="generateTitle(\'' + s.id + '\',\'' + escProject + '\')" title="Regenerate by AI">&#8635;</button></div>';
   } else if (s.has_detail) {
-    infoHtml += '<div class="detail-row"><span class="detail-label">AI Title</span><button class="toolbar-btn" style="font-size:11px;padding:2px 8px" onclick="generateTitle(\'' + s.id + '\',\'' + escProject + '\')">Generate</button></div>';
+    infoHtml += '<div class="detail-row"><span class="detail-label">Name</span><button class="toolbar-btn" style="font-size:11px;padding:2px 8px" onclick="generateTitle(\'' + s.id + '\',\'' + escProject + '\')">Generate AI Name</button></div>';
   }
   var detailToolLabel = s.tool === 'claude-ext' ? 'claude ext' : s.tool;
   infoHtml += '<div class="detail-row"><span class="detail-label">Tool</span><span class="tool-badge tool-' + s.tool + '">' + escHtml(detailToolLabel) + '</span></div>';
