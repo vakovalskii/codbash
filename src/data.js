@@ -2343,14 +2343,23 @@ function loadSessions() {
           if (!summary) {
             // Create a placeholder from stat + history of same sid (none here)
             let size = 0;
-            try { size = fs.statSync(filePath).size; } catch {}
+            let placeholderTs = 0;
+            try {
+              const stat = fs.statSync(filePath);
+              size = stat.size;
+              if (Number.isFinite(stat.mtimeMs) && stat.mtimeMs > 0) {
+                placeholderTs = Math.floor(stat.mtimeMs);
+              } else if (Number.isFinite(stat.ctimeMs) && stat.ctimeMs > 0) {
+                placeholderTs = Math.floor(stat.ctimeMs);
+              }
+            } catch {}
             sessions[sid] = {
               id: sid,
               tool: 'claude',
               project: '',
               project_short: '',
-              first_ts: 0,
-              last_ts: 0,
+              first_ts: placeholderTs,
+              last_ts: placeholderTs,
               messages: 0,
               first_message: '',
               has_detail: true,
