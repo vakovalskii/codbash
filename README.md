@@ -1,6 +1,6 @@
 # CodeDash
 
-Dashboard + CLI for AI coding agent sessions. View, search, resume, convert, and hand off between 5 agents.
+Dashboard + CLI for AI coding agent sessions. View, search, resume, convert, and hand off between 6 agents.
 
 [Russian / Русский](docs/README_RU.md) | [Chinese / 中文](docs/README_ZH.md)
 
@@ -22,6 +22,7 @@ codedash run
 | Claude Code | JSONL | Yes | Yes | Yes | Yes | Yes | Terminal / cmux |
 | Codex CLI | JSONL | Yes | Yes | Yes | Yes | Yes | Terminal |
 | Cursor | JSONL | Yes | Yes | Yes | - | Yes | Open in Cursor |
+| GitHub Copilot (VS Code) | JSONL | Yes | Yes | No | - | Yes | Open in VS Code |
 | OpenCode | SQLite | Yes | Yes | Yes | - | Yes | Terminal |
 | Kiro CLI | SQLite | Yes | Yes | Yes | - | Yes | Terminal |
 
@@ -40,10 +41,10 @@ Also detects Claude Code running inside Cursor (via `claude-vscode` entrypoint).
 - Themes: Dark, Light, System
 
 **Live Monitoring**
-- LIVE/WAITING badges on all 5 agent types
+- LIVE/WAITING badges on local terminal/IDE agent processes
 - Animated border on active session cards
 - Running view with CPU, Memory, PID, Uptime
-- Focus Terminal / Open in Cursor buttons
+- Focus Terminal / Open in Cursor / Open in VS Code buttons
 - Polling every 5 seconds
 
 **Cost Analytics**
@@ -54,7 +55,7 @@ Also detects Claude Code running inside Cursor (via `claude-vscode` entrypoint).
 **Cross-Agent**
 - Convert sessions between Claude Code and Codex
 - Handoff: generate context document to continue in any agent
-- Install Agents: one-click install commands for all 5 agents
+- Install Agents: one-click install commands for Claude, Codex, Kiro, OpenCode
 
 **CLI**
 ```bash
@@ -80,6 +81,7 @@ codedash stop
 ~/.claude/                              Claude Code sessions + PID tracking
 ~/.codex/                               Codex CLI sessions
 ~/.cursor/projects/*/agent-transcripts/ Cursor agent sessions
+%APPDATA%/Code/User/workspaceStorage/*/chatSessions/ GitHub Copilot chat sessions
 ~/.local/share/opencode/opencode.db     OpenCode (SQLite)
 ~/Library/Application Support/kiro-cli/ Kiro CLI (SQLite)
 ```
