@@ -281,6 +281,12 @@ function toggleStar(id) {
   else stars.push(id);
   localStorage.setItem('codedash-stars', JSON.stringify(stars));
   render();
+  var detailBtn = document.querySelector('.detail-star');
+  if (detailBtn) {
+    var nowStarred = stars.indexOf(id) >= 0;
+    detailBtn.className = 'star-btn detail-star' + (nowStarred ? ' active' : '');
+    detailBtn.innerHTML = '&#9733; ' + (nowStarred ? 'Starred' : 'Star');
+  }
 }
 
 // ── AI Titles ─────────────────────────────────────────────────
