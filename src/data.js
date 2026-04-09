@@ -5,9 +5,78 @@ const { execSync, execFileSync } = require('child_process');
 
 // ── Constants ──────────────────────────────────────────────
 
-// Detect WSL and find Windows user home for cross-OS data access
+function normalizeProjectPath(value) {
+  if (!value || typeof value !== 'string') return value || '';
+  let normalized = value.trim();
+  if (!normalized) return '';
+  if (/^\\\\\?\\UNC\\/i.test(normalized)) {
+    normalized = '\\\\' + normalized.slice(8);
+  } else if (/^\\\\\?\\[A-Za-z]:\\/i.test(normalized)) {
+    normalized = normalized.slice(4);
+  }
+  return normalized;
+}
+
+function parseWslDistroList(raw) {
+  const text = Buffer.isBuffer(raw)
+    ? raw.toString('utf16le')
+    : String(raw || '').replace(/\0/g, '');
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function buildWslUncPath(distro, linuxPath) {
+  if (!distro || !linuxPath || !linuxPath.startsWith('/')) return '';
+  return '\\\\wsl$\\' + distro + linuxPath.replace(/\//g, '\\');
+}
+
+function detectWindowsWslHomes() {
+  if (process.platform !== 'win32') return [];
+  const homes = [];
+  try {
+    const distros = parseWslDistroList(execFileSync('wsl.exe', ['-l', '-q'], {
+      encoding: 'buffer',
+      timeout: 3000,
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }));
+
+    for (const distro of distros) {
+      try {
+        const linuxHome = String(execFileSync('wsl.exe', ['-d', distro, 'sh', '-lc', 'printf %s "$HOME"'], {
+          encoding: 'utf8',
+          timeout: 3000,
+          windowsHide: true,
+          stdio: ['pipe', 'pipe', 'pipe'],
+        }) || '').trim();
+        if (!linuxHome || !linuxHome.startsWith('/')) continue;
+        const uncHome = buildWslUncPath(distro, linuxHome);
+        if (!uncHome) continue;
+        const hasClaude = fs.existsSync(path.join(uncHome, '.claude'));
+        const hasCodex = fs.existsSync(path.join(uncHome, '.codex'));
+        if (hasClaude || hasCodex) homes.push(uncHome);
+      } catch {}
+    }
+  } catch {}
+  return homes;
+}
+
+// Detect cross-OS homes for session data access
 function detectHomes() {
-  const homes = [os.homedir()];
+  const homes = [];
+  const seen = new Set();
+  const addHome = (home) => {
+    const normalized = normalizeProjectPath(home);
+    if (!normalized) return;
+    const key = process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+    if (seen.has(key)) return;
+    seen.add(key);
+    homes.push(normalized);
+  };
+
+  addHome(os.homedir());
   // WSL: also check Windows-side home dirs
   if (process.platform === 'linux' && fs.existsSync('/mnt/c/Users')) {
     try {
@@ -16,21 +85,20 @@ function detectHomes() {
         // Convert C:\Users\foo to /mnt/c/Users/foo
         const drive = winUser[0].toLowerCase();
         const winPath = '/mnt/' + drive + winUser.slice(2).replace(/\\/g, '/');
-        if (fs.existsSync(winPath) && !homes.includes(winPath)) {
-          homes.push(winPath);
-        }
+        if (fs.existsSync(winPath)) addHome(winPath);
       }
     } catch {
       // Fallback: scan /mnt/c/Users/ for directories with .claude
       try {
         for (const u of fs.readdirSync('/mnt/c/Users')) {
           const candidate = '/mnt/c/Users/' + u;
-          if (fs.existsSync(path.join(candidate, '.claude'))) {
-            if (!homes.includes(candidate)) homes.push(candidate);
-          }
+          if (fs.existsSync(path.join(candidate, '.claude'))) addHome(candidate);
         }
       } catch {}
     }
+  }
+  if (process.platform === 'win32') {
+    for (const home of detectWindowsWslHomes()) addHome(home);
   }
   return homes;
 }
@@ -79,6 +147,34 @@ function readLines(filePath) {
   return fs.readFileSync(filePath, 'utf8').split('\n').map(l => l.replace(/\r$/, '')).filter(Boolean);
 }
 
+function shortenHomePath(value, homes = ALL_HOMES) {
+  value = normalizeProjectPath(value);
+  if (!value || typeof value !== 'string') return value || '';
+  const valueLower = value.toLowerCase();
+  for (const homeRaw of homes) {
+    const variants = [];
+    const normalizedHome = normalizeProjectPath(homeRaw);
+    if (normalizedHome) variants.push(normalizedHome);
+    const wslMatch = normalizedHome && normalizedHome.match(/^\/mnt\/([a-z])\/(.*)$/i);
+    if (wslMatch) {
+      variants.push(wslMatch[1].toUpperCase() + ':\\' + wslMatch[2].replace(/\//g, '\\'));
+    }
+    const uncWslMatch = normalizedHome && normalizedHome.match(/^\\\\wsl\$\\[^\\]+\\(.+)$/i);
+    if (uncWslMatch) {
+      variants.push('/' + uncWslMatch[1].replace(/\\/g, '/'));
+    }
+    for (const home of variants) {
+      const homeLower = home.toLowerCase();
+      if (valueLower === homeLower) return '~';
+      if (valueLower.startsWith(homeLower)) {
+        const nextChar = value.charAt(home.length);
+        if (nextChar !== '\\' && nextChar !== '/') continue;
+        return '~' + value.slice(home.length);
+      }
+    }
+  }
+  return value;
+}
 // OpenCode built-in tools that should NOT be treated as MCP servers
 const OPENCODE_BUILTIN_TOOLS = new Set([
   'read', 'write', 'edit', 'bash', 'glob', 'grep', 'task', 'todowrite',
@@ -3137,4 +3233,16 @@ module.exports = {
   KIRO_DB,
   HISTORY_FILE,
   PROJECTS_DIR,
+  __test: {
+    parseWslDistroList,
+    buildWslUncPath,
+    normalizeProjectPath,
+    shortenHomePath,
+    mergeClaudeSessionDetail,
+    getCodexTokenCountUsage,
+    computeCodexCostFromJsonlLines,
+    mergeCodexSession,
+    parseSessionIdFromCommandLine,
+    parseWindowsCwdFromCommandLine,
+  },
 };
