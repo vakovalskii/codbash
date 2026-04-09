@@ -1,6 +1,6 @@
 {
   "name": "codedash-app",
-  "version": "6.15.10",
+  "version": "6.15.11",
   "description": "Dashboard + CLI for Claude Code, Codex & OpenCode sessions. View, search, resume, convert, handoff between agents.",
   "bin": {
     "codedash": "./bin/cli.js"

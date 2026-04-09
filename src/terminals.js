@@ -251,9 +251,11 @@ function focusTerminalByPid(pid) {
         return focusCmuxWorkspace(pid);
       }
 
-      // iTerm2: activate and select the right tab/window by tty
+      // iTerm2: activate and select the right tab/window/session by tty
       if (detectedTerminal === 'iTerm2' || !detectedTerminal) {
         try {
+          // Normalize tty: "ttys005" → "ttys005", "/dev/ttys005" → "ttys005"
+          const ttyNorm = ttyOut.replace('/dev/', '');
           const script = `
             tell application "iTerm"
               activate
@@ -261,9 +263,10 @@ function focusTerminalByPid(pid) {
                 repeat with t in tabs of w
                   repeat with s in sessions of t
                     set sessionTTY to tty of s
-                    if sessionTTY contains "${ttyOut}" or "${ttyOut}" contains sessionTTY then
+                    if sessionTTY contains "${ttyNorm}" then
                       select w
                       tell w to select t
+                      tell t to select s
                       return "found"
                     end if
                   end repeat
