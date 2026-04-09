@@ -585,19 +585,37 @@ function getWarmingStatus() {
 
 // Flush all caches on process exit / signals so partial progress isn't lost
 let _flushHandlersInstalled = false;
+let _flushInProgress = null;
 function _installFlushHandlers() {
   if (_flushHandlersInstalled) return;
   _flushHandlersInstalled = true;
-  const flushAll = () => {
+  const flushAllSync = () => {
     try { _saveParsedDiskCache(true); } catch {}
     try { _saveCostDiskCache(true); } catch {}
     try { if (typeof _saveDailyStatsDiskCache === 'function') _saveDailyStatsDiskCache(); } catch {}
     try { if (typeof _saveGitRootDiskCache === 'function') _saveGitRootDiskCache(); } catch {}
-    try { if (typeof _flushSqliteIngestBatch === 'function') _flushSqliteIngestBatch(); } catch {}
   };
-  process.on('exit', flushAll);
-  process.on('SIGINT', () => { flushAll(); process.exit(0); });
-  process.on('SIGTERM', () => { flushAll(); process.exit(0); });
+  const flushAll = async () => {
+    flushAllSync();
+    try {
+      if (typeof _flushSqliteIngestBatch === 'function') {
+        await _flushSqliteIngestBatch();
+      }
+    } catch {}
+  };
+  const handleSignal = async () => {
+    if (!_flushInProgress) {
+      _flushInProgress = flushAll();
+    }
+    try {
+      await _flushInProgress;
+    } finally {
+      process.exit(0);
+    }
+  };
+  process.on('exit', flushAllSync);
+  process.on('SIGINT', handleSignal);
+  process.on('SIGTERM', handleSignal);
 }
 _installFlushHandlers();
 
