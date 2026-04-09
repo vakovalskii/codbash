@@ -18,7 +18,7 @@ async function openDetail(s) {
   var infoHtml = '<div class="detail-info">';
   // Name row: prefer locally generated AI name, then session metadata name
   var aiTitle = sessionTitles[s.id];
-  var sessionName = s.first_message || '';
+  var sessionName = s.session_name || '';
   var displayName = aiTitle || (sessionName ? sessionName.slice(0, 55) : '');
   var escProject = escHtml(s.project || '').replace(/'/g, "\\'");
   if (displayName) {

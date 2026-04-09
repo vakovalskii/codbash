@@ -89,7 +89,7 @@ async function renderCloud(container) {
       var btnHtml = inCloud
         ? '<span class="dim" style="font-size:10px;white-space:nowrap;">in cloud</span>'
         : '<button class="launch-btn btn-primary" style="padding:3px 8px;font-size:10px;" onclick="cloudPushOne(\'' + ls.id + '\',this)">Push</button>';
-      html += cloudRow(ls.tool, (ls.first_message || ls.id).substring(0, 60), sub, btnHtml);
+      html += cloudRow(ls.tool, ((ls.session_name || ls.first_message || ls.id)).substring(0, 60), sub, btnHtml);
     }
   } else {
     html += '<div class="dim" style="text-align:center;padding:20px;font-size:12px;">Loading...</div>';
@@ -116,7 +116,7 @@ async function renderCloud(container) {
       var csSub = (cs.project_short || '') + ' \u00b7 ' + cs.message_count + ' msgs \u00b7 ' + csDate;
       var csBtns = '<button class="launch-btn btn-secondary" style="padding:3px 8px;font-size:10px;" onclick="cloudPullOne(\'' + cs.session_id + '\',this)">Pull</button>';
       csBtns += '<button class="launch-btn btn-delete" style="padding:3px 6px;font-size:10px;" onclick="deleteCloudSession(\'' + cs.session_id + '\')">&times;</button>';
-      html += cloudRow(cs.agent, (cs.first_message || cs.session_id).substring(0, 60), csSub, csBtns);
+      html += cloudRow(cs.agent, ((cs.session_name || cs.first_message || cs.session_id)).substring(0, 60), csSub, csBtns);
     }
   }
   html += '</div></div>';
