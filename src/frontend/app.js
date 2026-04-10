@@ -1681,6 +1681,18 @@ function openInCursor(project) {
   }).catch(function() { showToast('Failed to open Cursor'); });
 }
 
+function openInVSCode(project) {
+  if (!project) { showToast('No project path'); return; }
+  fetch('/api/open-ide', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ide: 'vscode', project: project })
+  }).then(function(r) { return r.json(); }).then(function(data) {
+    if (data.ok) showToast('Opening project in VS Code...');
+    else showToast('Failed: ' + (data.error || 'unknown'));
+  }).catch(function() { showToast('Failed to open VS Code'); });
+}
+
 // ── Handoff ───────────────────────────────────────────────────
 
 function downloadHandoff(sessionId, project) {

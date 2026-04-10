@@ -196,7 +196,7 @@ function startServer(host, port, openBrowser = true) {
           log('IDE', `ide=${ide} project=${project} target=${target}`);
           if (ide === 'cursor') {
             exec(`cursor "${target || '.'}"`);
-          } else if (ide === 'code') {
+          } else if (ide === 'code' || ide === 'vscode') {
             exec(`code "${target || '.'}"`);
           }
           json(res, { ok: true });

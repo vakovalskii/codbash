@@ -466,6 +466,7 @@ body {
 }
 .badge-claude { background: rgba(96, 165, 250, 0.15); color: var(--accent-blue); }
 .badge-codex { background: rgba(34, 211, 238, 0.15); color: var(--accent-cyan); }
+.badge-copilot { background: #1f6feb; color: #fff; }
 
 [data-theme="light"] .badge { background: rgba(0,0,0,0.05); }
 
@@ -1198,6 +1199,11 @@ body {
 
 .tool-cursor {
     background: rgba(96, 165, 250, 0.15);
+    color: #4a9eff;
+}
+
+.tool-copilot {
+    background: rgba(31, 111, 235, 0.15);
     color: #4a9eff;
 }
 

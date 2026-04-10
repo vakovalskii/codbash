@@ -67,6 +67,8 @@ async function openDetail(s) {
   // Tool-specific launch buttons
   if (s.tool === 'cursor') {
     infoHtml += '<button class="launch-btn" style="background:#4a9eff" onclick="openInCursor(\'' + escHtml(s.project || '') + '\')">Open in Cursor</button>';
+  } else if (s.tool === 'copilot') {
+    infoHtml += '<button class="launch-btn" style="background:#1f6feb" onclick="openInVSCode(\'' + escHtml(s.project || '') + '\')">Open in VS Code</button>';
   } else if (activeSessions[s.id]) {
     infoHtml += '<button class="launch-btn" style="background:var(--accent-green);color:#000" onclick="focusSession(\'' + s.id + '\')">Focus Terminal</button>';
   } else {
