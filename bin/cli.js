@@ -1,5 +1,13 @@
 #!/usr/bin/env node
 
+// Node.js version check — codedash requires Node >= 18
+var nodeVersion = parseInt(process.versions.node.split('.')[0], 10);
+if (nodeVersion < 18) {
+  console.error('\n  codedash requires Node.js >= 18 (you have ' + process.version + ')');
+  console.error('  Install latest: https://nodejs.org/\n');
+  process.exit(1);
+}
+
 const { loadSessions, searchFullText, getSessionPreview, computeSessionCost } = require('../src/data');
 const { startServer } = require('../src/server');
 const { exportArchive, importArchive } = require('../src/migrate');
