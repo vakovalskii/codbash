@@ -161,7 +161,8 @@ function parseClaudeSessionFile(sessionFile) {
   let customTitle = '';
   let firstTs = stat.mtimeMs;
   let lastTs = stat.mtimeMs;
-  let userMsgCount = 0;
+  let userMsgCount = 0;     // real human prompts only
+  let totalUserMsgs = 0;    // all user-type messages (including tool_result, sub-agents)
   let entrypointFound = false;
   let worktreeOriginalCwd = '';
   const mcpSet = new Set();
@@ -171,6 +172,7 @@ function parseClaudeSessionFile(sessionFile) {
     try {
       const entry = JSON.parse(line);
       if (entry.type === 'user' || entry.type === 'assistant') msgCount++;
+      if (entry.type === 'user') totalUserMsgs++;
       if (isRealUserPrompt(entry)) userMsgCount++;
       if (entry.timestamp) {
         if (entry.timestamp < firstTs) firstTs = entry.timestamp;
@@ -221,6 +223,7 @@ function parseClaudeSessionFile(sessionFile) {
     tool,
     msgCount,
     userMsgCount,
+    totalUserMsgs,
     firstMsg,
     customTitle,
     firstTs,
@@ -245,6 +248,7 @@ function mergeClaudeSessionDetail(session, summary, sessionFile) {
   session.file_size = summary.fileSize;
   session.detail_messages = summary.msgCount;
   session.user_messages = summary.userMsgCount || 0;
+  session.total_interactions = summary.totalUserMsgs || summary.userMsgCount || 0;
   session._session_file = sessionFile;
   session.mcp_servers = summary.mcpServers || [];
   session.skills = summary.skills || [];
@@ -3055,6 +3059,7 @@ function getLeaderboardStats() {
 
   // Totals
   let totalMessages = 0, totalHours = 0, totalCost = 0, totalSessions = sessions.length;
+  let totalInteractions = 0; // all user messages including tool_result (for "automation god" metric)
   const agentTotals = {};
   for (const d of daily) {
     totalMessages += d.messages;
@@ -3063,6 +3068,9 @@ function getLeaderboardStats() {
     for (const [agent, count] of Object.entries(d.agents)) {
       agentTotals[agent] = (agentTotals[agent] || 0) + count;
     }
+  }
+  for (const s of sessions) {
+    totalInteractions += s.total_interactions || s.user_messages || 0;
   }
 
   // Today
@@ -3085,7 +3093,7 @@ function getLeaderboardStats() {
   const result = {
     anon,
     today: todayStats,
-    totals: { sessions: totalSessions, messages: totalMessages, hours: Math.round(totalHours * 10) / 10, cost: Math.round(totalCost * 100) / 100 },
+    totals: { sessions: totalSessions, messages: totalMessages, interactions: totalInteractions, hours: Math.round(totalHours * 10) / 10, cost: Math.round(totalCost * 100) / 100 },
     agents: agentTotals,
     streak,
     daily: daily.slice(0, 30), // last 30 days
