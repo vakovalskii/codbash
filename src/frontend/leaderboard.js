@@ -58,10 +58,11 @@ function renderGlobalBoard() {
     var tot = u.stats?.totals || {};
 
     // Pick values based on tab
-    var msgs, hours, cost, label;
-    if (_lbCurrentTab === 'today') { msgs = t.messages||0; hours = t.hours||0; cost = t.cost||0; label = 'today'; }
-    else if (_lbCurrentTab === 'week') { msgs = w.messages||0; hours = w.hours||0; cost = w.cost||0; label = 'this week'; }
-    else { msgs = tot.messages||0; hours = tot.hours||0; cost = tot.cost||0; label = 'all time'; }
+    var msgs, interactions, hours, cost, label;
+    if (_lbCurrentTab === 'today') { msgs = t.messages||0; interactions = t.interactions||msgs; hours = t.hours||0; cost = t.cost||0; label = 'today'; }
+    else if (_lbCurrentTab === 'week') { msgs = w.messages||0; interactions = w.interactions||msgs; hours = w.hours||0; cost = w.cost||0; label = 'this week'; }
+    else { msgs = tot.messages||0; interactions = tot.interactions||msgs; hours = tot.hours||0; cost = tot.cost||0; label = 'all time'; }
+    var autoRatio = msgs > 0 ? interactions / msgs : 0;
 
     html += '<div class="lb-global-row">';
     html += '<span class="lb-rank' + (i < 3 ? ' lb-rank-' + (i+1) : '') + '">#' + (i+1) + '</span>';
@@ -83,9 +84,11 @@ function renderGlobalBoard() {
     html += '</div>';
     html += '<div class="lb-global-stats">';
     html += '<span title="Prompts ' + label + '"><strong>' + msgs.toLocaleString() + '</strong> prompts</span>';
+    if (interactions > msgs) html += '<span title="Total interactions (incl. sub-agents) ' + label + '" style="color:var(--accent-purple,#a78bfa)"><strong>' + interactions.toLocaleString() + '</strong> interactions</span>';
     html += '<span title="Agent hours ' + label + '"><strong>' + hours.toFixed(1) + 'h</strong> coded</span>';
     html += '<span title="API cost ' + label + '"><strong>$' + cost.toFixed(0) + '</strong> spent</span>';
     if (u.stats?.streak > 1) html += '<span class="lb-streak-badge" title="Coding streak — days in a row with activity">&#128293; ' + u.stats.streak + 'd streak</span>';
+    if (autoRatio >= 5) html += '<span style="background:rgba(167,139,250,0.15);color:#a78bfa;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;white-space:nowrap" title="5x+ automation ratio">&#9889; GOD OF AUTOMATION</span>';
     html += '</div></div>';
   });
   board.innerHTML = html;
@@ -219,6 +222,9 @@ async function renderLeaderboard(container) {
     html += '<div class="lb-section-title">All Time</div>';
     html += '<div class="lb-stats-grid">';
     html += '<div class="lb-stat"><div class="lb-stat-value">' + data.totals.messages.toLocaleString() + '</div><div class="lb-stat-label">prompts</div></div>';
+    if (data.totals.interactions > data.totals.messages) {
+      html += '<div class="lb-stat"><div class="lb-stat-value" style="color:var(--accent-purple,#a78bfa)">' + data.totals.interactions.toLocaleString() + '</div><div class="lb-stat-label">interactions</div></div>';
+    }
     html += '<div class="lb-stat"><div class="lb-stat-value">' + data.totals.hours.toFixed(0) + 'h</div><div class="lb-stat-label">agent time</div></div>';
     html += '<div class="lb-stat"><div class="lb-stat-value">' + data.totals.sessions + '</div><div class="lb-stat-label">sessions</div></div>';
     html += '<div class="lb-stat"><div class="lb-stat-value">$' + data.totals.cost.toFixed(2) + '</div><div class="lb-stat-label">cost</div></div>';
