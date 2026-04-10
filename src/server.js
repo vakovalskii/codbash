@@ -365,16 +365,22 @@ function startServer(host, port, openBrowser = true) {
       json(res, filtered);
     }
 
-    else if (req.method === 'GET' && pathname.startsWith('/api/session/') && !pathname.includes('/export')) {
+    else if (req.method === 'GET' && pathname.startsWith('/api/session/') && !pathname.includes('/export') && !pathname.includes('/stream')) {
       const sessionId = pathname.split('/').pop();
       const project = parsed.searchParams.get('project') || '';
+      const data = loadSessionDetail(sessionId, project);
+      // Pagination: ?offset=0&limit=50
       const rawOffset = parsed.searchParams.get('offset');
       const rawLimit = parsed.searchParams.get('limit');
-      const opts = {};
-      if (rawOffset !== null) opts.offset = parseInt(rawOffset) || 0;
-      if (rawLimit !== null) opts.limit = parseInt(rawLimit) || 50;
-      const data = loadSessionDetail(sessionId, project, Object.keys(opts).length > 0 ? opts : undefined);
-      json(res, data);
+      if (rawOffset !== null || rawLimit !== null) {
+        const msgs = data.messages || [];
+        const offset = Math.max(0, parseInt(rawOffset) || 0);
+        const limit = Math.max(1, parseInt(rawLimit) || 50);
+        const slice = msgs.slice(offset, offset + limit);
+        json(res, { messages: slice, total: msgs.length, offset, limit, hasMore: offset + limit < msgs.length });
+      } else {
+        json(res, data);
+      }
     }
 
     // ── Export Markdown ─────────────────────
@@ -779,13 +785,24 @@ function startServer(host, port, openBrowser = true) {
       });
     }
 
-    // ── Summarize session via LLM ──────────────
+    // ── Copilot status ──────────────────────
+    else if (req.method === 'GET' && pathname === '/api/copilot/status') {
+      try {
+        const copilot = require('./copilot-client');
+        json(res, { available: copilot.isAvailable(), ...copilot.getStatus() });
+      } catch (e) {
+        json(res, { available: false, error: e.message });
+      }
+    }
+
+    // ── Summarize session via Copilot LLM ──────────────
     else if (req.method === 'POST' && pathname.startsWith('/api/summarize/')) {
       const sessionId = pathname.split('/').pop();
       const project = parsed.searchParams.get('project') || '';
-      const config = loadLLMConfig();
-      if (!config.url || !config.apiKey) {
-        json(res, { ok: false, error: 'LLM not configured. Connect GitHub Copilot in Settings.' }, 400);
+      let copilot;
+      try { copilot = require('./copilot-client'); } catch {}
+      if (!copilot || !copilot.isAvailable()) {
+        json(res, { ok: false, error: 'GitHub Copilot not configured. Install Copilot CLI or VS Code extension.' }, 503);
         return;
       }
       try {
@@ -795,22 +812,7 @@ function startServer(host, port, openBrowser = true) {
           json(res, { ok: false, error: 'Session not found or empty' }, 404);
           return;
         }
-        // First 10 + last 10 (deduped), truncated to 500 chars each
-        const first10 = msgs.slice(0, 10);
-        const last10 = msgs.slice(-10);
-        const seen = new Set();
-        const selected = [];
-        for (const m of first10.concat(last10)) {
-          const key = (m.uuid || '') + (m.role || '') + (m.content || '').slice(0, 50);
-          if (!seen.has(key)) { seen.add(key); selected.push(m); }
-        }
-        const conversation = selected.map(function(m) {
-          var text = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
-          if (text.length > 500) text = text.slice(0, 500) + '...';
-          return (m.role === 'user' ? 'User' : 'Assistant') + ': ' + text;
-        }).join('\n\n');
-
-        callLLM(config, conversation, msgs.length, 'summarize').then(function(summary) {
+        copilot.summarizeSession(msgs).then(function(summary) {
           log('LLM', `summary generated (${summary.length} chars)`);
           json(res, { ok: true, summary });
         }).catch(function(e) {
