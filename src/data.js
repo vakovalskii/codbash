@@ -4665,7 +4665,32 @@ function _saveDailyStatsDiskCache() {
 function _computeSessionDailyBreakdown(s, found) {
   const msgsByDay = {};
   const tsByDay = {};
+
+  const addMsg = (day, ts) => {
+    msgsByDay[day] = (msgsByDay[day] || 0) + 1;
+    if (!tsByDay[day]) tsByDay[day] = { first: ts, last: ts };
+    if (ts < tsByDay[day].first) tsByDay[day].first = ts;
+    if (ts > tsByDay[day].last) tsByDay[day].last = ts;
+  };
+
   try {
+    // Copilot: use optimized parser instead of line-by-line generic JSONL scan
+    if (found.format === 'copilot') {
+      let data;
+      if (found.file.endsWith('.jsonl')) {
+        data = parseCopilotJsonl(found.file);
+      } else {
+        data = parseCopilotJson(found.file);
+      }
+      for (const req of (data.requests || [])) {
+        if (!req.message || !req.message.text || !req.message.text.trim()) continue;
+        const ts = req.timestamp || data.creationDate || s.first_ts;
+        const day = ts ? fmtLocalDay(ts) : (s.date || fmtLocalDay(s.last_ts));
+        addMsg(day, ts || s.first_ts);
+      }
+      return { msgsByDay, tsByDay };
+    }
+
     const lines = readLines(found.file);
     for (const line of lines) {
       try {
@@ -4705,10 +4730,7 @@ function _computeSessionDailyBreakdown(s, found) {
         if (!isUser || !hasText) continue;
         if (!ts || ts < 1000000000000) ts = s.first_ts;
         const day = (found.format === 'claude' && ts) ? fmtLocalDay(ts) : (s.date || fmtLocalDay(s.last_ts));
-        msgsByDay[day] = (msgsByDay[day] || 0) + 1;
-        if (!tsByDay[day]) tsByDay[day] = { first: ts, last: ts };
-        if (ts < tsByDay[day].first) tsByDay[day].first = ts;
-        if (ts > tsByDay[day].last) tsByDay[day].last = ts;
+        addMsg(day, ts || s.first_ts);
       } catch {}
     }
   } catch {}
