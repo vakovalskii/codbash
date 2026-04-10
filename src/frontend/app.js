@@ -1726,6 +1726,12 @@ var AGENT_INSTALL = {
     alt: 'npm i -g opencode-ai@latest',
     url: 'https://opencode.ai',
   },
+  copilot: {
+    name: 'GitHub Copilot CLI',
+    cmd: 'npm i -g @github/copilot-language-server',
+    alt: 'gh extension install github/gh-copilot',
+    url: 'https://docs.github.com/en/copilot/using-github-copilot/using-github-copilot-in-the-command-line',
+  },
 };
 
 function installAgent(agent) {

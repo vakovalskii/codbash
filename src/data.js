@@ -717,6 +717,17 @@ function loadCopilotDetail(sessionId) {
     }
   }
 
+  // Flush incomplete assistant turn (stream cut before turn_end)
+  if (assistantBuffer.trim()) {
+    messages.push({
+      role: 'assistant',
+      content: assistantBuffer.trim(),
+      uuid: assistantTurnId,
+      timestamp: assistantTurnStart,
+      model: currentModel || undefined,
+    });
+  }
+
   return { messages: messages.slice(0, 200) };
 }
 
