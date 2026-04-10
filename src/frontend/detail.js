@@ -284,12 +284,7 @@ function copyResume(sessionId, tool) {
   } else {
     cmd = 'claude --resume ' + sessionId;
   }
-  navigator.clipboard.writeText(cmd).then(function() {
-    showToast('Copied: ' + cmd);
-  }).catch(function() {
-    // Fallback
-    prompt('Copy this command:', cmd);
-  });
+  copyText(cmd, 'Copied: ' + cmd);
 }
 
 function exportMd(sessionId, project) {

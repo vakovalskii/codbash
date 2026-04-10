@@ -141,8 +141,7 @@ async function githubConnect() {
     document.getElementById('githubAuthCode').textContent = data.user_code;
     document.getElementById('githubAuthLink').href = data.verification_uri;
 
-    // Copy code to clipboard
-    try { navigator.clipboard.writeText(data.user_code); } catch {}
+    copyText(data.user_code, 'Copied GitHub code');
 
     // Poll for token
     var interval = (data.interval || 5) * 1000;
