@@ -200,6 +200,9 @@ function openInTerminal(sessionId, tool, flags, projectDir, terminalId) {
     cmd = `codex resume ${sessionId}`;
   } else if (tool === 'kilo') {
     cmd = `kilo resume ${sessionId}`;
+  } else if (tool === 'kimi') {
+    cmd = `kimi -r ${sessionId}`;
+    if (skipPerms) cmd += ' --yolo';
   } else {
     cmd = `claude --resume ${sessionId}`;
     if (skipPerms) cmd += ' --dangerously-skip-permissions';

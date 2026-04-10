@@ -2,7 +2,7 @@
 
 ## Overview
 
-CodeDash is a zero-dependency Node.js dashboard for AI coding agent sessions. Supports 6 agents: Claude Code, Claude Extension, Codex, Cursor, OpenCode, Kiro. Single process serves a web UI at `localhost:3847`.
+CodeDash is a zero-dependency Node.js dashboard for AI coding agent sessions. Supports 7 agents: Claude Code, Claude Extension, Codex, Cursor, OpenCode, Kiro, Kimi. Single process serves a web UI at `localhost:3847`.
 
 ```
 Browser (localhost:3847)            Node.js Server
@@ -21,10 +21,11 @@ Browser (localhost:3847)            Node.js Server
        | convert/export/   |        |    +-- changelog.js            |
        | import/update     |        +-------------------------------+
        +-------------------+                    |
-                                   reads from 5 locations:
+                                   reads from 6 locations:
                               ~/.claude/  ~/.codex/  ~/.cursor/
                               ~/.local/share/opencode/opencode.db
                               ~/Library/Application Support/kiro-cli/data.sqlite3
+                              ~/.kimi/sessions/
 ```
 
 ## Project Structure
@@ -197,6 +198,30 @@ FROM conversations_v2 ORDER BY updated_at DESC
 }
 ```
 
+### 7. Kimi CLI
+
+| Item | Location |
+|------|----------|
+| Session data | `~/.kimi/sessions/<PROJECT_HASH>/<SESSION_ID>/context.jsonl` |
+| Metadata | `~/.kimi/sessions/<PROJECT_HASH>/<SESSION_ID>/state.json` |
+
+**PROJECT_HASH**: MD5 hash of the project directory path.
+
+**context.jsonl** — one JSON object per line:
+```json
+{"role": "user", "content": "fix the bug"}
+{"role": "assistant", "content": [{"type": "think", "think": "..."}, {"type": "text", "text": "I'll fix..."}]}
+```
+
+**state.json** — session metadata:
+```json
+{
+  "custom_title": "Session title",
+  "archived": false,
+  "plan_mode": false
+}
+```
+
 ---
 
 ## Data Flow
@@ -209,11 +234,12 @@ FROM conversations_v2 ORDER BY updated_at DESC
 3. scanOpenCodeSessions() → merge (tool: "opencode")
 4. scanCursorSessions() → merge (tool: "cursor")
 5. scanKiroSessions() → merge (tool: "kiro")
-6. Enrich Claude sessions with detail files:
+6. scanKimiSessions() → merge (tool: "kimi")
+7. Enrich Claude sessions with detail files:
    - Count messages, get file size
    - Check entrypoint → change tool to "claude-ext" if not "cli"
-7. Scan orphan sessions from ~/.claude/projects/ (Claude Extension)
-8. Sort by last_ts DESC, format dates
+8. Scan orphan sessions from ~/.claude/projects/ (Claude Extension)
+9. Sort by last_ts DESC, format dates
 ```
 
 ### Search Index
@@ -240,7 +266,7 @@ Codex fallback: estimate from file size (~4 bytes per token).
 
 ```
 1. Read ~/.claude/sessions/*.json → PID-to-session map
-2. ps aux | grep "claude|codex|opencode|kiro-cli|cursor-agent"
+2. ps aux | grep "claude|codex|opencode|kiro-cli|kimi|cursor-agent"
 3. For each process: parse PID, CPU%, memory, state
 4. Status: "active" (CPU >= 1%) or "waiting" (sleeping/stopped)
 5. Map PID → sessionId via PID files

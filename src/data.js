@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 const { execSync, execFileSync } = require('child_process');
 
 // ── Constants ──────────────────────────────────────────────
@@ -152,6 +153,7 @@ const CODEX_DIR = path.join(ALL_HOMES[0], '.codex');
 const OPENCODE_DB = path.join(ALL_HOMES[0], '.local', 'share', 'opencode', 'opencode.db');
 const KIRO_DB = path.join(ALL_HOMES[0], 'Library', 'Application Support', 'kiro-cli', 'data.sqlite3');
 const KILO_DB = path.join(ALL_HOMES[0], '.local', 'share', 'kilo', 'kilo.db');
+const KIMI_DIR = path.join(ALL_HOMES[0], '.kimi', 'sessions');
 const CURSOR_DIR = path.join(ALL_HOMES[0], '.cursor');
 const CURSOR_PROJECTS = path.join(CURSOR_DIR, 'projects');
 const CURSOR_CHATS = path.join(CURSOR_DIR, 'chats');
@@ -204,6 +206,10 @@ const EXTRA_CURSOR_DIRS = ALL_HOMES.slice(1).map(h => path.join(h, '.cursor')).f
 const EXTRA_OPENCODE_DBS = ALL_HOMES.slice(1).map(h => path.join(h, 'AppData', 'Local', 'opencode', 'opencode.db')).filter(d => fs.existsSync(d));
 const EXTRA_KIRO_DBS = ALL_HOMES.slice(1).map(h => path.join(h, 'AppData', 'Roaming', 'kiro-cli', 'data.sqlite3')).filter(d => fs.existsSync(d));
 const EXTRA_KILO_DBS = ALL_HOMES.slice(1).map(h => path.join(h, 'AppData', 'Local', 'kilo', 'kilo.db')).filter(d => fs.existsSync(d));
+const EXTRA_KIMI_DIRS = ALL_HOMES.slice(1).map(h => path.join(h, '.kimi', 'sessions')).filter(d => fs.existsSync(d));
+
+// Kimi project hash -> actual project path mapping cache (built lazily)
+let _kimiProjectPathCache = {};
 
 if (IS_WSL) {
   console.log('  \x1b[36m[WSL]\x1b[0m Also scanning Windows host homes:', ALL_HOMES.slice(1).join(', '));
@@ -942,6 +948,247 @@ function loadKiroDetail(conversationId) {
   } catch {
     return { messages: [] };
   }
+}
+
+// ── Kimi ────────────────────────────────────────────────────
+// Kimi stores sessions in ~/.kimi/sessions/<project-hash>/<session-uuid>/
+// Each session has: state.json (metadata), context.jsonl (messages), wire.jsonl (protocol)
+
+function scanKimiSessions() {
+  const sessions = [];
+  if (!fs.existsSync(KIMI_DIR)) return sessions;
+
+  try {
+    for (const projectHash of fs.readdirSync(KIMI_DIR)) {
+      const projectDir = path.join(KIMI_DIR, projectHash);
+      if (!fs.statSync(projectDir).isDirectory()) continue;
+
+      for (const sessionId of fs.readdirSync(projectDir)) {
+        const sessionDir = path.join(projectDir, sessionId);
+        if (!fs.statSync(sessionDir).isDirectory()) continue;
+
+        const contextFile = path.join(sessionDir, 'context.jsonl');
+        const stateFile = path.join(sessionDir, 'state.json');
+
+        if (!fs.existsSync(contextFile)) continue;
+
+        const stat = fs.statSync(contextFile);
+        let firstMsg = '';
+        let msgCount = 0;
+        let customTitle = '';
+        let firstTs = stat.mtimeMs;
+        let lastTs = stat.mtimeMs;
+
+        // Try to read title from state.json
+        try {
+          const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+          if (state.custom_title) customTitle = state.custom_title;
+          else if (state.title) customTitle = state.title;
+        } catch {}
+
+        // Parse context.jsonl for message count and first message
+        try {
+          const lines = readLines(contextFile);
+          for (const line of lines) {
+            try {
+              const entry = JSON.parse(line);
+              if (entry.role === 'user' || entry.role === 'assistant') {
+                msgCount++;
+                if (!firstMsg && entry.content) {
+                  const content = extractContent(entry.content).trim();
+                  if (content) firstMsg = content.slice(0, 200);
+                }
+              }
+              if (entry.timestamp) {
+                const ts = new Date(entry.timestamp).getTime();
+                if (!isNaN(ts)) {
+                  if (ts < firstTs) firstTs = ts;
+                  if (ts > lastTs) lastTs = ts;
+                }
+              }
+            } catch {}
+          }
+        } catch {}
+
+        // If no timestamps found, use file mtimes
+        if (firstTs === stat.mtimeMs) {
+          firstTs = stat.mtimeMs - (msgCount * 60000);
+        }
+
+        // Try to find actual project path for this hash
+        let projectPath = projectHash;
+        try {
+          // Check common project paths
+          const searchPaths = ['/srv', '/media', '/home', os.homedir(), os.homedir() + '/projects'];
+          for (const basePath of searchPaths) {
+            if (!fs.existsSync(basePath)) continue;
+            for (const entry of fs.readdirSync(basePath, { withFileTypes: true })) {
+              if (!entry.isDirectory()) continue;
+              const fullPath = path.join(basePath, entry.name);
+              const hash = crypto.createHash('md5').update(fullPath).digest('hex');
+              if (hash === projectHash) {
+                projectPath = fullPath;
+                _kimiProjectPathCache[hash] = fullPath;
+                break;
+              }
+            }
+            if (projectPath !== projectHash) break;
+          }
+        } catch {}
+
+        sessions.push({
+          id: sessionId,
+          tool: 'kimi',
+          project: projectPath,  // Use actual path if found, otherwise hash
+          project_short: typeof projectPath === 'string' && projectPath.includes('/') ? 
+            projectPath.split('/').pop() : projectHash.slice(0, 16),
+          first_ts: firstTs,
+          last_ts: lastTs,
+          messages: msgCount,
+          first_message: customTitle || firstMsg,
+          has_detail: true,
+          file_size: stat.size,
+          detail_messages: msgCount,
+          _kimi_project_hash: projectHash,
+        });
+      }
+    }
+  } catch {}
+
+  return sessions;
+}
+
+// Build a cache mapping Kimi project hash -> actual project path
+// This helps display meaningful project names instead of hashes
+function buildKimiProjectPathCache() {
+  if (Object.keys(_kimiProjectPathCache).length > 0) return _kimiProjectPathCache;
+  
+  // Common paths where projects might be located
+  const searchPaths = ['/srv', '/media', '/home', os.homedir(), os.homedir() + '/projects'];
+  
+  for (const basePath of searchPaths) {
+    if (!fs.existsSync(basePath)) continue;
+    try {
+      for (const entry of fs.readdirSync(basePath, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const fullPath = path.join(basePath, entry.name);
+        try {
+          // Compute hash the same way Kimi does
+          const hash = crypto.createHash('md5').update(fullPath).digest('hex');
+          // Check if this hash exists in Kimi sessions
+          if (fs.existsSync(path.join(KIMI_DIR, hash)) && !_kimiProjectPathCache[hash]) {
+            _kimiProjectPathCache[hash] = fullPath;
+          }
+        } catch {}
+      }
+    } catch {}
+  }
+  
+  return _kimiProjectPathCache;
+}
+
+function getKimiProjectPath(hash) {
+  const cache = buildKimiProjectPathCache();
+  return cache[hash] || null;
+}
+
+function loadKimiDetail(sessionId) {
+  // Find the session directory
+  let sessionDir = null;
+  let projectHash = null;
+
+  if (!fs.existsSync(KIMI_DIR)) return { messages: [] };
+
+  try {
+    for (const ph of fs.readdirSync(KIMI_DIR)) {
+      const candidate = path.join(KIMI_DIR, ph, sessionId);
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) {
+        sessionDir = candidate;
+        projectHash = ph;
+        break;
+      }
+    }
+  } catch {}
+
+  if (!sessionDir) return { messages: [] };
+
+  const contextFile = path.join(sessionDir, 'context.jsonl');
+  if (!fs.existsSync(contextFile)) return { messages: [] };
+
+  const messages = [];
+
+  try {
+    const lines = readLines(contextFile);
+    for (const line of lines) {
+      try {
+        const entry = JSON.parse(line);
+        if (entry.role !== 'user' && entry.role !== 'assistant') continue;
+
+        const content = extractContent(entry.content);
+        if (!content || isSystemMessage(content)) continue;
+
+        messages.push({
+          role: entry.role,
+          content: content.slice(0, 2000),
+          uuid: entry.id || '',
+        });
+      } catch {}
+    }
+  } catch {}
+
+  return { messages: messages.slice(0, 200) };
+}
+
+// Fast check if a Kimi session is waiting for user input
+// Uses file mtime to detect recent activity (much faster than parsing)
+// Returns: 'waiting' | 'active' | 'unknown'
+function getKimiSessionStatus(sessionId) {
+  if (!fs.existsSync(KIMI_DIR)) return 'unknown';
+
+  try {
+    for (const projectHash of fs.readdirSync(KIMI_DIR)) {
+      const wireFile = path.join(KIMI_DIR, projectHash, sessionId, 'wire.jsonl');
+      if (!fs.existsSync(wireFile)) continue;
+
+      // Fast check: if file modified in last 5 seconds, it's active
+      const stat = fs.statSync(wireFile);
+      const ageMs = Date.now() - stat.mtimeMs;
+      if (ageMs < 5000) return 'active';  // Modified recently = working
+
+      // For older files, check last 4KB of file (not entire file)
+      const fd = fs.openSync(wireFile, 'r');
+      const bufferSize = Math.min(4096, stat.size);
+      const buffer = Buffer.alloc(bufferSize);
+      fs.readSync(fd, buffer, 0, bufferSize, stat.size - bufferSize);
+      fs.closeSync(fd);
+
+      const content = buffer.toString('utf8');
+      const lines = content.split('\n').filter(Boolean);
+
+      for (let i = lines.length - 1; i >= 0; i--) {
+        try {
+          const entry = JSON.parse(lines[i]);
+          const msgType = entry.message?.type || entry.type;
+
+          // Skip StatusUpdate and metadata
+          if (msgType === 'StatusUpdate' || msgType === 'metadata') continue;
+
+          // TurnEnd means waiting for user input
+          if (msgType === 'TurnEnd') return 'waiting';
+
+          // These mean actively working
+          if (['ToolCall', 'ToolCallPart', 'ToolResult', 'StepBegin',
+               'ContentPart', 'Thinking', 'TurnBegin'].includes(msgType)) {
+            return 'active';
+          }
+
+          return 'unknown';
+        } catch {}
+      }
+    }
+  } catch {}
+
+  return 'unknown';
 }
 
 // Cursor stores each workspace under ~/.cursor/projects/<key>/ where <key> is the
@@ -1855,6 +2102,14 @@ function loadSessions() {
     }
   } catch {}
 
+  // Load Kimi sessions
+  try {
+    const kimiSessions = scanKimiSessions();
+    for (const ks of kimiSessions) {
+      sessions[ks.id] = ks;
+    }
+  } catch {}
+
   // WSL: also load from Windows-side dirs
   for (const extraClaudeDir of EXTRA_CLAUDE_DIRS) {
     try {
@@ -2071,6 +2326,11 @@ function loadSessionDetail(sessionId, project) {
     return loadKiloCliDetail(sessionId);
   }
 
+  // Kimi uses JSONL
+  if (found.format === 'kimi') {
+    return loadKimiDetail(sessionId);
+  }
+
   const messages = [];
   const lines = readLines(found.file);
 
@@ -2247,6 +2507,7 @@ function exportSessionMarkdown(sessionId, project) {
       found.format === 'opencode' ? loadOpenCodeDetail(sessionId) :
       found.format === 'kiro' ? loadKiroDetail(sessionId) :
       found.format === 'kilo' ? loadKiloCliDetail(sessionId) :
+      found.format === 'kimi' ? loadKimiDetail(sessionId) :
       null;
     if (detail && detail.messages && detail.messages.length > 0) {
       const parts = [`# Session ${sessionId}\n\n**Project:** ${project || '(none)'}\n`];
@@ -2359,6 +2620,24 @@ function _buildSessionFileIndex() {
     } catch {}
   }
 
+  // Index Kimi sessions
+  if (fs.existsSync(KIMI_DIR)) {
+    try {
+      for (const projectHash of fs.readdirSync(KIMI_DIR)) {
+        const projectDir = path.join(KIMI_DIR, projectHash);
+        try {
+          if (!fs.statSync(projectDir).isDirectory()) continue;
+          for (const sessionId of fs.readdirSync(projectDir)) {
+            const contextFile = path.join(projectDir, sessionId, 'context.jsonl');
+            if (fs.existsSync(contextFile)) {
+              _sessionFileIndex[sessionId] = { file: contextFile, format: 'kimi' };
+            }
+          }
+        } catch {}
+      }
+    } catch {}
+  }
+
   _sessionFileIndexTs = now;
 }
 
@@ -2448,6 +2727,18 @@ function findSessionFile(sessionId, project) {
       ], { encoding: 'utf8', timeout: 3000, windowsHide: true }).trim();
       if (parseInt(check) > 0) {
         return { file: KILO_DB, format: 'kilo', sessionId: sessionId };
+      }
+    } catch {}
+  }
+
+  // Try Kimi (JSONL in session directories)
+  if (fs.existsSync(KIMI_DIR)) {
+    try {
+      for (const projectHash of fs.readdirSync(KIMI_DIR)) {
+        const contextFile = path.join(KIMI_DIR, projectHash, sessionId, 'context.jsonl');
+        if (fs.existsSync(contextFile)) {
+          return { file: contextFile, format: 'kimi', sessionId: sessionId };
+        }
       }
     } catch {}
   }
@@ -2549,6 +2840,14 @@ function getSessionPreview(sessionId, project, limit) {
   // Kilo: use loadKiloCliDetail and slice
   if (found.format === 'kilo') {
     var detail = loadKiloCliDetail(sessionId);
+    return detail.messages.slice(0, limit).map(function(m) {
+      return { role: m.role, content: m.content.slice(0, 300) };
+    });
+  }
+
+  // Kimi: use loadKimiDetail and slice
+  if (found.format === 'kimi') {
+    const detail = loadKimiDetail(sessionId);
     return detail.messages.slice(0, limit).map(function(m) {
       return { role: m.role, content: m.content.slice(0, 300) };
     });
@@ -2891,7 +3190,7 @@ function computeSessionCost(sessionId, project) {
   if (!found) { _costMemCache[sessionId] = EMPTY_COST; return EMPTY_COST; }
 
   // Skip formats that never have cost data
-  if (found.format === 'cursor' || found.format === 'kiro') { _costMemCache[sessionId] = EMPTY_COST; return EMPTY_COST; }
+  if (found.format === 'cursor' || found.format === 'kiro' || found.format === 'kimi') { _costMemCache[sessionId] = EMPTY_COST; return EMPTY_COST; }
 
   // Check disk cache (keyed by file path + mtime + size for JSONL, sessionId for SQLite)
   _loadCostDiskCache();
@@ -3370,6 +3669,10 @@ function _computeCostAnalytics(sessions) {
 
 // ── Active sessions detection ─────────────────────────────
 
+// Cache for loadSessions to avoid repeated calls during active session scanning
+let _activeSessionsCache = null;
+let _activeSessionsCacheTs = 0;
+
 function getActiveSessions() {
   const active = [];
   const seenPids = new Set();
@@ -3393,6 +3696,7 @@ function getActiveSessions() {
     { pattern: 'codex', tool: 'codex', match: /\/codex\s|^codex\s|codex app-server|\bcodex\b/ },
     { pattern: 'opencode', tool: 'opencode', match: /\/opencode\s|^opencode\s|\bopencode\b/ },
     { pattern: 'kiro', tool: 'kiro', match: /kiro-cli/ },
+    { pattern: 'kimi', tool: 'kimi', match: /kimi\s|kimi-cli/i },
     { pattern: 'cursor-agent', tool: 'cursor', match: /cursor-agent/ },
     { pattern: 'kilo', tool: 'kilo', match: /@kilocode\/cli|\/bin\/kilo\s|^kilo\s/ },
   ];
@@ -3402,7 +3706,7 @@ function getActiveSessions() {
 
   try {
     const psOut = execSync(
-      'ps aux 2>/dev/null | grep -E "claude|codex|opencode|kiro-cli|cursor-agent|kilo" | grep -v grep || true',
+      'ps aux 2>/dev/null | grep -iE "claude|codex|opencode|kiro-cli|kimi|cursor-agent|kilo" | grep -v grep || true',
       { encoding: 'utf8', timeout: 3000, stdio: ['pipe', 'pipe', 'pipe'] }
     );
 
@@ -3434,6 +3738,8 @@ function getActiveSessions() {
       if (cmd.includes('.kilo/') && !cmd.includes('kilo ') && tool === 'kilo') continue;
       if (cmd.includes('.local/share/kilo/') && tool === 'kilo') continue;
       if (cmd.includes('sqlite3') && tool === 'kilo') continue;
+      // Skip Kimi wrapper scripts (SCREEN, bash wrappers), keep only main "Kimi Code" process
+      if (tool === 'kimi' && (cmd.includes('SCREEN') || cmd.includes('/bin/bash'))) continue;
 
       seenPids.add(pid);
 
@@ -3449,19 +3755,41 @@ function getActiveSessions() {
         if (sessionId) sessionSource = 'pid-file';
       }
 
-      // Try to get cwd from lsof if not from PID file
+      // Try to get cwd from /proc/PID/cwd (much faster than lsof)
       if (!cwd) {
         try {
-          const lsofOut = execSync(`lsof -d cwd -p ${pid} -Fn 2>/dev/null`, { encoding: 'utf8', timeout: 2000, stdio: ['pipe', 'pipe', 'pipe'] });
-          const match = lsofOut.match(/\nn(\/[^\n]+)/);
-          if (match) cwd = match[1];
+          cwd = fs.readlinkSync(`/proc/${pid}/cwd`);
         } catch {}
       }
 
       // Try to find session ID by matching cwd + tool to loaded sessions
+      // Cache sessions to avoid repeated loadSessions() calls
       if (!sessionId) {
-        const allS = loadSessions();
-        const match = allS.find(s => s.tool === tool && s.project === cwd);
+        if (!_activeSessionsCache || (Date.now() - _activeSessionsCacheTs) > 5000) {
+          _activeSessionsCache = loadSessions();
+          _activeSessionsCacheTs = Date.now();
+        }
+        const allS = _activeSessionsCache;
+
+        let match = null;
+
+        // For Kimi, compute project hash from cwd since Kimi uses MD5(project_path) as folder name
+        // Kimi may store hash of either the symlink path or real path, so try both
+        if (tool === 'kimi' && cwd) {
+          try {
+            const cwdHash = crypto.createHash('md5').update(cwd).digest('hex');
+            const realCwd = fs.realpathSync(cwd);
+            const realHash = crypto.createHash('md5').update(realCwd).digest('hex');
+            
+            // First try direct hash matches
+            match = allS.find(s => s.tool === tool && (s.project === cwdHash || s.project === realHash));
+          } catch {}
+        }
+
+        // Standard path matching for other tools
+        if (!match) {
+          match = allS.find(s => s.tool === tool && s.project === cwd);
+        }
         if (match) {
           sessionId = match.id;
           sessionSource = 'cwd-match';
@@ -3476,7 +3804,14 @@ function getActiveSessions() {
         }
       }
 
-      const status = cpu < 1 && (stat.includes('S') || stat.includes('T')) ? 'waiting' : 'active';
+      let status;
+      if (tool === 'kimi' && sessionId) {
+        // For Kimi, check wire.jsonl to see if waiting for input
+        const kimiStatus = getKimiSessionStatus(sessionId);
+        status = kimiStatus === 'waiting' ? 'waiting' : (kimiStatus === 'active' ? 'active' : (cpu < 1 && (stat.includes('S') || stat.includes('T')) ? 'waiting' : 'active'));
+      } else {
+        status = cpu < 1 && (stat.includes('S') || stat.includes('T')) ? 'waiting' : 'active';
+      }
 
       active.push({
         pid: pid,

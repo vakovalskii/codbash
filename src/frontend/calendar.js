@@ -196,6 +196,9 @@ function setView(view) {
   } else if (view === 'kilo-only') {
     toolFilter = toolFilter === 'kilo' ? null : 'kilo';
     currentView = 'sessions';
+  } else if (view === 'kimi-only') {
+    toolFilter = toolFilter === 'kimi' ? null : 'kimi';
+    currentView = 'sessions';
   } else {
     toolFilter = null;
     currentView = view;

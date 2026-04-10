@@ -94,7 +94,7 @@ async function renderAnalytics(container) {
         coverageparts.push(byAgent['opencode'].estimated
           ? '<span class="coverage-est">OpenCode ~est.</span>'
           : '<span class="coverage-ok">OpenCode \u2713</span>');
-      ['cursor', 'kiro'].forEach(function(a) {
+      ['cursor', 'kiro', 'kimi'].forEach(function(a) {
         if (noCost[a] > 0)
           coverageparts.push('<span class="coverage-none">' + a + ' \u2717 (no token data)</span>');
       });

@@ -24,6 +24,7 @@ codedash run
 | Cursor | JSONL | Yes | Yes | Yes | - | Yes | Open in Cursor |
 | OpenCode | SQLite | Yes | Yes | Yes | - | Yes | Terminal |
 | Kiro CLI | SQLite | Yes | Yes | Yes | - | Yes | Terminal |
+| Kimi CLI | JSONL | Yes | Yes | Yes | - | Yes | Terminal |
 
 Also detects Claude Code running inside Cursor (via `claude-vscode` entrypoint).
 
@@ -82,6 +83,7 @@ codedash stop
 ~/.cursor/projects/*/agent-transcripts/ Cursor agent sessions
 ~/.local/share/opencode/opencode.db     OpenCode (SQLite)
 ~/Library/Application Support/kiro-cli/ Kiro CLI (SQLite)
+~/.kimi/sessions/                       Kimi CLI sessions
 ```
 
 Zero dependencies. Everything runs on `localhost`.
@@ -93,6 +95,7 @@ curl -fsSL https://claude.ai/install.sh | bash          # Claude Code
 npm i -g @openai/codex                                   # Codex CLI
 curl -fsSL https://cli.kiro.dev/install | bash           # Kiro CLI
 curl -fsSL https://opencode.ai/install | bash            # OpenCode
+pip install kimi-cli                                     # Kimi CLI
 ```
 
 ## Requirements

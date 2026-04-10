@@ -299,6 +299,7 @@ body {
 .tool-chip:hover { color: var(--text-primary); }
 .tool-chip.active-claude { background: rgba(96, 165, 250, 0.2); border-color: var(--accent-blue); color: var(--accent-blue); }
 .tool-chip.active-codex { background: rgba(34, 211, 238, 0.2); border-color: var(--accent-cyan); color: var(--accent-cyan); }
+.tool-chip.active-kimi { background: rgba(251, 113, 133, 0.2); border-color: #fb7185; color: #fb7185; }
 
 .stats { color: var(--text-muted); font-size: 13px; white-space: nowrap; }
 
@@ -466,6 +467,7 @@ body {
 }
 .badge-claude { background: rgba(96, 165, 250, 0.15); color: var(--accent-blue); }
 .badge-codex { background: rgba(34, 211, 238, 0.15); color: var(--accent-cyan); }
+.badge-kimi { background: rgba(251, 113, 133, 0.15); color: #fb7185; }
 
 [data-theme="light"] .badge { background: rgba(0,0,0,0.05); }
 
@@ -1222,6 +1224,10 @@ body {
     color: #34d399;
 }
 
+.tool-kimi {
+    background: rgba(251, 113, 133, 0.15);
+    color: #fb7185;
+}
 /* ── MCP / Skill badges ──────────────────────────────────────── */
 
 .badge-mcp {

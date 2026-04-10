@@ -1,6 +1,6 @@
 # CodeDash
 
-AI 编程代理会话仪表板 + CLI。支持 5 个代理：Claude Code、Codex、Cursor、OpenCode、Kiro。
+AI 编程代理会话仪表板 + CLI。支持 6 个代理：Claude Code、Codex、Cursor、OpenCode、Kiro、Kimi。
 
 [English](../README.md) | [Russian / Русский](README_RU.md)
 
@@ -19,12 +19,13 @@ npm i -g codedash-app && codedash run
 | Cursor | JSONL | LIVE/WAITING | - | 在 Cursor 中打开 |
 | OpenCode | SQLite | LIVE/WAITING | - | 终端 |
 | Kiro CLI | SQLite | LIVE/WAITING | - | 终端 |
+| Kimi CLI | JSONL | LIVE/WAITING | - | 终端 |
 
 ## 功能
 
 - 网格/列表视图、项目分组、Trigram 搜索 + 深度搜索
 - GitHub 风格 SVG 活动热力图
-- 所有 5 个代理的 LIVE/WAITING 徽章
+- 所有 6 个代理的 LIVE/WAITING 徽章
 - 会话回放、成本分析、跨代理转换和交接
 - 导出/导入迁移、Dark/Light/System 主题
 

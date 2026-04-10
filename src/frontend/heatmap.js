@@ -179,7 +179,7 @@ function renderHeatmap(container) {
   // Per-tool breakdown
   var toolTotals = {};
   allSessions.forEach(function(s) { if (s.date >= yearStart) { toolTotals[s.tool] = (toolTotals[s.tool] || 0) + 1; } });
-  var toolColors = { claude: '#60a5fa', codex: '#22d3ee', opencode: '#c084fc', kiro: '#fb923c', kilo: '#34d399' };
+  var toolColors = { claude: '#60a5fa', codex: '#22d3ee', opencode: '#c084fc', kiro: '#fb923c', kilo: '#34d399', kimi: '#fb7185' };
   html += '<div class="gh-tools">';
   Object.keys(toolTotals).sort(function(a,b) { return toolTotals[b] - toolTotals[a]; }).forEach(function(tool) {
     var pct = (toolTotals[tool] / Math.max(totalThisYear, 1) * 100).toFixed(0);

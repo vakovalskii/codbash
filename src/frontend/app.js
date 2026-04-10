@@ -50,8 +50,12 @@ function getProjectColor(project) {
   return projectColorMap[project];
 }
 
-function getProjectName(fullPath) {
+function getProjectName(fullPath, session) {
   if (!fullPath) return 'unknown';
+  // For Kimi, project is a hash - show session name instead
+  if (session && session.tool === 'kimi' && /^[a-f0-9]{32}$/i.test(fullPath)) {
+    return getSessionDisplayName(session) || 'kimi-session';
+  }
   const cleaned = fullPath.replace(/\/+$/, '');
   const parts = cleaned.split('/');
   return parts[parts.length - 1] || 'unknown';
@@ -87,7 +91,7 @@ function getSessionGroupInfo(session) {
   if (groupingMode === 'repo') {
     return getRepoInfo(session.project, session.git_root);
   }
-  var name = getProjectName(session.project);
+  var name = getProjectName(session.project, session);
   return { key: name, name: name };
 }
 
@@ -567,6 +571,11 @@ async function pollActiveSessions() {
         }
       }
     });
+
+    // Re-render Agent Board if on running view
+    if (currentView === 'running') {
+      render();
+    }
   } catch {}
 }
 
@@ -716,7 +725,7 @@ function renderCard(s, idx) {
   var sessionTags = tags[s.id] || [];
   var cost = estimateCost(s.file_size);
   var costStr = cost > 0 ? '~$' + cost.toFixed(2) : '';
-  var projName = getProjectName(s.project);
+  var projName = getProjectName(s.project, s);
   var projColor = getProjectColor(projName);
   var toolClass = 'tool-' + s.tool;
   var toolLabel = s.tool === 'claude-ext' ? 'claude ext' : s.tool;
@@ -811,7 +820,7 @@ function renderListCard(s, idx) {
   var isStarred = stars.indexOf(s.id) >= 0;
   var isSelected = selectedIds.has(s.id);
   var isFocused = focusedIndex === idx;
-  var projName = getProjectName(s.project);
+  var projName = getProjectName(s.project, s);
   var projColor = getProjectColor(projName);
   var showBadges = showAllSessionsListBadges;
 
@@ -1513,11 +1522,13 @@ document.addEventListener('keydown', function(e) {
 // ── Running Sessions View (Kanban) ─────────────────────────────
 
 function renderRunningCard(a, s) {
-  var projName = s ? getProjectName(s.project) : (a.cwd ? a.cwd.split('/').pop() : 'unknown');
+  // Show actual folder name from cwd, not session title
+  var projName = a.cwd ? a.cwd.split('/').pop() : (s ? getProjectName(s.project, s) : 'unknown');
   var projColor = getProjectColor(projName);
   var statusClass = a.status === 'waiting' ? 'running-waiting' : 'running-active';
   var uptime = a.startedAt ? formatDuration(Date.now() - a.startedAt) : '';
   var sid = a.sessionId;
+  var safeSid = sid.replace(/'/g, "\\'");
 
   var html = '<div class="running-card ' + statusClass + '">';
   html += '<div class="running-card-header">';
@@ -1533,10 +1544,10 @@ function renderRunningCard(a, s) {
   var displayName = getSessionDisplayName(s);
   if (displayName) html += '<div class="running-msg">' + escHtml(displayName.slice(0, 120)) + '</div>';
   html += '<div class="running-actions">';
-  html += '<button class="launch-btn" style="background:var(--accent-green);color:#000" onclick="focusSession(\'' + sid + '\')">Focus</button>';
+  html += '<button class="launch-btn" style="background:var(--accent-green);color:#000" onclick="focusSession(\'' + safeSid + '\')">Focus</button>';
   if (s) {
-    html += '<button class="launch-btn btn-secondary" onclick="var ss=allSessions.find(function(x){return x.id===\'' + sid + '\'});if(ss)openDetail(ss);">Details</button>';
-    html += '<button class="launch-btn btn-secondary" onclick="closeDetail();openReplay(\'' + sid + '\',\'' + escHtml((s.project || '').replace(/'/g, "\\'")) + '\')">Replay</button>';
+    html += '<button class="launch-btn btn-secondary" onclick="var ss=allSessions.find(function(x){return x.id===\'' + safeSid + '\'});if(ss){openDetail(ss);}else{showToast(\'Session not found\');}">Details</button>';
+    html += '<button class="launch-btn btn-secondary" onclick="closeDetail();openReplay(\'' + safeSid + '\',\'' + escHtml((s.project || '').replace(/'/g, "\\'")) + '\')">Replay</button>';
   }
   html += '</div>';
   html += '</div>';
@@ -1544,7 +1555,7 @@ function renderRunningCard(a, s) {
 }
 
 function renderDoneCard(s) {
-  var projName = getProjectName(s.project);
+  var projName = getProjectName(s.project, s);
   var projColor = getProjectColor(projName);
   var html = '<div class="running-card running-done">';
   html += '<div class="running-card-header">';
@@ -1868,6 +1879,12 @@ var AGENT_INSTALL = {
     cmd: 'npm i -g @kilocode/cli',
     alt: null,
     url: 'https://kilo.ai',
+  },
+  kimi: {
+    name: 'Kimi CLI',
+    cmd: 'pip install kimi-cli',
+    alt: 'uv tool install kimi-cli',
+    url: 'https://github.com/MoonshotAI/kimi-cli',
   },
 };
 
