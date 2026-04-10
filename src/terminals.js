@@ -93,6 +93,8 @@ function openInTerminal(sessionId, tool, flags, projectDir, terminalId) {
 
   if (tool === 'codex') {
     cmd = `codex resume ${sessionId}`;
+  } else if (tool === 'qwen') {
+    cmd = `qwen -r ${sessionId}`;
   } else {
     cmd = `claude --resume ${sessionId}`;
     if (skipPerms) cmd += ' --dangerously-skip-permissions';
