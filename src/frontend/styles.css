@@ -1201,6 +1201,11 @@ body {
     color: #4a9eff;
 }
 
+.tool-kilo {
+    background: rgba(52, 211, 153, 0.15);
+    color: #34d399;
+}
+
 /* ── MCP / Skill badges ──────────────────────────────────────── */
 
 .badge-mcp {

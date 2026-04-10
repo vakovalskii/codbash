@@ -193,6 +193,9 @@ function setView(view) {
   } else if (view === 'opencode-only') {
     toolFilter = toolFilter === 'opencode' ? null : 'opencode';
     currentView = 'sessions';
+  } else if (view === 'kilo-only') {
+    toolFilter = toolFilter === 'kilo' ? null : 'kilo';
+    currentView = 'sessions';
   } else {
     toolFilter = null;
     currentView = view;

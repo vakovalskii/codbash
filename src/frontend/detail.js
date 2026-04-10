@@ -279,6 +279,8 @@ function copyResume(sessionId, tool) {
   var cmd;
   if (tool === 'codex') {
     cmd = 'codex resume ' + sessionId;
+  } else if (tool === 'kilo') {
+    cmd = 'kilo resume ' + sessionId;
   } else if (tool === 'cursor') {
     cmd = 'cursor ' + (s && s.project ? '"' + s.project + '"' : '.');
   } else {
