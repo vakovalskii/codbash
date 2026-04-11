@@ -405,6 +405,346 @@ function focusCmuxWorkspace(pid) {
   return { ok: true, terminal: 'cmux' };
 }
 
+// ── WSL: focus a Windows Terminal tab hosting a Linux pid ───
+//
+// Strategy (established empirically after ruling out title tagging, WT_SESSION
+// targeting via `wt.exe -w 0`, and PEB env reading):
+//
+//  1. Resolve the pts the target process is bound to via /proc/<pid>/fd/*.
+//  2. Ask PowerShell to snapshot every wt TabItem (keyed by window hwnd and
+//     positional index) through UI Automation — wt exposes them even when the
+//     tab isn't active. We avoid UIA RuntimeId because MSDN explicitly warns
+//     it's not persistent between calls, and a second PS invocation re-issues
+//     fresh ids for the same tab.
+//  3. Write an OSC 2 escape (`\e]2;<marker>\a`) straight into the pts; wt
+//     renders it via the master side and the tab's UIA Name updates almost
+//     instantly.
+//  4. Ask PowerShell to poll UIA for a TabItem whose Name == marker, Select()
+//     it via the SelectionItem pattern, and SetForegroundWindow on the parent
+//     wt window (handling IsIconic → ShowWindowAsync restore).
+//  5. Look up the matched tab's (hwnd, index) in the snapshot, write the
+//     original Name back through OSC 2 so the marker doesn't linger in the UI.
+//
+// Fallbacks: if the target process isn't attached to a pts, or the marker
+// never appears in UIA (e.g., wt not running, app rewrites the title too
+// quickly), we return a no-op result so the UI shows the "click manually"
+// hint.
+
+function ptsForPid(pid) {
+  for (const fd of [0, 1, 2]) {
+    try {
+      const link = fs.readlinkSync(`/proc/${pid}/fd/${fd}`);
+      if (link && link.startsWith('/dev/pts/')) return link;
+    } catch {}
+  }
+  return '';
+}
+
+// Windows Terminal injects WT_SESSION into each tab's env; WSL forwards it
+// via WSLENV=WT_SESSION:WT_PROFILE_ID:..., so it lands in /proc/<pid>/environ
+// for anything launched from a WT tab. Absence means the process is in
+// conhost/OpenConsole (PowerShell window, etc.), which does NOT render as a
+// WT tab — using OSC 2 would mutate the real conhost title and break the
+// title-based fallback.
+function isWtSession(pid) {
+  try {
+    const env = fs.readFileSync(`/proc/${pid}/environ`, 'utf8');
+    return env.split('\0').some((e) => e.startsWith('WT_SESSION='));
+  } catch {
+    return false;
+  }
+}
+
+// PS script: one-shot snapshot of every wt TabItem's position and Name.
+// Key is (windowHwnd, tabIndex) because UIA RuntimeId is not guaranteed
+// stable across PS invocations, whereas tab index within a window is stable
+// as long as the user doesn't reorder tabs (and OSC title writes don't).
+// Emits pipe-delimited lines so we don't need ConvertFrom-Json on the Node
+// side and PS's default JSON escaping doesn't fight with tab titles that
+// contain quotes.
+const PS_WT_SNAPSHOT = [
+  'Add-Type -AssemblyName UIAutomationClient',
+  'Add-Type -AssemblyName UIAutomationTypes',
+  '$wt = Get-Process WindowsTerminal -ErrorAction SilentlyContinue | Select-Object -First 1',
+  "if (-not $wt) { Write-Output 'NOWT'; exit 0 }",
+  '$root = [System.Windows.Automation.AutomationElement]::RootElement',
+  '$cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ProcessIdProperty, $wt.Id)',
+  '$wins = $root.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)',
+  '$tabCond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::TabItem)',
+  'foreach ($w in $wins) {',
+  '  $hwnd = $w.Current.NativeWindowHandle',
+  '  $tabs = $w.FindAll([System.Windows.Automation.TreeScope]::Descendants, $tabCond)',
+  '  for ($i = 0; $i -lt $tabs.Count; $i++) {',
+  '    $t = $tabs.Item($i)',
+  '    $nameB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($t.Current.Name))',
+  '    Write-Output "TAB|$hwnd|$i|$nameB64"',
+  '  }',
+  '}',
+  "Write-Output 'END'",
+  '',
+].join('\r\n');
+
+// PS script: poll UIA for a TabItem whose Name == marker, select it, raise
+// the parent wt window. Outputs "OK|<hwnd>|<tabIndex>" on success, "NOTFOUND"
+// on timeout. Deliberately separate from the snapshot script so the snapshot
+// observes the *original* names before we mutate them via OSC. We scan tabs
+// positionally (via Item(i)) so we can report the exact index, which is the
+// same key the snapshot records.
+const PS_WT_FIND_SELECT = [
+  'param([Parameter(Mandatory=$true)][string]$Marker)',
+  'Add-Type -AssemblyName UIAutomationClient',
+  'Add-Type -AssemblyName UIAutomationTypes',
+  '$sig = @"',
+  'using System;',
+  'using System.Runtime.InteropServices;',
+  'public class CodedashFg {',
+  '  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);',
+  '  [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr h, int n);',
+  '  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);',
+  '}',
+  '"@',
+  'Add-Type -TypeDefinition $sig -ErrorAction SilentlyContinue',
+  '$wt = Get-Process WindowsTerminal -ErrorAction SilentlyContinue | Select-Object -First 1',
+  "if (-not $wt) { Write-Output 'NOWT'; exit 0 }",
+  '$root = [System.Windows.Automation.AutomationElement]::RootElement',
+  '$cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ProcessIdProperty, $wt.Id)',
+  '$wins = $root.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)',
+  '$tabCond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::TabItem)',
+  '$deadline = (Get-Date).AddMilliseconds(2000)',
+  'while ((Get-Date) -lt $deadline) {',
+  '  foreach ($w in $wins) {',
+  '    $hwnd = $w.Current.NativeWindowHandle',
+  '    $tabs = $w.FindAll([System.Windows.Automation.TreeScope]::Descendants, $tabCond)',
+  '    for ($i = 0; $i -lt $tabs.Count; $i++) {',
+  '      $t = $tabs.Item($i)',
+  '      if ($t.Current.Name -eq $Marker) {',
+  '        try {',
+  '          $si = $t.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)',
+  '          $si.Select()',
+  '        } catch {}',
+  '        $h = [IntPtr]$hwnd',
+  '        if ($h -ne [IntPtr]::Zero) {',
+  '          if ([CodedashFg]::IsIconic($h)) { [CodedashFg]::ShowWindowAsync($h, 9) | Out-Null }',
+  '          [CodedashFg]::SetForegroundWindow($h) | Out-Null',
+  '        }',
+  '        Write-Output "OK|$hwnd|$i"',
+  '        exit 0',
+  '      }',
+  '    }',
+  '  }',
+  '  Start-Sleep -Milliseconds 75',
+  '}',
+  "Write-Output 'NOTFOUND'",
+  '',
+].join('\r\n');
+
+// PS script: fallback for non-WindowsTerminal processes (powershell.exe,
+// conhost/OpenConsole). The launch path pins `$Host.UI.RawUI.WindowTitle` to
+// the sessionTag, so an exact MainWindowTitle match is reliable. We exclude
+// WindowsTerminal on purpose: WT only exposes the currently active tab via
+// MainWindowTitle, so matching it here could focus the wrong tab — the UIA
+// path above is the authoritative one for WT.
+const PS_WINDOW_BY_TITLE = [
+  'param([Parameter(Mandatory=$true)][string]$Tag)',
+  '$sig = @"',
+  'using System;',
+  'using System.Runtime.InteropServices;',
+  'public class CodedashWin {',
+  '  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);',
+  '  [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr h, int n);',
+  '  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);',
+  '}',
+  '"@',
+  'Add-Type -TypeDefinition $sig -ErrorAction SilentlyContinue',
+  '$proc = Get-Process | Where-Object { $_.ProcessName -ne "WindowsTerminal" -and $_.MainWindowTitle -and $_.MainWindowTitle -eq $Tag } | Select-Object -First 1',
+  'if ($proc) {',
+  '  $h = $proc.MainWindowHandle',
+  '  if ([CodedashWin]::IsIconic($h)) { [CodedashWin]::ShowWindowAsync($h, 9) | Out-Null }',
+  '  [CodedashWin]::SetForegroundWindow($h) | Out-Null',
+  "  Write-Output 'OK'",
+  '} else {',
+  "  Write-Output 'NOTFOUND'",
+  '}',
+  '',
+].join('\r\n');
+
+let _ps1SnapshotPath = null;
+let _ps1FindPath = null;
+let _ps1WindowByTitlePath = null;
+function ensureFocusScripts() {
+  // Reuse a single set of .ps1 files per process — avoids hundreds of stale
+  // temp files if the user hammers the Focus button.
+  if (!_ps1SnapshotPath) {
+    _ps1SnapshotPath = path.join(os.tmpdir(), `codedash-wt-snapshot-${process.pid}.ps1`);
+    fs.writeFileSync(_ps1SnapshotPath, PS_WT_SNAPSHOT);
+  }
+  if (!_ps1FindPath) {
+    _ps1FindPath = path.join(os.tmpdir(), `codedash-wt-find-${process.pid}.ps1`);
+    fs.writeFileSync(_ps1FindPath, PS_WT_FIND_SELECT);
+  }
+  if (!_ps1WindowByTitlePath) {
+    _ps1WindowByTitlePath = path.join(os.tmpdir(), `codedash-win-by-title-${process.pid}.ps1`);
+    fs.writeFileSync(_ps1WindowByTitlePath, PS_WINDOW_BY_TITLE);
+  }
+  return { snapshot: _ps1SnapshotPath, find: _ps1FindPath, windowByTitle: _ps1WindowByTitlePath };
+}
+
+function writeOscTitle(ttyPath, title) {
+  // OSC 2 (\e]2;<title>\a) sets the window/tab title. Writing to the slave
+  // pts from outside the app flows through to the master side and wt picks
+  // it up as if the app itself had emitted it.
+  const fd = fs.openSync(ttyPath, 'w');
+  try {
+    fs.writeSync(fd, `\x1b]2;${title}\x07`);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+// Attempt the Windows Terminal UIA + OSC marker path for the given pts.
+// Returns the same { ok, terminal, error } shape as focusWslByPid.
+function focusWtTabByMarker(tty, scripts) {
+  // Snapshot first so we can restore the original tab title afterwards.
+  // Key format: "<hwnd>|<tabIndex>" — matches what the find script reports.
+  const snapshotMap = new Map();
+  try {
+    const out = execFileSync(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scripts.snapshot],
+      { encoding: 'utf8', timeout: 5000 }
+    );
+    for (const line of out.split(/\r?\n/)) {
+      if (!line.startsWith('TAB|')) continue;
+      const parts = line.split('|');
+      if (parts.length < 4) continue;
+      const hwnd = parts[1];
+      const idx = parts[2];
+      const nameB64 = parts.slice(3).join('|');
+      const name = Buffer.from(nameB64, 'base64').toString('utf8');
+      snapshotMap.set(`${hwnd}|${idx}`, name);
+    }
+    termLog('FOCUS', `wt snapshot: ${snapshotMap.size} tab(s)`);
+  } catch (e) {
+    termLog('ERROR', `wt snapshot failed: ${e.message}`);
+    return { ok: false, error: 'wt snapshot failed: ' + e.message };
+  }
+
+  if (snapshotMap.size === 0) {
+    return { ok: false, error: 'No Windows Terminal tabs visible — is wt running?' };
+  }
+
+  // Inject marker into the pts so the target tab renames itself.
+  const marker = `codedash-focus-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  try {
+    writeOscTitle(tty, marker);
+  } catch (e) {
+    termLog('ERROR', `osc write to ${tty} failed: ${e.message}`);
+    return { ok: false, error: 'Could not write marker to pts: ' + e.message };
+  }
+
+  let matchedKey = '';
+  try {
+    const out = execFileSync(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scripts.find, '-Marker', marker],
+      { encoding: 'utf8', timeout: 6000 }
+    ).trim();
+    termLog('FOCUS', `wt find: ${out}`);
+    if (out.startsWith('OK|')) {
+      matchedKey = out.slice(3); // "<hwnd>|<tabIndex>"
+    } else {
+      // Best-effort title cleanup — the marker is still on the tab, so rewrite
+      // it to empty and let claude/codex repaint on the next update.
+      try { writeOscTitle(tty, ''); } catch {}
+      return { ok: false, error: 'wt tab not found' };
+    }
+  } catch (e) {
+    termLog('ERROR', `wt find failed: ${e.message}`);
+    try { writeOscTitle(tty, ''); } catch {}
+    return { ok: false, error: e.message };
+  }
+
+  // Restore the tab's pre-marker title. A missing entry means the tab was
+  // created between snapshot and find — fall back to blank so the next agent
+  // paint wins.
+  const origName = snapshotMap.get(matchedKey);
+  termLog('FOCUS', `restore key=${matchedKey} name=${JSON.stringify(origName)}`);
+  try {
+    writeOscTitle(tty, origName != null ? origName : '');
+  } catch (e) {
+    termLog('ERROR', `title restore failed: ${e.message}`);
+  }
+
+  return { ok: true, terminal: 'Windows Terminal' };
+}
+
+// Attempt the non-WT fallback: locate a top-level window whose
+// MainWindowTitle exactly equals the sessionTag. This covers the
+// `wsl-powershell` launch path, which pins the console window title at
+// startup. WindowsTerminal is excluded inside the PS script.
+function focusWindowBySessionTag(sessionId, scripts) {
+  try {
+    assertSafeSessionId(sessionId);
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+  const tag = sessionTag(sessionId);
+  try {
+    const out = execFileSync(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scripts.windowByTitle, '-Tag', tag],
+      { encoding: 'utf8', timeout: 5000 }
+    ).trim();
+    termLog('FOCUS', `wsl title fallback: ${out}`);
+    if (out.endsWith('OK')) return { ok: true, terminal: 'PowerShell' };
+    return { ok: false, error: 'Could not focus — try clicking the terminal manually' };
+  } catch (e) {
+    termLog('ERROR', `wsl title fallback failed: ${e.message}`);
+    return { ok: false, error: e.message };
+  }
+}
+
+function focusWslByPid(pid, sessionId) {
+  // Defense in depth: /api/focus also validates, but focusWslByPid feeds pid
+  // directly into /proc/<pid>/fd/<n>, so re-check before touching the path.
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return { ok: false, error: 'invalid pid' };
+  }
+
+  let scripts;
+  try {
+    scripts = ensureFocusScripts();
+  } catch (e) {
+    termLog('ERROR', `ensureFocusScripts: ${e.message}`);
+    return { ok: false, error: e.message };
+  }
+
+  // WT_SESSION in /proc/<pid>/environ tells us whether the target actually
+  // lives inside a Windows Terminal tab. Gating the WT marker path on this
+  // flag is critical: conhost honors OSC 2, so writing the marker into a
+  // non-WT pts would overwrite the console's real title and break the
+  // sessionTag-based fallback further down.
+  const tty = ptsForPid(pid);
+  const inWt = tty ? isWtSession(pid) : false;
+  termLog('FOCUS', `wsl pid ${pid} pts=${tty || '(none)'} inWt=${inWt}`);
+
+  if (inWt) {
+    const wtResult = focusWtTabByMarker(tty, scripts);
+    if (wtResult.ok) return wtResult;
+    termLog('FOCUS', `wt path failed, trying title fallback: ${wtResult.error || ''}`);
+  }
+
+  // Fallback for `wsl-powershell` launches (conhost/powershell.exe windows)
+  // that pin MainWindowTitle to sessionTag at startup. Also catches the edge
+  // case where WT path missed after pts mutation — title may now be blank,
+  // so this will just return NOTFOUND without doing harm.
+  if (sessionId) {
+    return focusWindowBySessionTag(sessionId, scripts);
+  }
+
+  return { ok: false, error: 'Could not focus — try clicking the terminal manually' };
+}
+
 // ── Focus existing terminal by PID ──────────────────────────
 
 function focusTerminalByPid(pid, sessionId) {
@@ -412,80 +752,7 @@ function focusTerminalByPid(pid, sessionId) {
   termLog('FOCUS', `focusTerminalByPid: pid=${pid} sessionId=${sessionId || '(none)'} platform=${platform}`);
 
   if (platform === 'linux' && isWSL()) {
-    // On WSL we launched terminals with a window/tab title tag tied to the
-    // session id. Enumerate Windows processes and SetForegroundWindow on the
-    // first match whose MainWindowTitle contains the tag.
-    try { assertSafeSessionId(sessionId); } catch (e) {
-      return { ok: false, error: e.message };
-    }
-    const tag = sessionTag(sessionId);
-    // We enumerate ALL top-level windows via Win32 EnumWindows instead of
-    // Get-Process.MainWindowTitle, because a Windows Terminal host process
-    // exposes only the currently active tab's title as MainWindowTitle — so
-    // any inactive codedash tab would be invisible to a process scan. With
-    // `-w new` on launch each session lives in its own wt window, making
-    // EnumWindows matching reliable.
-    const psBody = [
-      'param([Parameter(Mandatory=$true)][string]$Tag)',
-      '$sig = @"',
-      'using System;',
-      'using System.Runtime.InteropServices;',
-      'using System.Text;',
-      'public class CodedashWin {',
-      '  public delegate bool EnumProc(IntPtr hWnd, IntPtr lParam);',
-      '  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc proc, IntPtr lParam);',
-      '  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, StringBuilder sb, int n);',
-      '  [DllImport("user32.dll")] public static extern int GetWindowTextLength(IntPtr hWnd);',
-      '  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);',
-      '  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);',
-      '  [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);',
-      '  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);',
-      '  public static IntPtr FindByTitle(string needle) {',
-      '    IntPtr found = IntPtr.Zero;',
-      '    EnumWindows((hWnd, lParam) => {',
-      '      if (!IsWindowVisible(hWnd)) return true;',
-      '      int len = GetWindowTextLength(hWnd);',
-      '      if (len <= 0) return true;',
-      '      StringBuilder sb = new StringBuilder(len + 1);',
-      '      GetWindowText(hWnd, sb, sb.Capacity);',
-      '      if (sb.ToString().IndexOf(needle, StringComparison.Ordinal) >= 0) {',
-      '        found = hWnd;',
-      '        return false;',
-      '      }',
-      '      return true;',
-      '    }, IntPtr.Zero);',
-      '    return found;',
-      '  }',
-      '}',
-      '"@',
-      'Add-Type -TypeDefinition $sig -ErrorAction SilentlyContinue',
-      '$hwnd = [CodedashWin]::FindByTitle($Tag)',
-      'if ($hwnd -ne [IntPtr]::Zero) {',
-      '  if ([CodedashWin]::IsIconic($hwnd)) { [CodedashWin]::ShowWindowAsync($hwnd, 9) | Out-Null }',
-      '  [CodedashWin]::SetForegroundWindow($hwnd) | Out-Null',
-      "  Write-Output 'ok'",
-      '} else {',
-      "  Write-Output 'notfound'",
-      '}',
-      '',
-    ].join('\r\n');
-    const ps1Path = path.join(os.tmpdir(), `codedash-focus-${Date.now()}.ps1`);
-    try {
-      fs.writeFileSync(ps1Path, psBody);
-      const out = execFileSync(
-        'powershell.exe',
-        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ps1Path, '-Tag', tag],
-        { encoding: 'utf8', timeout: 5000 }
-      ).trim();
-      termLog('FOCUS', `wsl result: ${out}`);
-      if (out.endsWith('ok')) return { ok: true, terminal: 'Windows Terminal / PowerShell' };
-      return { ok: false, error: 'Window not found — launch the session from UI first' };
-    } catch (e) {
-      termLog('ERROR', `wsl focus failed: ${e.message}`);
-      return { ok: false, error: e.message };
-    } finally {
-      try { fs.unlinkSync(ps1Path); } catch {}
-    }
+    return focusWslByPid(pid, sessionId);
   }
 
   if (platform === 'darwin') {

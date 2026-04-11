@@ -244,6 +244,9 @@ function startServer(host, port, openBrowser = true) {
       readBody(req, body => {
         try {
           const { pid, sessionId } = JSON.parse(body);
+          if (!Number.isInteger(pid) || pid <= 0) {
+            throw new Error('invalid pid');
+          }
           if (sessionId && !/^[A-Za-z0-9._-]{1,128}$/.test(String(sessionId))) {
             throw new Error('invalid sessionId');
           }
