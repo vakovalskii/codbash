@@ -110,6 +110,9 @@ function startServer(host, port, openBrowser = true) {
       readBody(req, body => {
         try {
           const { sessionId, tool, flags, project, terminal } = JSON.parse(body);
+          if (!/^[A-Za-z0-9._-]{1,128}$/.test(String(sessionId || ''))) {
+            throw new Error('invalid sessionId');
+          }
           log('LAUNCH', `session=${sessionId} tool=${tool || 'claude'} terminal=${terminal || 'default'} project=${project || '(none)'} flags=${(flags || []).join(',') || '(none)'}`);
           openInTerminal(sessionId, tool || 'claude', flags || [], project || '', terminal || '');
           log('LAUNCH', 'ok');
@@ -241,6 +244,9 @@ function startServer(host, port, openBrowser = true) {
       readBody(req, body => {
         try {
           const { pid, sessionId } = JSON.parse(body);
+          if (sessionId && !/^[A-Za-z0-9._-]{1,128}$/.test(String(sessionId))) {
+            throw new Error('invalid sessionId');
+          }
           log('FOCUS', `pid=${pid} sessionId=${sessionId || '(none)'}`);
           const result = focusTerminalByPid(pid, sessionId);
           log('FOCUS', `result: terminal=${result.terminal || 'none'} ok=${result.ok}`);
