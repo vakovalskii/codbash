@@ -19,12 +19,44 @@ function normalizeProjectPath(value) {
 
 function parseWslDistroList(raw) {
   const text = Buffer.isBuffer(raw)
-    ? raw.toString('utf16le')
-    : String(raw || '').replace(/\0/g, '');
+    ? raw.toString('utf16le').replace(/^\uFEFF/, '')
+    : String(raw || '').replace(/\0/g, '').replace(/^\uFEFF/, '');
   return text
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
+}
+
+function getWslDistroList(execFileSyncImpl = execFileSync) {
+  try {
+    return parseWslDistroList(execFileSyncImpl('wsl.exe', ['-l', '-q'], {
+      encoding: 'buffer',
+      timeout: 3000,
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function getRunningWslDistroSet(execFileSyncImpl = execFileSync) {
+  try {
+    return new Set(parseWslDistroList(execFileSyncImpl('wsl.exe', ['--list', '--quiet', '--running'], {
+      encoding: 'buffer',
+      timeout: 3000,
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })));
+  } catch {
+    return null;
+  }
+}
+
+function filterWslDistrosForProcessScan(distros, runningDistros) {
+  if (!Array.isArray(distros) || distros.length === 0) return [];
+  if (!(runningDistros instanceof Set)) return [];
+  return distros.filter((distro) => runningDistros.has(distro));
 }
 
 function buildWslUncPath(distro, linuxPath) {
@@ -32,34 +64,39 @@ function buildWslUncPath(distro, linuxPath) {
   return '\\\\wsl$\\' + distro + linuxPath.replace(/\//g, '\\');
 }
 
-function detectWindowsWslHomes() {
-  if (process.platform !== 'win32') return [];
+function detectWindowsWslHomes({
+  platform = process.platform,
+  execFileSyncImpl = execFileSync,
+  fsImpl = fs,
+  getDistroList = getWslDistroList,
+  getRunningDistroSet = getRunningWslDistroSet,
+} = {}) {
+  if (platform !== 'win32') return [];
   const homes = [];
-  try {
-    const distros = parseWslDistroList(execFileSync('wsl.exe', ['-l', '-q'], {
-      encoding: 'buffer',
-      timeout: 3000,
-      windowsHide: true,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    }));
-
-    for (const distro of distros) {
-      try {
-        const linuxHome = String(execFileSync('wsl.exe', ['-d', distro, 'sh', '-lc', 'printf %s "$HOME"'], {
-          encoding: 'utf8',
-          timeout: 3000,
-          windowsHide: true,
-          stdio: ['pipe', 'pipe', 'pipe'],
-        }) || '').trim();
-        if (!linuxHome || !linuxHome.startsWith('/')) continue;
-        const uncHome = buildWslUncPath(distro, linuxHome);
-        if (!uncHome) continue;
-        const hasClaude = fs.existsSync(path.join(uncHome, '.claude'));
-        const hasCodex = fs.existsSync(path.join(uncHome, '.codex'));
-        if (hasClaude || hasCodex) homes.push(uncHome);
-      } catch {}
-    }
-  } catch {}
+  const distros = filterWslDistrosForProcessScan(
+    getDistroList(execFileSyncImpl),
+    getRunningDistroSet(execFileSyncImpl)
+  );
+  for (const distro of distros) {
+    try {
+      const linuxHome = String(execFileSyncImpl('wsl.exe', ['-d', distro, 'sh', '-c', 'printf %s "$HOME"'], {
+        encoding: 'utf8',
+        timeout: 3000,
+        windowsHide: true,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      }) || '').trim();
+      if (!linuxHome || !linuxHome.startsWith('/')) continue;
+      const uncHome = buildWslUncPath(distro, linuxHome);
+      if (!uncHome) continue;
+      const hasRelevantAgentData = [
+        path.join(uncHome, '.claude'),
+        path.join(uncHome, '.codex'),
+        path.join(uncHome, '.cursor'),
+        path.join(uncHome, '.local', 'share', 'opencode'),
+      ].some((candidate) => fsImpl.existsSync(candidate));
+      if (hasRelevantAgentData) homes.push(uncHome);
+    } catch {}
+  }
   return homes;
 }
 
@@ -92,7 +129,11 @@ function detectHomes() {
       try {
         for (const u of fs.readdirSync('/mnt/c/Users')) {
           const candidate = '/mnt/c/Users/' + u;
-          if (fs.existsSync(path.join(candidate, '.claude'))) addHome(candidate);
+          if (
+            fs.existsSync(path.join(candidate, '.claude')) ||
+            fs.existsSync(path.join(candidate, '.codex')) ||
+            fs.existsSync(path.join(candidate, '.cursor'))
+          ) addHome(candidate);
         }
       } catch {}
     }
@@ -3235,14 +3276,12 @@ module.exports = {
   PROJECTS_DIR,
   __test: {
     parseWslDistroList,
+    getWslDistroList,
+    getRunningWslDistroSet,
+    filterWslDistrosForProcessScan,
     buildWslUncPath,
     normalizeProjectPath,
     shortenHomePath,
-    mergeClaudeSessionDetail,
-    getCodexTokenCountUsage,
-    computeCodexCostFromJsonlLines,
-    mergeCodexSession,
-    parseSessionIdFromCommandLine,
-    parseWindowsCwdFromCommandLine,
+    detectWindowsWslHomes,
   },
 };
