@@ -1266,9 +1266,32 @@ function updateBulkBar() {
   if (selectedIds.size > 0) {
     bar.style.display = 'flex';
     document.getElementById('bulkCount').textContent = selectedIds.size + ' selected';
+
+    // Warn if some selected sessions are hidden by the current filter
+    var visibleIds = new Set((filteredSessions || []).map(function(s) { return s.id; }));
+    var hiddenCount = 0;
+    selectedIds.forEach(function(id) { if (!visibleIds.has(id)) hiddenCount++; });
+    var warning = document.getElementById('bulkHiddenWarning');
+    var deleteBtn = document.getElementById('bulkDeleteBtn');
+    if (hiddenCount > 0) {
+      document.getElementById('bulkHiddenCount').textContent = hiddenCount;
+      if (warning) warning.style.display = 'inline';
+      if (deleteBtn) { deleteBtn.disabled = true; deleteBtn.title = 'Clear or deselect hidden sessions first'; }
+    } else {
+      if (warning) warning.style.display = 'none';
+      if (deleteBtn) { deleteBtn.disabled = false; deleteBtn.title = ''; }
+    }
   } else {
     bar.style.display = 'none';
   }
+}
+
+function clearHiddenSelections(event) {
+  if (event) event.preventDefault();
+  var visibleIds = new Set((filteredSessions || []).map(function(s) { return s.id; }));
+  selectedIds.forEach(function(id) { if (!visibleIds.has(id)) selectedIds.delete(id); });
+  updateBulkBar();
+  render();
 }
 
 function clearSelection() {

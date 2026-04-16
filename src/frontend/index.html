@@ -173,7 +173,8 @@
 
 <div class="bulk-bar" id="bulkBar" style="display:none">
     <span id="bulkCount">0 selected</span>
-    <button class="launch-btn btn-delete" onclick="bulkDelete()">Delete Selected</button>
+    <span id="bulkHiddenWarning" class="bulk-hidden-warning" style="display:none">⚠ <span id="bulkHiddenCount"></span> hidden by filter — <a href="#" onclick="clearHiddenSelections(event)">deselect hidden</a></span>
+    <button class="launch-btn btn-delete" id="bulkDeleteBtn" onclick="bulkDelete()">Delete Selected</button>
     <button class="launch-btn btn-secondary" onclick="clearSelection()">Cancel</button>
 </div>
 
