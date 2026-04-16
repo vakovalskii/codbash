@@ -52,20 +52,25 @@ function detectTerminals() {
       }
     } catch {}
   } else if (platform === 'linux') {
-    const linuxTerms = [
-      { id: 'gnome-terminal', name: 'GNOME Terminal', cmd: 'gnome-terminal' },
-      { id: 'konsole', name: 'Konsole', cmd: 'konsole' },
-      { id: 'kitty', name: 'Kitty', cmd: 'kitty' },
-      { id: 'alacritty', name: 'Alacritty', cmd: 'alacritty' },
-      { id: 'xterm', name: 'xterm', cmd: 'xterm' },
-    ];
-    for (const t of linuxTerms) {
-      try {
-        execSync(`which ${t.cmd}`, { stdio: 'pipe' });
-        terminals.push({ ...t, available: true });
-      } catch {
-        terminals.push({ ...t, available: false });
+    // Detect system default terminal (x-terminal-emulator symlink)
+    try {
+      const defaultBin = execSync('readlink -f $(which x-terminal-emulator) 2>/dev/null', { encoding: 'utf8' }).trim();
+      if (defaultBin) {
+        terminals.push({ id: defaultBin, name: 'System Default (' + path.basename(defaultBin) + ')', available: true });
       }
+    } catch {}
+    // Scan for known terminals as suggestions
+    const knownBins = [
+      'gnome-terminal', 'konsole', 'kitty', 'alacritty', 'wezterm',
+      'terminator', 'tilix', 'xfce4-terminal', 'mate-terminal', 'foot', 'xterm',
+    ];
+    for (const cmd of knownBins) {
+      try {
+        const fullPath = execSync(`which ${cmd} 2>/dev/null`, { encoding: 'utf8' }).trim();
+        if (fullPath && !terminals.find(t => t.id === fullPath)) {
+          terminals.push({ id: fullPath, name: cmd, available: true });
+        }
+      } catch {}
     }
   } else {
     terminals.push({ id: 'cmd', name: 'Command Prompt', available: true });
@@ -182,23 +187,22 @@ function openInTerminal(sessionId, tool, flags, projectDir, terminalId) {
       }
     }
   } else if (platform === 'linux') {
-    switch (terminalId) {
-      case 'kitty':
-        exec(`kitty bash -c '${fullCmd}; exec bash'`);
-        break;
-      case 'alacritty':
-        exec(`alacritty -e bash -c '${fullCmd}; exec bash'`);
-        break;
-      case 'konsole':
-        exec(`konsole -e bash -c '${fullCmd}; exec bash'`);
-        break;
-      case 'xterm':
-        exec(`xterm -e bash -c '${fullCmd}; exec bash'`);
-        break;
-      case 'gnome-terminal':
-      default:
-        exec(`gnome-terminal -- bash -c "${fullCmd}; exec bash"`);
-        break;
+    // terminalId can be a known name or an arbitrary binary path
+    const bin = terminalId || 'x-terminal-emulator';
+    const baseName = path.basename(bin);
+    termLog('TERM', `linux: bin=${bin} baseName=${baseName}`);
+
+    // gnome-terminal uses -- instead of -e
+    if (baseName === 'gnome-terminal' || baseName === 'gnome-terminal-server') {
+      exec(`${bin} -- bash -c "${fullCmd}; exec bash"`);
+    }
+    // wezterm uses "start --"
+    else if (baseName === 'wezterm' || baseName === 'wezterm-gui') {
+      exec(`${bin} start -- bash -c '${fullCmd}; exec bash'`);
+    }
+    // Generic: most terminals support -e or direct argument
+    else {
+      exec(`${bin} -e bash -c '${fullCmd}; exec bash'`);
     }
   } else {
     switch (terminalId) {
@@ -357,7 +361,117 @@ function focusTerminalByPid(pid) {
     } catch {}
   }
 
-  // Linux/other: not much we can do without window manager integration
+  // Linux: use WINDOWID from /proc for precise window matching,
+  // terminal-specific APIs for tab-level focus, wmctrl/xdotool as fallback
+  if (platform === 'linux') {
+    try {
+      const pidChain = [];
+      let walkPid = String(pid);
+      let windowId = null;
+      let detectedTerminal = '';
+      const knownTerminals = ['gnome-terminal', 'konsole', 'kitty', 'alacritty', 'xterm',
+        'terminator', 'tilix', 'xfce4-terminal', 'mate-terminal', 'wezterm', 'foot', 'st', 'urxvt'];
+
+      // Walk parent chain: collect PIDs, find WINDOWID, detect terminal
+      for (let depth = 0; depth < 20; depth++) {
+        pidChain.push(walkPid);
+
+        // Read WINDOWID from /proc/<pid>/environ (set by terminal emulators)
+        if (!windowId) {
+          try {
+            const envData = fs.readFileSync(`/proc/${walkPid}/environ`);
+            const vars = envData.toString('utf8').split('\0');
+            for (const v of vars) {
+              if (v.startsWith('WINDOWID=')) {
+                windowId = v.slice(9);
+                break;
+              }
+            }
+          } catch {}
+        }
+
+        // Detect terminal name from process command
+        if (!detectedTerminal) {
+          try {
+            const cmd = execSync(`ps -p ${walkPid} -o comm= 2>/dev/null`, { encoding: 'utf8' }).trim();
+            for (const name of knownTerminals) {
+              if (cmd.includes(name)) { detectedTerminal = name; break; }
+            }
+          } catch {}
+        }
+
+        try {
+          const ppid = execSync(`ps -p ${walkPid} -o ppid= 2>/dev/null`, { encoding: 'utf8' }).trim();
+          if (!ppid || ppid === '0' || ppid === '1') break;
+          walkPid = ppid;
+        } catch { break; }
+      }
+
+      termLog('FOCUS', `linux: windowId=${windowId || 'none'} terminal=${detectedTerminal || 'none'} chain=${pidChain.length} pids`);
+
+      // ── Terminal-specific tab focus (works at tab level, not just window) ──
+
+      if (detectedTerminal === 'kitty') {
+        try {
+          execSync(`kitty @ focus-window --match pid:${pid}`, { stdio: 'pipe', timeout: 2000 });
+          termLog('FOCUS', 'kitty remote control: focused by pid');
+          return { ok: true, terminal: 'kitty' };
+        } catch {
+          termLog('FOCUS', 'kitty remote control failed (enable allow_remote_control), falling back');
+        }
+      }
+
+      // ── Focus by WINDOWID (precise — each tab gets its own WINDOWID) ──
+
+      if (windowId && windowId !== '0') {
+        termLog('FOCUS', `trying WINDOWID=${windowId}`);
+
+        // xdotool accepts decimal WINDOWID directly
+        try {
+          execSync(`xdotool windowactivate ${windowId}`, { stdio: 'pipe', timeout: 2000 });
+          termLog('FOCUS', `xdotool focused WINDOWID=${windowId}`);
+          return { ok: true, terminal: detectedTerminal || 'linux' };
+        } catch {}
+
+        // wmctrl needs hex format
+        try {
+          const hexId = '0x' + parseInt(windowId, 10).toString(16).padStart(8, '0');
+          execSync(`wmctrl -ia ${hexId}`, { stdio: 'pipe', timeout: 2000 });
+          termLog('FOCUS', `wmctrl focused WINDOWID=${hexId}`);
+          return { ok: true, terminal: detectedTerminal || 'linux' };
+        } catch {}
+      }
+
+      // ── Fallback: match PID chain against wmctrl window list ──
+
+      try {
+        const windows = execSync('wmctrl -l -p 2>/dev/null', { encoding: 'utf8' });
+        for (const line of windows.split('\n')) {
+          const parts = line.trim().split(/\s+/);
+          if (parts.length >= 3 && pidChain.includes(parts[2])) {
+            execSync(`wmctrl -ia ${parts[0]}`, { stdio: 'pipe' });
+            termLog('FOCUS', `wmctrl pid-match focused ${parts[0]}`);
+            return { ok: true, terminal: detectedTerminal || 'linux' };
+          }
+        }
+      } catch {}
+
+      // ── Last resort: xdotool search by PID ──
+
+      try {
+        for (const p of pidChain) {
+          const wids = execSync(`xdotool search --pid ${p} 2>/dev/null`, { encoding: 'utf8' }).trim();
+          if (wids) {
+            const wid = wids.split('\n')[0];
+            execSync(`xdotool windowactivate ${wid}`, { stdio: 'pipe' });
+            termLog('FOCUS', `xdotool pid-search focused ${wid}`);
+            return { ok: true, terminal: detectedTerminal || 'linux' };
+          }
+        }
+      } catch {}
+    } catch {}
+  }
+
   return { ok: false };
 }
 

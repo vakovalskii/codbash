@@ -1615,15 +1615,16 @@ function renderSettings(container) {
   // Terminal
   html += '<div class="settings-group">';
   html += '<label class="settings-label">Terminal</label>';
-  html += '<select class="settings-select" onchange="saveTerminalPref(this.value)">';
+  html += '<p style="font-size:12px;color:var(--text-muted);margin:0 0 8px">Binary name or full path (e.g. kitty, /usr/bin/alacritty)</p>';
+  html += '<input type="text" class="settings-select" list="terminal-suggestions" value="' + escHtml(savedTerminal) + '" onchange="saveTerminalPref(this.value)" placeholder="x-terminal-emulator">';
+  html += '<datalist id="terminal-suggestions">';
   if (Array.isArray(availableTerminals)) {
     availableTerminals.forEach(function(t) {
       if (!t.available) return;
-      var sel = t.id === savedTerminal ? ' selected' : '';
-      html += '<option value="' + t.id + '"' + sel + '>' + escHtml(t.name) + '</option>';
+      html += '<option value="' + escHtml(t.id) + '">' + escHtml(t.name) + '</option>';
     });
   }
-  html += '</select>';
+  html += '</datalist>';
   html += '</div>';
 
   // AI Titles
