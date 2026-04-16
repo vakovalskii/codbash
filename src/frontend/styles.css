@@ -2362,7 +2362,7 @@ body {
 
 .running-msg {
     font-size: 13px;
-    color: var(--text-secondary);
+    color: var(--text-primary);
     padding: 10px;
     background: rgba(255,255,255,0.03);
     border-radius: 8px;
