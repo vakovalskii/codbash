@@ -1062,6 +1062,22 @@ body {
     border-color: var(--accent-red);
 }
 .bulk-bar button.bulk-delete:hover { opacity: 0.85; }
+.bulk-bar button:disabled { opacity: 0.4; cursor: not-allowed; }
+.bulk-bar button:disabled:hover { opacity: 0.4; }
+
+.bulk-hidden-warning {
+    font-size: 12px;
+    color: #f5a623;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.bulk-hidden-warning a {
+    color: #f5a623;
+    text-decoration: underline;
+    cursor: pointer;
+}
+.bulk-hidden-warning a:hover { opacity: 0.8; }
 
 [data-theme="light"] .bulk-bar {
     background: rgba(245,245,247,0.88);
