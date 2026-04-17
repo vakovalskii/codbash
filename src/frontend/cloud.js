@@ -5,23 +5,8 @@ var cloudLocalSessions = null;
 var cloudLoading = false;
 var cloudUnlocked = false;
 var cloudConfigured = false;
-var cloudServerHasSalt = false;
 var cloudSessionIds = new Set();
-
-var inputStyle = 'padding:7px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg-card-hover);color:var(--text-primary);width:200px;font-size:13px;-webkit-text-security:disc;';
-var inputAttrs = 'autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-1p-ignore data-lpignore="true"';
-var rowStyle = 'display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;margin-bottom:4px;';
-var panelStyle = 'flex:1;min-width:0;overflow-y:auto;max-height:60vh;';
-
-function cloudRow(badge, text, sub, btns) {
-  var h = '<div style="' + rowStyle + '">';
-  h += '<span class="tool-badge tool-' + badge + '" style="font-size:10px;padding:2px 6px;">' + badge + '</span>';
-  h += '<div style="flex:1;min-width:0;">';
-  h += '<div style="font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escHtml(text) + '</div>';
-  if (sub) h += '<div class="dim" style="font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escHtml(sub) + '</div>';
-  h += '</div>' + btns + '</div>';
-  return h;
-}
+var CLOUD_LIMIT = 10;
 
 async function renderCloud(container) {
   var profile = null;
@@ -30,128 +15,130 @@ async function renderCloud(container) {
     profile = await resp.json();
   } catch (e) {}
 
-  var html = '<div class="view-header"><h2>Cloud Sync</h2></div>';
+  var html = '<div class="cloud-container">';
+  html += '<h2 class="cloud-title">Cloud Sync</h2>';
+
+  // Explanation
+  html += '<div class="cloud-info">';
+  html += '<p>Sync your coding sessions between devices. Sessions are <strong>encrypted</strong> with your GitHub account — only you can read them.</p>';
+  html += '<p>Free tier: up to <strong>' + CLOUD_LIMIT + ' sessions</strong>. Connect the same GitHub account on another PC to pull sessions there.</p>';
+  html += '</div>';
 
   if (!profile || !profile.authenticated) {
-    html += '<div class="empty-state">';
-    html += '<p>Connect GitHub to sync sessions to the cloud.</p>';
-    html += '<button class="launch-btn btn-primary" onclick="githubConnect()">Connect GitHub</button>';
+    html += '<div class="cloud-connect">';
+    html += '<p>Connect GitHub to enable Cloud Sync:</p>';
+    html += '<button class="lb-github-btn" onclick="githubConnect()"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg> Connect GitHub</button>';
     html += '</div>';
-    container.innerHTML = html;
+    container.innerHTML = html + '</div>';
     return;
   }
 
-  // Header bar
-  html += '<div style="margin-bottom:12px;padding:12px 16px;background:var(--bg-card);border:1px solid var(--border);border-radius:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">';
-  html += '<img src="' + profile.avatar + '" style="width:32px;height:32px;border-radius:50%;border:2px solid var(--border);">';
-  html += '<div><strong style="font-size:13px;">' + escHtml(profile.name || profile.username) + '</strong> <span class="dim" style="font-size:11px;">@' + escHtml(profile.username) + '</span></div>';
-  html += '<div style="margin-left:auto;display:flex;gap:8px;align-items:center;">';
+  // Profile + status bar
+  html += '<div class="cloud-status">';
+  html += '<img src="' + escHtml(profile.avatar) + '" class="cloud-avatar">';
+  html += '<div class="cloud-user"><strong>' + escHtml(profile.name || profile.username) + '</strong><br><span class="dim">@' + escHtml(profile.username) + '</span></div>';
 
-  var needsPassphrase = !cloudConfigured && !cloudServerHasSalt;
-  var needsEnter = !cloudConfigured && cloudServerHasSalt;
-
-  if (needsPassphrase) {
-    html += '<input type="text" id="cloudPassInput" placeholder="Create passphrase (min 4)" ' + inputAttrs + ' style="' + inputStyle + '" onkeydown="if(event.key===\'Enter\')setupCloud()">';
-    html += '<button class="launch-btn btn-primary" onclick="setupCloud()">Setup</button>';
-  } else if (!cloudUnlocked) {
-    html += '<input type="text" id="cloudPassInput" placeholder="Enter passphrase" ' + inputAttrs + ' style="' + inputStyle + '" onkeydown="if(event.key===\'Enter\')' + (needsEnter ? 'setupCloud()' : 'unlockCloud()') + '">';
-    html += '<button class="launch-btn btn-primary" onclick="' + (needsEnter ? 'setupCloud()' : 'unlockCloud()') + '">Unlock</button>';
-  } else {
-    html += '<span style="color:var(--accent-green,#3fb950);font-size:12px;font-weight:600;">&#10003; Unlocked</span>';
-    html += '<button class="launch-btn btn-secondary" style="padding:5px 10px;font-size:11px;" onclick="lockCloud()">Lock</button>';
-  }
-  html += '<button class="launch-btn btn-secondary" style="padding:5px 10px;font-size:11px;" onclick="loadCloudData()">Refresh</button>';
-  html += '</div></div>';
-
-  if (!cloudUnlocked) {
-    container.innerHTML = html;
-    if (!cloudLoading && cloudSessions === null) loadCloudData();
-    return;
+  // Auto-setup if needed
+  if (!cloudConfigured) {
+    try {
+      await fetch('/api/cloud/setup', { method: 'POST' });
+      await checkCloudLockState();
+    } catch {}
   }
 
-  // Two-panel layout
-  html += '<div style="display:flex;gap:12px;align-items:flex-start;">';
-
-  // LEFT: Local sessions
-  html += '<div style="flex:1;min-width:0;">';
-  html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">';
-  html += '<strong style="font-size:13px;">This PC</strong>';
-  html += '<span class="dim" style="font-size:11px;">' + (cloudLocalSessions ? cloudLocalSessions.length : '...') + ' sessions</span>';
+  var syncedCount = cloudSessions ? cloudSessions.length : 0;
+  var totalSize = cloudStats ? (cloudStats.total_size / 1024 / 1024).toFixed(1) : '0';
+  html += '<div class="cloud-counter">';
+  html += '<span class="cloud-count">' + syncedCount + '/' + CLOUD_LIMIT + '</span>';
+  html += '<span class="dim">sessions in cloud</span>';
+  html += '<span class="dim">' + totalSize + ' MB</span>';
   html += '</div>';
-  html += '<div style="margin-bottom:8px;"><button class="launch-btn btn-primary" style="padding:6px 14px;font-size:12px;width:100%;" onclick="cloudPushAll()" id="cloudPushAllBtn">Push All &rarr;</button></div>';
-  html += '<div style="' + panelStyle + '">';
-
-  if (cloudLocalSessions) {
-    for (var i = 0; i < cloudLocalSessions.length; i++) {
-      var ls = cloudLocalSessions[i];
-      var inCloud = cloudSessionIds.has(ls.id);
-      var sub = (ls.project_short || '') + ' \u00b7 ' + (ls.messages || 0) + ' msgs';
-      var btnHtml = inCloud
-        ? '<span class="dim" style="font-size:10px;white-space:nowrap;">in cloud</span>'
-        : '<button class="launch-btn btn-primary" style="padding:3px 8px;font-size:10px;" onclick="cloudPushOne(\'' + ls.id + '\',this)">Push</button>';
-      html += cloudRow(ls.tool, ((ls.session_name || stripRecapSuffix(ls.recap) || ls.first_message || ls.id)).substring(0, 60), sub, btnHtml);
-    }
-  } else {
-    html += '<div class="dim" style="text-align:center;padding:20px;font-size:12px;">Loading...</div>';
-  }
-  html += '</div></div>';
-
-  // RIGHT: Cloud sessions
-  html += '<div style="flex:1;min-width:0;">';
-  html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">';
-  html += '<strong style="font-size:13px;">Cloud</strong>';
-  html += '<span class="dim" style="font-size:11px;">' + (cloudSessions ? cloudSessions.length : '...') + ' sessions' + (cloudStats ? ' \u00b7 ' + ((cloudStats.total_size || 0) / 1024 / 1024).toFixed(1) + ' MB' : '') + '</span>';
+  html += '<button class="toolbar-btn" onclick="loadCloudData()" style="margin-left:auto">Refresh</button>';
   html += '</div>';
-  html += '<div style="margin-bottom:8px;"><button class="launch-btn btn-secondary" style="padding:6px 14px;font-size:12px;width:100%;" onclick="cloudPullAll()" id="cloudPullAllBtn">&larr; Pull All</button></div>';
-  html += '<div style="' + panelStyle + '">';
+
+  // Sessions list — merged view
+  html += '<div class="cloud-sessions">';
 
   if (cloudLoading) {
-    html += '<div class="dim" style="text-align:center;padding:20px;font-size:12px;">Loading...</div>';
-  } else if (!cloudSessions || cloudSessions.length === 0) {
-    html += '<div class="dim" style="text-align:center;padding:20px;font-size:12px;">Empty</div>';
+    html += '<div class="cloud-empty">Loading...</div>';
+  } else if (!cloudLocalSessions) {
+    html += '<div class="cloud-empty">Loading sessions...</div>';
   } else {
-    for (var j = 0; j < cloudSessions.length; j++) {
-      var cs = cloudSessions[j];
-      var csDate = cs.last_ts ? new Date(cs.last_ts).toLocaleDateString() : '';
-      var csSub = (cs.project_short || '') + ' \u00b7 ' + cs.message_count + ' msgs \u00b7 ' + csDate;
-      var csBtns = '<button class="launch-btn btn-secondary" style="padding:3px 8px;font-size:10px;" onclick="cloudPullOne(\'' + cs.session_id + '\',this)">Pull</button>';
-      csBtns += '<button class="launch-btn btn-delete" style="padding:3px 6px;font-size:10px;" onclick="deleteCloudSession(\'' + cs.session_id + '\')">&times;</button>';
-      html += cloudRow(cs.agent, ((cs.session_name || stripRecapSuffix(cs.recap) || cs.first_message || cs.session_id)).substring(0, 60), csSub, csBtns);
+    // Build merged list: local sessions with cloud status
+    var localById = {};
+    cloudLocalSessions.forEach(function(s) { localById[s.id] = s; });
+
+    // Cloud-only sessions (pulled from other device)
+    var cloudOnly = [];
+    if (cloudSessions) {
+      cloudSessions.forEach(function(cs) {
+        if (!localById[cs.session_id]) cloudOnly.push(cs);
+      });
+    }
+
+    // Sorted: synced first, then local-only, then cloud-only
+    var synced = cloudLocalSessions.filter(function(s) { return cloudSessionIds.has(s.id); });
+    var localOnly = cloudLocalSessions.filter(function(s) { return !cloudSessionIds.has(s.id); })
+      .sort(function(a, b) { return b.last_ts - a.last_ts; })
+      .slice(0, 20); // show top 20 local
+
+    if (synced.length > 0) {
+      html += '<div class="cloud-section-title">&#9745; Synced (' + synced.length + ')</div>';
+      synced.forEach(function(s) {
+        html += cloudSessionRow(s, 'synced');
+      });
+    }
+
+    if (cloudOnly.length > 0) {
+      html += '<div class="cloud-section-title">&#9729; Cloud Only (' + cloudOnly.length + ')</div>';
+      cloudOnly.forEach(function(cs) {
+        html += cloudRemoteRow(cs);
+      });
+    }
+
+    var canPush = CLOUD_LIMIT - syncedCount;
+    html += '<div class="cloud-section-title">&#128187; Local Only' + (canPush > 0 ? ' — ' + canPush + ' slots available' : ' — limit reached') + '</div>';
+    if (localOnly.length === 0) {
+      html += '<div class="cloud-empty">All sessions are synced!</div>';
+    } else {
+      localOnly.forEach(function(s) {
+        html += cloudSessionRow(s, canPush > 0 ? 'pushable' : 'full');
+      });
     }
   }
+
   html += '</div></div>';
-
-  html += '</div>'; // end two-panel
-
   container.innerHTML = html;
 
   if (!cloudSessions && !cloudLoading) loadCloudData();
 }
 
-async function setupCloud() {
-  var input = document.getElementById('cloudPassInput');
-  if (!input || !input.value) return;
-  if (input.value.length < 4) { showToast('Passphrase too short (min 4)', 'error'); return; }
-  console.log('[CLOUD] setup: configuring encryption...');
-  try {
-    var resp = await fetch('/api/cloud/setup', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ passphrase: input.value }),
-    });
-    var data = await resp.json();
-    console.log('[CLOUD] setup response:', resp.status, data);
-    if (data.ok) {
-      cloudConfigured = true;
-      cloudUnlocked = true;
-      showToast(data.isNew === false ? 'Cloud unlocked' : 'Cloud encryption configured!');
-      loadCloudData();
-    } else {
-      showToast(data.error || 'Setup failed', 'error');
-    }
-  } catch (e) {
-    showToast('Error: ' + e.message, 'error');
+function cloudSessionRow(s, status) {
+  var name = (s.session_name || s.first_message || s.id).substring(0, 70);
+  var sub = (s.tool || '') + ' · ' + (s.project_short || '') + ' · ' + (s.messages || 0) + ' msgs';
+  var btn = '';
+  if (status === 'synced') {
+    btn = '<span class="cloud-badge cloud-synced">&#9745; synced</span>';
+  } else if (status === 'pushable') {
+    btn = '<button class="cloud-push-btn" onclick="cloudPushOne(\'' + s.id + '\',this)">&#9650; Push</button>';
+  } else {
+    btn = '<span class="cloud-badge cloud-full">limit</span>';
   }
+  return '<div class="cloud-row">' +
+    '<span class="tool-badge tool-' + (s.tool || 'claude') + '" style="font-size:10px;padding:2px 6px">' + (s.tool || '') + '</span>' +
+    '<div class="cloud-row-info"><div class="cloud-row-name">' + escHtml(name) + '</div><div class="cloud-row-sub">' + escHtml(sub) + '</div></div>' +
+    btn + '</div>';
+}
+
+function cloudRemoteRow(cs) {
+  var name = (cs.session_name || cs.first_message || cs.session_id).substring(0, 70);
+  var sub = (cs.agent || '') + ' · ' + (cs.project_short || '') + ' · ' + (cs.message_count || 0) + ' msgs';
+  return '<div class="cloud-row">' +
+    '<span class="tool-badge tool-' + (cs.agent || 'claude') + '" style="font-size:10px;padding:2px 6px">' + (cs.agent || '') + '</span>' +
+    '<div class="cloud-row-info"><div class="cloud-row-name">' + escHtml(name) + '</div><div class="cloud-row-sub">' + escHtml(sub) + '</div></div>' +
+    '<button class="cloud-pull-btn" onclick="cloudPullOne(\'' + cs.session_id + '\',this)">&#9660; Pull</button>' +
+    '<button class="cloud-del-btn" onclick="deleteCloudSession(\'' + cs.session_id + '\')">&times;</button>' +
+    '</div>';
 }
 
 async function checkCloudLockState() {
@@ -159,52 +146,20 @@ async function checkCloudLockState() {
     var resp = await fetch('/api/cloud/locked');
     var data = await resp.json();
     cloudConfigured = data.configured;
-    cloudServerHasSalt = data.serverHasSalt;
     cloudUnlocked = data.unlocked;
-    console.log('[CLOUD] lock state:', data);
-  } catch (e) {
-    console.error('[CLOUD] lock state error:', e);
-  }
-}
-
-async function unlockCloud() {
-  var input = document.getElementById('cloudPassInput');
-  if (!input || !input.value) return;
-  console.log('[CLOUD] unlock: attempting...');
-  try {
-    var resp = await fetch('/api/cloud/unlock', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ passphrase: input.value }),
-    });
-    var data = await resp.json();
-    console.log('[CLOUD] unlock response:', resp.status, data);
-    if (data.ok) {
-      cloudUnlocked = true;
-      showToast('Cloud unlocked');
-      loadCloudData();
-    } else {
-      showToast(data.error || 'Wrong passphrase', 'error');
-    }
-  } catch (e) {
-    showToast('Error: ' + e.message, 'error');
-  }
-}
-
-function lockCloud() {
-  fetch('/api/cloud/lock', { method: 'POST' }).catch(function() {});
-  cloudUnlocked = false;
-  showToast('Cloud locked');
-  applyFilters();
+  } catch (e) {}
 }
 
 async function loadCloudData() {
   cloudLoading = true;
   applyFilters();
-  console.log('[CLOUD] loading data...');
-
   try {
     await checkCloudLockState();
+    // Auto-setup if GitHub connected but not configured
+    if (!cloudConfigured) {
+      await fetch('/api/cloud/setup', { method: 'POST' });
+      await checkCloudLockState();
+    }
     var [listResp, statsResp, localResp] = await Promise.all([
       fetch('/api/cloud/list'),
       fetch('/api/cloud/status'),
@@ -214,31 +169,21 @@ async function loadCloudData() {
       var listData = await listResp.json();
       cloudSessions = listData.sessions || [];
       cloudSessionIds = new Set(cloudSessions.map(function(s) { return s.session_id; }));
-      console.log('[CLOUD] remote:', cloudSessions.length, 'sessions');
-    } else {
-      console.error('[CLOUD] list failed:', listResp.status);
     }
-    if (statsResp.ok) {
-      cloudStats = await statsResp.json();
-      console.log('[CLOUD] stats:', cloudStats);
-    }
+    if (statsResp.ok) cloudStats = await statsResp.json();
     if (localResp.ok) {
       cloudLocalSessions = await localResp.json();
       if (!Array.isArray(cloudLocalSessions)) cloudLocalSessions = [];
-      console.log('[CLOUD] local:', cloudLocalSessions.length, 'sessions');
     }
   } catch (e) {
-    console.error('[CLOUD] load error:', e);
-    showToast('Cloud: ' + e.message, 'error');
+    showToast('Cloud: ' + e.message);
   }
-
   cloudLoading = false;
   applyFilters();
 }
 
 async function cloudPushOne(sessionId, btn) {
   if (btn) { btn.disabled = true; btn.textContent = '...'; }
-  console.log('[CLOUD] push', sessionId.slice(0, 12));
   try {
     var resp = await fetch('/api/cloud/push', {
       method: 'POST',
@@ -247,73 +192,21 @@ async function cloudPushOne(sessionId, btn) {
     });
     var data = await resp.json();
     if (data.ok) {
-      console.log('[CLOUD] push OK', sessionId.slice(0, 12), (data.size / 1024).toFixed(0) + 'KB');
-      showToast('Pushed (' + (data.size / 1024).toFixed(0) + ' KB)');
+      showToast('Pushed (' + ((data.size || 0) / 1024).toFixed(0) + ' KB)');
       cloudSessionIds.add(sessionId);
-      if (btn) { btn.textContent = 'Done'; btn.disabled = true; }
+      if (btn) btn.outerHTML = '<span class="cloud-badge cloud-synced">&#9745; synced</span>';
     } else {
-      console.error('[CLOUD] push FAIL', sessionId.slice(0, 12), resp.status, data);
-      showToast(data.error || 'Push failed', 'error');
-      if (btn) { btn.disabled = false; btn.textContent = 'Push'; }
+      showToast(data.error || 'Push failed');
+      if (btn) { btn.disabled = false; btn.textContent = '▲ Push'; }
     }
   } catch (e) {
-    console.error('[CLOUD] push error', sessionId.slice(0, 12), e);
-    showToast('Error: ' + e.message, 'error');
-    if (btn) { btn.disabled = false; btn.textContent = 'Push'; }
+    showToast('Error: ' + e.message);
+    if (btn) { btn.disabled = false; btn.textContent = '▲ Push'; }
   }
-}
-
-async function cloudPushAll() {
-  var btn = document.getElementById('cloudPushAllBtn');
-  if (btn) { btn.disabled = true; }
-  if (!cloudLocalSessions) { showToast('Loading...', 'error'); return; }
-
-  var ids = cloudLocalSessions.map(function(s) { return s.id; });
-  var ok = 0, fail = 0;
-  for (var i = 0; i < ids.length; i++) {
-    if (btn) btn.textContent = 'Pushing ' + (i + 1) + '/' + ids.length + '...';
-    try {
-      var r = await fetch('/api/cloud/push', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId: ids[i] }),
-      });
-      var d = await r.json();
-      if (d.ok) ok++; else fail++;
-    } catch (e) { fail++; }
-  }
-  showToast('Pushed ' + ok + (fail > 0 ? ', ' + fail + ' failed' : ''));
-  if (btn) { btn.disabled = false; btn.textContent = 'Push All \u2192'; }
-  loadCloudData();
-}
-
-async function cloudPullAll() {
-  var btn = document.getElementById('cloudPullAllBtn');
-  if (btn) { btn.disabled = true; }
-  if (!cloudSessions) { showToast('Load cloud data first', 'error'); return; }
-
-  var ok = 0, skip = 0, fail = 0;
-  for (var i = 0; i < cloudSessions.length; i++) {
-    if (btn) btn.textContent = 'Pulling ' + (i + 1) + '/' + cloudSessions.length + '...';
-    try {
-      var r = await fetch('/api/cloud/pull', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId: cloudSessions[i].session_id }),
-      });
-      var d = await r.json();
-      if (d.ok) ok++;
-      else if (d.skipped) skip++;
-      else fail++;
-    } catch (e) { fail++; }
-  }
-  showToast('Pulled ' + ok + ', skipped ' + skip + (fail > 0 ? ', failed ' + fail : ''));
-  if (btn) { btn.disabled = false; btn.textContent = '\u2190 Pull All'; }
 }
 
 async function cloudPullOne(sessionId, btn) {
   if (btn) { btn.disabled = true; btn.textContent = '...'; }
-  console.log('[CLOUD] pull', sessionId.slice(0, 12));
   try {
     var resp = await fetch('/api/cloud/pull', {
       method: 'POST',
@@ -322,21 +215,17 @@ async function cloudPullOne(sessionId, btn) {
     });
     var data = await resp.json();
     if (data.ok) {
-      console.log('[CLOUD] pull OK', sessionId.slice(0, 12), data.file ? data.file.slice(-40) : '');
       showToast('Pulled');
       if (btn) btn.textContent = 'Done';
     } else if (data.skipped) {
-      console.log('[CLOUD] pull SKIP', sessionId.slice(0, 12), '(exists locally)');
       if (btn) btn.textContent = 'Local';
     } else {
-      console.error('[CLOUD] pull FAIL', sessionId.slice(0, 12), resp.status, data);
-      showToast(data.error || 'Pull failed', 'error');
-      if (btn) { btn.disabled = false; btn.textContent = 'Pull'; }
+      showToast(data.error || 'Pull failed');
+      if (btn) { btn.disabled = false; btn.textContent = '▼ Pull'; }
     }
   } catch (e) {
-    console.error('[CLOUD] pull error', sessionId.slice(0, 12), e);
-    showToast('Error: ' + e.message, 'error');
-    if (btn) { btn.disabled = false; btn.textContent = 'Pull'; }
+    showToast('Error: ' + e.message);
+    if (btn) { btn.disabled = false; btn.textContent = '▼ Pull'; }
   }
 }
 
@@ -349,9 +238,9 @@ async function deleteCloudSession(sessionId) {
       cloudSessions = null;
       loadCloudData();
     } else {
-      showToast('Delete failed', 'error');
+      showToast('Delete failed');
     }
   } catch (e) {
-    showToast('Error: ' + e.message, 'error');
+    showToast('Error: ' + e.message);
   }
 }

@@ -2191,6 +2191,36 @@ body {
 .lb-global-agents { display: flex; gap: 4px; margin-top: 2px; }
 .lb-agent-mini { font-size: 10px; padding: 1px 5px; border-radius: 4px; background: rgba(99,102,241,0.1); color: var(--text-muted); }
 
+/* ── Cloud Sync ────────────────────────────────────────────── */
+.cloud-container { padding: 24px; max-width: 800px; }
+.cloud-title { font-size: 22px; margin-bottom: 16px; }
+.cloud-info { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; font-size: 13px; line-height: 1.6; color: var(--text-secondary); }
+.cloud-info p { margin-bottom: 8px; }
+.cloud-info p:last-child { margin-bottom: 0; }
+.cloud-connect { text-align: center; padding: 32px; }
+.cloud-connect p { margin-bottom: 16px; color: var(--text-muted); }
+.cloud-status { display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 16px; }
+.cloud-avatar { width: 36px; height: 36px; border-radius: 50%; border: 2px solid var(--border); }
+.cloud-user { font-size: 13px; }
+.cloud-counter { display: flex; flex-direction: column; align-items: center; margin-left: auto; gap: 2px; }
+.cloud-count { font-size: 20px; font-weight: 700; color: var(--accent-blue); }
+.cloud-section-title { font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin: 16px 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
+.cloud-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 4px; }
+.cloud-row:hover { border-color: var(--accent-blue); }
+.cloud-row-info { flex: 1; min-width: 0; }
+.cloud-row-name { font-size: 12px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cloud-row-sub { font-size: 10px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cloud-push-btn { padding: 4px 10px; font-size: 11px; font-weight: 600; background: var(--accent-blue); color: #fff; border: none; border-radius: 6px; cursor: pointer; white-space: nowrap; }
+.cloud-push-btn:hover { opacity: 0.9; }
+.cloud-pull-btn { padding: 4px 10px; font-size: 11px; font-weight: 600; background: var(--accent-green); color: #fff; border: none; border-radius: 6px; cursor: pointer; white-space: nowrap; }
+.cloud-pull-btn:hover { opacity: 0.9; }
+.cloud-del-btn { padding: 4px 6px; font-size: 11px; background: none; border: 1px solid var(--border); border-radius: 6px; color: var(--text-muted); cursor: pointer; }
+.cloud-del-btn:hover { color: var(--accent-red); border-color: var(--accent-red); }
+.cloud-badge { font-size: 10px; padding: 3px 8px; border-radius: 6px; white-space: nowrap; }
+.cloud-synced { background: rgba(74,222,128,0.15); color: var(--accent-green); font-weight: 600; }
+.cloud-full { background: rgba(251,146,60,0.15); color: var(--accent-orange); }
+.cloud-empty { text-align: center; padding: 24px; color: var(--text-muted); font-size: 13px; }
+
 /* ── Changelog ──────────────────────────────────────────────── */
 
 .changelog-container { padding: 20px; max-width: 700px; }
