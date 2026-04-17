@@ -91,9 +91,16 @@ function getSessionGroupInfo(session) {
   return { key: name, name: name };
 }
 
+function stripRecapSuffix(s) {
+  return (s || '').replace(/\s*\(disable recaps in \/config\)\s*$/, '');
+}
+
 function getSessionDisplayName(session) {
   if (!session) return '';
-  return session.session_name || session.first_message || '';
+  return session.session_name
+    || stripRecapSuffix(session.recap)
+    || session.first_message
+    || '';
 }
 
 // ── Utilities ──────────────────────────────────────────────────
@@ -601,6 +608,7 @@ function searchScore(query, session) {
   var q = query.toLowerCase();
   var fields = [
     session.session_name || '',
+    session.recap || '',
     session.first_message || '',
     session.project_short || '',
     session.project || '',
@@ -1220,6 +1228,7 @@ async function confirmDelete() {
         var remaining = allSessions.filter(function(s) {
           return (s.project || '').toLowerCase().indexOf(searchQuery.toLowerCase()) >= 0 ||
                  (s.session_name || '').toLowerCase().indexOf(searchQuery.toLowerCase()) >= 0 ||
+                 (s.recap || '').toLowerCase().indexOf(searchQuery.toLowerCase()) >= 0 ||
                  (s.first_message || '').toLowerCase().indexOf(searchQuery.toLowerCase()) >= 0;
         });
         if (remaining.length === 0) {
