@@ -1,6 +1,6 @@
 {
   "name": "codbash-app",
-  "version": "7.3.0",
+  "version": "7.3.1",
   "description": "Dashboard + CLI for AI coding agents — Claude Code, Codex, Cursor, OpenCode, Kiro. View, search, resume, convert, sync sessions.",
   "bin": {
     "codbash": "./bin/cli.js",
