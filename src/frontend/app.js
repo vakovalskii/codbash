@@ -960,6 +960,9 @@ function render() {
   var stats = document.getElementById('stats');
   if (!content) return;
 
+  // Preserve scroll position across re-renders
+  var scrollTop = content.scrollTop;
+
   var sessions = filteredSessions;
 
   // Stats
@@ -1048,6 +1051,9 @@ function render() {
   if (hasMore) {
     content.innerHTML += '<div style="text-align:center;padding:20px"><button class="toolbar-btn" onclick="loadMoreCards()" style="padding:8px 24px">Load more (' + (sessions.length - renderLimit) + ' remaining)</button></div>';
   }
+
+  // Restore scroll position
+  if (scrollTop) content.scrollTop = scrollTop;
 }
 
 function loadMoreCards() {
