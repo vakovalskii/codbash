@@ -1681,6 +1681,19 @@ function renderSettings(container) {
   html += '<p style="font-size:12px;color:var(--text-muted);margin:10px 0 0">Applies to grouped session views like All Sessions and Claude Code. Projects always stay repository-based.</p>';
   html += '</div>';
 
+  // Message Sort Order
+  var savedMsgSort = localStorage.getItem('codedash-msg-sort') || 'asc';
+  html += '<div class="settings-group">';
+  html += '<label class="settings-label">Message Sort Order</label>';
+  html += '<p style="font-size:12px;color:var(--text-muted);margin:0 0 8px">Default order for messages in session drawer</p>';
+  html += '<div class="settings-theme-btns">';
+  [['asc', '&#8593; Oldest first'], ['desc', '&#8595; Newest first']].forEach(function(pair) {
+    var active = savedMsgSort === pair[0] ? ' active' : '';
+    html += '<button class="theme-btn' + active + '" onclick="localStorage.setItem(\'codedash-msg-sort\',\'' + pair[0] + '\');renderSettings(document.getElementById(\'content\'))">' + pair[1] + '</button>';
+  });
+  html += '</div>';
+  html += '</div>';
+
   // LLM Configuration
   html += '<div class="settings-group">';
   html += '<label class="settings-label">LLM Configuration</label>';

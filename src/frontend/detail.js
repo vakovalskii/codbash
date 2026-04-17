@@ -101,30 +101,8 @@ async function openDetail(s) {
       var data = await resp.json();
       var msgContainer = body.querySelector('.detail-messages');
       if (data.messages && data.messages.length > 0) {
-        var msgsHtml = '<h3>Conversation</h3>';
-        data.messages.forEach(function(m) {
-          var roleClass = m.role === 'user' ? 'msg-user' : 'msg-assistant';
-          var roleLabel = m.role === 'user' ? 'You' : 'Assistant';
-          var hasTools = m.tools && m.tools.length > 0;
-          msgsHtml += '<div class="message ' + roleClass + (hasTools ? ' has-tools' : '') + '">';
-          msgsHtml += '<div class="msg-inner">';
-          msgsHtml += '<div class="msg-role">' + roleLabel + '</div>';
-          msgsHtml += '<div class="msg-content">' + escHtml(m.content) + '</div>';
-          msgsHtml += '</div>';
-          if (hasTools) {
-            msgsHtml += '<div class="msg-tools">';
-            m.tools.forEach(function(t) {
-              if (t.type === 'mcp') {
-                msgsHtml += '<span class="tool-badge badge-mcp">' + escHtml(t.tool) + '</span>';
-              } else if (t.type === 'skill') {
-                msgsHtml += '<span class="tool-badge badge-skill">' + escHtml(t.skill) + '</span>';
-              }
-            });
-            msgsHtml += '</div>';
-          }
-          msgsHtml += '</div>';
-        });
-        msgContainer.innerHTML = msgsHtml;
+        window._detailMessages = data.messages;
+        renderDetailMessages(msgContainer, data.messages);
       } else {
         msgContainer.innerHTML = '<div class="empty-state">No messages found in detail file.</div>';
       }
@@ -204,6 +182,48 @@ function closeDetail() {
   var overlay = document.getElementById('overlay');
   if (panel) panel.classList.remove('open');
   if (overlay) overlay.classList.remove('open');
+}
+
+function renderDetailMessages(container, messages) {
+  var sort = localStorage.getItem('codedash-msg-sort') || 'asc';
+  var sorted = sort === 'desc' ? messages.slice().reverse() : messages;
+  var btnLabel = sort === 'asc' ? '&#8593; Oldest first' : '&#8595; Newest first';
+  var msgsHtml = '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">';
+  msgsHtml += '<h3 style="margin:0">Conversation</h3>';
+  msgsHtml += '<button class="theme-btn" onclick="toggleMsgSort()" title="Toggle sort order" style="font-size:11px;padding:3px 10px">' + btnLabel + '</button>';
+  msgsHtml += '</div>';
+  sorted.forEach(function(m) {
+    var roleClass = m.role === 'user' ? 'msg-user' : 'msg-assistant';
+    var roleLabel = m.role === 'user' ? 'You' : 'Assistant';
+    var hasTools = m.tools && m.tools.length > 0;
+    msgsHtml += '<div class="message ' + roleClass + (hasTools ? ' has-tools' : '') + '">';
+    msgsHtml += '<div class="msg-inner">';
+    msgsHtml += '<div class="msg-role">' + roleLabel + '</div>';
+    msgsHtml += '<div class="msg-content">' + escHtml(m.content) + '</div>';
+    msgsHtml += '</div>';
+    if (hasTools) {
+      msgsHtml += '<div class="msg-tools">';
+      m.tools.forEach(function(t) {
+        if (t.type === 'mcp') {
+          msgsHtml += '<span class="tool-badge badge-mcp">' + escHtml(t.tool) + '</span>';
+        } else if (t.type === 'skill') {
+          msgsHtml += '<span class="tool-badge badge-skill">' + escHtml(t.skill) + '</span>';
+        }
+      });
+      msgsHtml += '</div>';
+    }
+    msgsHtml += '</div>';
+  });
+  container.innerHTML = msgsHtml;
+}
+
+function toggleMsgSort() {
+  var current = localStorage.getItem('codedash-msg-sort') || 'asc';
+  localStorage.setItem('codedash-msg-sort', current === 'asc' ? 'desc' : 'asc');
+  var container = document.querySelector('.detail-messages');
+  if (container && window._detailMessages) {
+    renderDetailMessages(container, window._detailMessages);
+  }
 }
 
 // ── Detail panel resize ───────────────────────────────────────
