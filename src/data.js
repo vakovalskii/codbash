@@ -281,7 +281,7 @@ function parseKiloMcpServer(toolName) {
 }
 
 // Disk cache for parsed Claude session files (keyed by path + mtime + size)
-const PARSED_CACHE_FILE = path.join(os.tmpdir(), 'codedash-parsed-cache.json');
+const PARSED_CACHE_FILE = path.join(os.tmpdir(), 'codedash-parsed-cache-v2.json');
 let _parsedDiskCache = null;
 let _parsedDiskCacheDirty = false;
 // Reverse index: file path -> cache key (avoids repeated fs.statSync)
@@ -347,6 +347,7 @@ function parseClaudeSessionFile(sessionFile) {
   let totalUserMsgs = 0;    // all user-type messages (including tool_result, sub-agents)
   let entrypointFound = false;
   let worktreeOriginalCwd = '';
+  let lastRecap = '';
   const mcpSet = new Set();
   const skillSet = new Set();
 
@@ -375,6 +376,10 @@ function parseClaudeSessionFile(sessionFile) {
       if (entry.type === 'custom-title' && typeof entry.customTitle === 'string') {
         const title = entry.customTitle.trim();
         if (title) customTitle = title.slice(0, 200);
+      }
+      if (entry.type === 'system' && entry.subtype === 'away_summary') {
+        const txt = (entry.content || '').trim();
+        if (txt) lastRecap = txt.slice(0, 300);
       }
       if (!firstMsg && entry.type === 'user' && entry.message && entry.message.content) {
         const content = extractContent(entry.message.content).trim();
@@ -412,6 +417,7 @@ function parseClaudeSessionFile(sessionFile) {
     lastTs,
     fileSize: stat.size,
     worktreeOriginalCwd,
+    lastRecap,
     mcpServers: Array.from(mcpSet),
     skills: Array.from(skillSet),
   };
@@ -446,6 +452,10 @@ function mergeClaudeSessionDetail(session, summary, sessionFile) {
 
   if (summary.customTitle) {
     session.session_name = summary.customTitle;
+  }
+
+  if (summary.lastRecap) {
+    session.recap = summary.lastRecap;
   }
 }
 
@@ -1911,6 +1921,7 @@ function loadSessions() {
               _claude_dir: extraClaudeDir,
               _session_file: fp,
               worktree_original_cwd: summary.worktreeOriginalCwd || '',
+              recap: summary.lastRecap || '',
             };
           }
         }
@@ -1984,6 +1995,7 @@ function loadSessions() {
             _claude_dir: CLAUDE_DIR,
             _session_file: filePath,
             worktree_original_cwd: summary.worktreeOriginalCwd || '',
+            recap: summary.lastRecap || '',
           };
         }
       }
