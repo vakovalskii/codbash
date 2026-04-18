@@ -187,6 +187,11 @@ function closeDetail() {
 var structuredMessageRenderers = {
   'codex:user_shell_command': renderCodexUserShellCommand,
   'codex:user_action': renderCodexUserAction,
+  'claude:slash_command': renderClaudeSlashCommand,
+  'claude:bash_input': renderClaudeBashInput,
+  'claude:bash_result': renderClaudeBashResult,
+  'claude:local_command_stdout': renderClaudeLocalCommandStdout,
+  'claude:task_notification': renderClaudeTaskNotification,
 };
 
 function renderStructuredBlock(text) {
@@ -195,6 +200,11 @@ function renderStructuredBlock(text) {
 
 function renderStructuredSection(label, text) {
   return '<div class="structured-section-label">' + escHtml(label) + '</div>' + renderStructuredBlock(text);
+}
+
+function renderStructuredMeta(label, text) {
+  if (!text) return '';
+  return '<div class="structured-context"><span class="structured-context-label">' + escHtml(label) + '</span> ' + escHtml(text) + '</div>';
 }
 
 function renderCodexUserShellCommand(fields) {
@@ -218,6 +228,70 @@ function renderCodexUserAction(fields) {
   return html;
 }
 
+function renderClaudeSlashCommand(fields) {
+  if (!fields || !fields.command_name || !fields.command_message) return '';
+  var html = '<div class="msg-content structured-message">';
+  html += '<div class="structured-title">Slash Command:</div>';
+  html += renderStructuredMeta('Command:', fields.command_name);
+  html += renderStructuredMeta('Message:', fields.command_message);
+  if (fields.command_args) html += renderStructuredSection('Args:', fields.command_args);
+  html += '</div>';
+  return html;
+}
+
+function renderClaudeBashInput(fields) {
+  if (!fields || !fields.input) return '';
+  var html = '<div class="msg-content structured-message">';
+  html += '<div class="structured-title">Bash Input:</div>';
+  html += renderStructuredSection('Command:', fields.input);
+  html += '</div>';
+  return html;
+}
+
+function renderClaudeBashResult(fields) {
+  if (!fields || (!fields.stdout && !fields.stderr)) return '';
+  var html = '<div class="msg-content structured-message">';
+  html += '<div class="structured-title">Bash Result:</div>';
+  if (fields.stdout) html += renderStructuredSection('Stdout:', fields.stdout);
+  if (fields.stderr) html += renderStructuredSection('Stderr:', fields.stderr);
+  html += '</div>';
+  return html;
+}
+
+function renderClaudeLocalCommandStdout(fields) {
+  if (!fields || !fields.output) return '';
+  var html = '<div class="msg-content structured-message">';
+  html += '<div class="structured-title">Local Command Output:</div>';
+  html += renderStructuredSection('Output:', fields.output);
+  html += '</div>';
+  return html;
+}
+
+function renderClaudeTaskUsage(usage) {
+  if (!usage) return '';
+  var parts = [];
+  if (usage.total_tokens) parts.push(usage.total_tokens + ' tokens');
+  if (usage.tool_uses) parts.push(usage.tool_uses + ' tools');
+  if (usage.duration_ms) parts.push(usage.duration_ms + ' ms');
+  if (parts.length === 0) return '';
+  return renderStructuredMeta('Usage:', parts.join(', '));
+}
+
+function renderClaudeTaskNotification(fields) {
+  if (!fields || !fields.status || !fields.summary) return '';
+  var html = '<div class="msg-content structured-message">';
+  html += '<div class="structured-title">Task Notification:</div>';
+  html += '<div class="structured-task-status"><span class="structured-context-label">Status:</span> <span class="structured-status">' + escHtml(fields.status) + '</span></div>';
+  html += renderStructuredMeta('Summary:', fields.summary);
+  html += renderStructuredMeta('Task ID:', fields.task_id);
+  html += renderStructuredMeta('Tool Use ID:', fields.tool_use_id);
+  if (fields.output_file) html += renderStructuredSection('Output File:', fields.output_file);
+  if (fields.result) html += renderStructuredSection('Result:', fields.result);
+  html += renderClaudeTaskUsage(fields.usage);
+  html += '</div>';
+  return html;
+}
+
 function renderMessageContent(message) {
   var structured = message && message.structured;
   if (structured && structured.agent && structured.kind) {
@@ -231,6 +305,13 @@ function renderMessageContent(message) {
   return '<div class="msg-content msg-content-plain">' + escHtml((message && message.content) || '') + '</div>';
 }
 
+function getMessageRoleMeta(role) {
+  if (role === 'user') return { className: 'msg-user', label: 'You' };
+  if (role === 'queue') return { className: 'msg-system', label: 'Queue' };
+  if (role === 'system') return { className: 'msg-system', label: 'System' };
+  return { className: 'msg-assistant', label: 'Assistant' };
+}
+
 function renderDetailMessages(container, messages) {
   var sort = localStorage.getItem('codedash-msg-sort') || 'asc';
   var sorted = sort === 'desc' ? messages.slice().reverse() : messages;
@@ -240,12 +321,11 @@ function renderDetailMessages(container, messages) {
   msgsHtml += '<button class="theme-btn" onclick="toggleMsgSort()" title="Toggle sort order" style="font-size:11px;padding:3px 10px">' + btnLabel + '</button>';
   msgsHtml += '</div>';
   sorted.forEach(function(m) {
-    var roleClass = m.role === 'user' ? 'msg-user' : 'msg-assistant';
-    var roleLabel = m.role === 'user' ? 'You' : 'Assistant';
+    var roleMeta = getMessageRoleMeta(m.role);
     var hasTools = m.tools && m.tools.length > 0;
-    msgsHtml += '<div class="message ' + roleClass + (hasTools ? ' has-tools' : '') + '">';
+    msgsHtml += '<div class="message ' + roleMeta.className + (hasTools ? ' has-tools' : '') + '">';
     msgsHtml += '<div class="msg-inner">';
-    msgsHtml += '<div class="msg-role">' + roleLabel + '</div>';
+    msgsHtml += '<div class="msg-role">' + roleMeta.label + '</div>';
     msgsHtml += renderMessageContent(m);
     msgsHtml += '</div>';
     if (hasTools) {
