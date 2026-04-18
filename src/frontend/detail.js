@@ -184,6 +184,53 @@ function closeDetail() {
   if (overlay) overlay.classList.remove('open');
 }
 
+var structuredMessageRenderers = {
+  'codex:user_shell_command': renderCodexUserShellCommand,
+  'codex:user_action': renderCodexUserAction,
+};
+
+function renderStructuredBlock(text) {
+  return '<pre class="structured-block">' + escHtml(text || '') + '</pre>';
+}
+
+function renderStructuredSection(label, text) {
+  return '<div class="structured-section-label">' + escHtml(label) + '</div>' + renderStructuredBlock(text);
+}
+
+function renderCodexUserShellCommand(fields) {
+  if (!fields || !fields.command || !fields.result) return '';
+  var html = '<div class="msg-content structured-message">';
+  html += '<div class="structured-title">User Shell Command:</div>';
+  html += renderStructuredSection('Command:', fields.command);
+  html += renderStructuredSection('Result:', fields.result);
+  html += '</div>';
+  return html;
+}
+
+function renderCodexUserAction(fields) {
+  if (!fields || !fields.context || !fields.action || !fields.results) return '';
+  var html = '<div class="msg-content structured-message">';
+  html += '<div class="structured-title">User Action:</div>';
+  html += '<div class="structured-context"><span class="structured-context-label">Context:</span> ' + escHtml(fields.context) + '</div>';
+  html += renderStructuredSection('Action:', fields.action);
+  html += renderStructuredSection('Results:', fields.results);
+  html += '</div>';
+  return html;
+}
+
+function renderMessageContent(message) {
+  var structured = message && message.structured;
+  if (structured && structured.agent && structured.kind) {
+    var key = structured.agent + ':' + structured.kind;
+    var renderer = structuredMessageRenderers[key];
+    if (renderer) {
+      var rendered = renderer(structured.fields || {});
+      if (rendered) return rendered;
+    }
+  }
+  return '<div class="msg-content msg-content-plain">' + escHtml((message && message.content) || '') + '</div>';
+}
+
 function renderDetailMessages(container, messages) {
   var sort = localStorage.getItem('codedash-msg-sort') || 'asc';
   var sorted = sort === 'desc' ? messages.slice().reverse() : messages;
@@ -199,7 +246,7 @@ function renderDetailMessages(container, messages) {
     msgsHtml += '<div class="message ' + roleClass + (hasTools ? ' has-tools' : '') + '">';
     msgsHtml += '<div class="msg-inner">';
     msgsHtml += '<div class="msg-role">' + roleLabel + '</div>';
-    msgsHtml += '<div class="msg-content">' + escHtml(m.content) + '</div>';
+    msgsHtml += renderMessageContent(m);
     msgsHtml += '</div>';
     if (hasTools) {
       msgsHtml += '<div class="msg-tools">';

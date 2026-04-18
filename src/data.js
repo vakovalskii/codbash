@@ -2101,7 +2101,10 @@ function loadSessionDetail(sessionId, project) {
           if (role === 'user' || role === 'assistant') {
             const content = extractContent(entry.payload.content);
             if (content && !isSystemMessage(content)) {
-              messages.push({ role: role, content: content.slice(0, 2000), uuid: '' });
+              const msg = { role: role, content: content.slice(0, 2000), uuid: '' };
+              const structured = parseStructuredMessage('codex', role, content);
+              if (structured) msg.structured = structured;
+              messages.push(msg);
             }
           }
           // Codex function_call → attach as tool to last assistant message
@@ -2480,6 +2483,76 @@ function extractContent(raw) {
       .join('\n');
   }
   return String(raw);
+}
+
+const CODEX_STRUCTURED_MESSAGE_FIELDS = {
+  user_shell_command: ['command', 'result'],
+  user_action: ['context', 'action', 'results'],
+};
+
+function normalizeStructuredField(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function parseStructuredWrapper(content) {
+  const trimmed = typeof content === 'string' ? content.trim() : '';
+  if (!trimmed) return null;
+  const match = trimmed.match(/^<([a-z_][a-z0-9_]*)>\s*([\s\S]*?)\s*<\/\1>$/i);
+  if (!match) return null;
+  return { tag: match[1], body: match[2] };
+}
+
+function parseStructuredFields(body, requiredTags) {
+  if (!body || !Array.isArray(requiredTags) || requiredTags.length === 0) return null;
+
+  const fields = {};
+  const pattern = /<([a-z_][a-z0-9_]*)>([\s\S]*?)<\/\1>/ig;
+  let cursor = 0;
+  let match;
+
+  while ((match = pattern.exec(body))) {
+    if (body.slice(cursor, match.index).trim()) return null;
+
+    const tag = match[1];
+    if (!requiredTags.includes(tag) || fields[tag] !== undefined) return null;
+
+    const value = normalizeStructuredField(match[2]);
+    if (!value) return null;
+    fields[tag] = value;
+    cursor = match.index + match[0].length;
+  }
+
+  if (body.slice(cursor).trim()) return null;
+  if (Object.keys(fields).length !== requiredTags.length) return null;
+
+  for (const tag of requiredTags) {
+    if (!fields[tag]) return null;
+  }
+
+  return fields;
+}
+
+function parseCodexStructuredMessage(content) {
+  const wrapped = parseStructuredWrapper(content);
+  if (!wrapped) return null;
+
+  const requiredTags = CODEX_STRUCTURED_MESSAGE_FIELDS[wrapped.tag];
+  if (!requiredTags) return null;
+
+  const fields = parseStructuredFields(wrapped.body, requiredTags);
+  if (!fields) return null;
+
+  return {
+    agent: 'codex',
+    kind: wrapped.tag,
+    fields,
+  };
+}
+
+function parseStructuredMessage(agent, role, content) {
+  if (role !== 'user' || !content) return null;
+  if (agent === 'codex') return parseCodexStructuredMessage(content);
+  return null;
 }
 
 // Extract MCP/Skill tool_use blocks from a Claude assistant message content array.
