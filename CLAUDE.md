@@ -1,8 +1,8 @@
-# CodeDash
+# Codbash
 
 ## What is this
 
-CodeDash (`codedash-app` on npm) is a zero-dependency Node.js browser dashboard for managing AI coding agent sessions. Supports 7 agents: Claude Code, Codex, Cursor, OpenCode, Kiro CLI, Kilo CLI, Copilot Chat. Single `npm i -g codedash-app && codedash run` opens a local web UI.
+Codbash (`codbash-app` on npm) is a zero-dependency Node.js browser dashboard for managing AI coding agent sessions. Supports 7 agents: Claude Code, Codex, Cursor, OpenCode, Kiro CLI, Kilo CLI, Copilot Chat. Single `npm i -g codbash-app && codbash run` opens a local web UI.
 
 ## Project structure
 
@@ -142,4 +142,4 @@ git checkout main && git pull
 npm publish --access public
 ```
 
-Package name: `codedash-app`, binary name: `codedash`
+Package name: `codbash-app`, binary name: `codbash` (legacy alias `codedash` also works)

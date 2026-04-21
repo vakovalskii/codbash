@@ -1,4 +1,4 @@
-# CodeDash
+# Codbash
 
 Дашборд + CLI для сессий AI-агентов. 7 агентов: Claude Code, Codex, Cursor, OpenCode, Kiro, Kilo, Copilot Chat.
 
@@ -7,7 +7,7 @@
 ## Быстрый старт
 
 ```bash
-npm i -g codedash-app && codedash run
+npm i -g codbash-app && codbash run
 ```
 
 ## Поддерживаемые агенты
@@ -35,7 +35,7 @@ npm i -g codedash-app && codedash run
 ## CLI
 
 ```bash
-codedash run | search | show | handoff | convert | list | stats | export | import | update | restart | stop
+codbash run | search | show | handoff | convert | list | stats | export | import | update | restart | stop
 ```
 
 ## Требования
