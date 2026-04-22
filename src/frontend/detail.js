@@ -282,12 +282,18 @@ function renderClaudeTaskUsage(usage) {
   return renderStructuredMeta('Usage:', parts.join(', '));
 }
 
+function sanitizeClassToken(value, fallback) {
+  var token = String(value || '').toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
+  return token || (fallback || 'unknown');
+}
+
 function renderClaudeTaskNotification(fields) {
   if (!fields || (!fields.summary && !fields.task_id && !fields.event && !fields.result)) return '';
   var html = '<div class="msg-content structured-message">';
   html += '<div class="structured-title">Task Notification:</div>';
   if (fields.status) {
-    html += '<div class="structured-task-status"><span class="structured-context-label">Status:</span> <span class="structured-status">' + escHtml(fields.status) + '</span></div>';
+    var statusClass = sanitizeClassToken(fields.status, 'unknown');
+    html += '<div class="structured-task-status"><span class="structured-context-label">Status:</span> <span class="structured-status structured-status-' + statusClass + '">' + escHtml(fields.status) + '</span></div>';
   }
   if (fields.summary) html += renderStructuredMeta('Summary:', fields.summary);
   html += renderStructuredMeta('Task ID:', fields.task_id);

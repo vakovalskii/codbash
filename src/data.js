@@ -3300,6 +3300,7 @@ function extractContent(raw) {
 const STRUCTURED_TAG_PATTERN = '[a-z_][a-z0-9_-]*';
 const STRUCTURED_WRAPPER_RE = new RegExp('^<(' + STRUCTURED_TAG_PATTERN + ')>\\s*([\\s\\S]*?)\\s*</\\1>$', 'i');
 const STRUCTURED_FIELD_RE = new RegExp('<(' + STRUCTURED_TAG_PATTERN + ')>([\\s\\S]*?)</\\1>', 'ig');
+const FILTERED_CLAUDE_STRUCTURED_TAGS = new Set(['local-command-caveat']);
 const CODEX_STRUCTURED_MESSAGE_FIELDS = {
   user_shell_command: [
     { field: 'command', max_length: 0 },
@@ -3367,6 +3368,7 @@ function parseStructuredFields(body, fieldDescriptors) {
   const fieldsByTag = new Map(fieldDescriptors.map(function(def) {
     return [def.tag || def.field, def];
   }));
+  // Clone the global regex so each parse starts with a clean lastIndex.
   const pattern = new RegExp(STRUCTURED_FIELD_RE.source, STRUCTURED_FIELD_RE.flags);
   let cursor = 0;
   let match;
@@ -3430,7 +3432,7 @@ function parseCodexStructuredMessage(content) {
 
 function isFilteredClaudeStructuredMessage(content) {
   const wrapped = parseStructuredWrapper(content);
-  return !!(wrapped && wrapped.tag === 'local-command-caveat');
+  return !!(wrapped && FILTERED_CLAUDE_STRUCTURED_TAGS.has(wrapped.tag));
 }
 
 function parseClaudeTaskNotification(content) {
@@ -3448,8 +3450,9 @@ function parseClaudeTaskNotification(content) {
   const parsedFields = applyStructuredFieldThresholds(fields, fieldDescriptors);
   if (parsedFields.usage) {
     const usageFields = parseStructuredFields(parsedFields.usage, CLAUDE_STRUCTURED_MESSAGE_FIELDS.task_usage);
-    if (!usageFields) return null;
-    parsedFields.usage = applyStructuredFieldThresholds(usageFields, CLAUDE_STRUCTURED_MESSAGE_FIELDS.task_usage);
+    parsedFields.usage = usageFields
+      ? applyStructuredFieldThresholds(usageFields, CLAUDE_STRUCTURED_MESSAGE_FIELDS.task_usage)
+      : null;
   }
 
   return {
@@ -5083,5 +5086,11 @@ module.exports = {
     normalizeProjectPath,
     shortenHomePath,
     detectWindowsWslHomes,
+    parseStructuredWrapper,
+    parseStructuredFields,
+    parseClaudeTaskNotification,
+    parseClaudeStructuredMessage,
+    parseStructuredMessage,
+    isFilteredClaudeStructuredMessage,
   },
 };
