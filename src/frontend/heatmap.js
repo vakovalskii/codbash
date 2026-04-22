@@ -179,13 +179,23 @@ function renderHeatmap(container) {
   // Per-tool breakdown
   var toolTotals = {};
   allSessions.forEach(function(s) { if (s.date >= yearStart) { toolTotals[s.tool] = (toolTotals[s.tool] || 0) + 1; } });
-  var toolColors = { claude: '#60a5fa', codex: '#22d3ee', opencode: '#c084fc', kiro: '#fb923c', kilo: '#34d399' };
+  var toolColors = {
+    claude: '#60a5fa',
+    'claude-ext': '#60a5fa',
+    codex: '#22d3ee',
+    qwen: '#fbbf24',
+    cursor: '#4a9eff',
+    opencode: '#c084fc',
+    kiro: '#fb923c',
+    kilo: '#34d399',
+    'copilot-chat': '#8b6fc0'
+  };
   html += '<div class="gh-tools">';
   Object.keys(toolTotals).sort(function(a,b) { return toolTotals[b] - toolTotals[a]; }).forEach(function(tool) {
     var pct = (toolTotals[tool] / Math.max(totalThisYear, 1) * 100).toFixed(0);
     var color = toolColors[tool] || '#6b7280';
     html += '<div class="gh-tool-row">';
-    html += '<span class="gh-tool-name" style="color:' + color + '">' + tool + '</span>';
+    html += '<span class="gh-tool-name" style="color:' + color + '">' + escHtml(getToolLabel(tool)) + '</span>';
     html += '<div class="gh-tool-bar"><div class="gh-tool-fill" style="width:' + pct + '%;background:' + color + '"></div></div>';
     html += '<span class="gh-tool-val">' + toolTotals[tool] + ' (' + pct + '%)</span>';
     html += '</div>';

@@ -299,6 +299,7 @@ body {
 .tool-chip:hover { color: var(--text-primary); }
 .tool-chip.active-claude { background: rgba(96, 165, 250, 0.2); border-color: var(--accent-blue); color: var(--accent-blue); }
 .tool-chip.active-codex { background: rgba(34, 211, 238, 0.2); border-color: var(--accent-cyan); color: var(--accent-cyan); }
+.tool-chip.active-qwen { background: rgba(251, 191, 36, 0.2); border-color: #fbbf24; color: #fbbf24; }
 
 .stats { color: var(--text-muted); font-size: 13px; white-space: nowrap; }
 
@@ -466,6 +467,7 @@ body {
 }
 .badge-claude { background: rgba(96, 165, 250, 0.15); color: var(--accent-blue); }
 .badge-codex { background: rgba(34, 211, 238, 0.15); color: var(--accent-cyan); }
+.badge-qwen { background: rgba(251, 191, 36, 0.15); color: #fbbf24; }
 
 [data-theme="light"] .badge { background: rgba(0,0,0,0.05); }
 
@@ -1202,6 +1204,11 @@ body {
     color: var(--accent-cyan);
 }
 
+.tool-qwen {
+    background: rgba(251, 191, 36, 0.15);
+    color: #fbbf24;
+}
+
 .tool-opencode {
     background: rgba(192, 132, 252, 0.15);
     color: var(--accent-purple);
@@ -1220,6 +1227,11 @@ body {
 .tool-kilo {
     background: rgba(52, 211, 153, 0.15);
     color: #34d399;
+}
+
+.tool-copilot-chat {
+    background: rgba(110, 84, 148, 0.15);
+    color: #8b6fc0;
 }
 
 /* ── MCP / Skill badges ──────────────────────────────────────── */
@@ -1598,7 +1610,6 @@ body {
     text-transform: uppercase;
     letter-spacing: 0.4px;
 }
-
 .structured-block {
     margin: 0;
     padding: 10px 12px;
@@ -1676,12 +1687,62 @@ body {
     flex: 1;
 }
 
+.git-project-open-btn {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-muted);
+    font-size: 11px;
+    padding: 2px 8px;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 0.15s, color 0.15s;
+}
+.git-project-open-btn:hover {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+}
+
 .git-project-group .group-chevron {
     font-size: 10px;
     color: var(--text-muted);
     transition: transform 0.2s;
 }
 .git-project-group.collapsed .group-chevron { transform: rotate(-90deg); }
+
+/* ── Git project filter breadcrumb ──────────────────────────── */
+
+.git-project-breadcrumb {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 16px;
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+}
+.bc-label {
+    color: var(--text-muted);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+.bc-name {
+    font-weight: 700;
+    color: var(--accent);
+}
+.bc-clear {
+    margin-left: auto;
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-muted);
+    font-size: 11px;
+    padding: 2px 8px;
+    cursor: pointer;
+}
+.bc-clear:hover { color: var(--text); border-color: var(--text-muted); }
 
 /* ── QA session list ────────────────────────────────────────── */
 

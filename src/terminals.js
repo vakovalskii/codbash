@@ -198,6 +198,8 @@ function openInTerminal(sessionId, tool, flags, projectDir, terminalId) {
 
   if (tool === 'codex') {
     cmd = `codex resume ${sessionId}`;
+  } else if (tool === 'qwen') {
+    cmd = `qwen -r ${sessionId}`;
   } else if (tool === 'kilo') {
     cmd = `kilo resume ${sessionId}`;
   } else {

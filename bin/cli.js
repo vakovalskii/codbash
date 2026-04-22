@@ -27,6 +27,36 @@ const DEFAULT_HOST = 'localhost';
 const args = process.argv.slice(2);
 const command = args[0] || 'help';
 
+const TOOL_LABELS = {
+  claude: { label: 'claude', ansi: '\x1b[34mclaude\x1b[0m' },
+  'claude-ext': { label: 'claude-ext', ansi: '\x1b[34mclaude-ext\x1b[0m' },
+  codex: { label: 'codex', ansi: '\x1b[36mcodex\x1b[0m' },
+  qwen: { label: 'qwen', ansi: '\x1b[33mqwen\x1b[0m' },
+  cursor: { label: 'cursor', ansi: '\x1b[35mcursor\x1b[0m' },
+  opencode: { label: 'opencode', ansi: '\x1b[95mopencode\x1b[0m' },
+  kiro: { label: 'kiro', ansi: '\x1b[91mkiro\x1b[0m' },
+};
+
+function getToolDisplay(tool) {
+  return TOOL_LABELS[tool] || { label: tool || 'unknown', ansi: tool || 'unknown' };
+}
+
+function getResumeCommand(tool, sessionId) {
+  if (tool === 'codex') return `codex resume ${sessionId}`;
+  if (tool === 'qwen') return `qwen -r ${sessionId}`;
+  if (tool === 'cursor') return 'cursor';
+  return `claude --resume ${sessionId}`;
+}
+
+const STATS_TOOL_ROWS = [
+  { label: 'Claude sessions', match: (s) => s.tool === 'claude' || s.tool === 'claude-ext' },
+  { label: 'Codex sessions', match: (s) => s.tool === 'codex' },
+  { label: 'Qwen sessions', match: (s) => s.tool === 'qwen' },
+  { label: 'Cursor sessions', match: (s) => s.tool === 'cursor' },
+  { label: 'OpenCode sessions', match: (s) => s.tool === 'opencode' },
+  { label: 'Kiro sessions', match: (s) => s.tool === 'kiro' },
+];
+
 switch (command) {
   case 'run':
   case 'start': {
@@ -45,7 +75,7 @@ switch (command) {
     const limit = parseInt(args[1]) || 20;
     console.log(`\n  \x1b[36m\x1b[1m${sessions.length} sessions\x1b[0m across ${new Set(sessions.map(s => s.project)).size} projects\n`);
     for (const s of sessions.slice(0, limit)) {
-      const tool = s.tool === 'codex' ? '\x1b[36mcodex\x1b[0m' : '\x1b[34mclaude\x1b[0m';
+      const tool = getToolDisplay(s.tool).ansi.padEnd(18);
       const msg = (s.session_name || s.first_message || '').slice(0, 50).padEnd(50);
       const proj = s.project_short || '';
       console.log(`  ${tool}  ${s.id.slice(0, 12)}  ${s.last_time}  ${msg}  \x1b[2m${proj}\x1b[0m`);
@@ -67,8 +97,9 @@ switch (command) {
     console.log(`\n  \x1b[36m\x1b[1mSession Stats\x1b[0m\n`);
     console.log(`  Total sessions:  ${sessions.length}`);
     console.log(`  Total projects:  ${Object.keys(projects).length}`);
-    console.log(`  Claude sessions: ${sessions.filter(s => s.tool === 'claude').length}`);
-    console.log(`  Codex sessions:  ${sessions.filter(s => s.tool === 'codex').length}`);
+    for (const row of STATS_TOOL_ROWS) {
+      console.log(`  ${row.label.padEnd(18)} ${sessions.filter(row.match).length}`);
+    }
     console.log(`\n  \x1b[1mTop projects:\x1b[0m`);
     const sorted = Object.entries(projects).sort((a, b) => b[1].count - a[1].count).slice(0, 10);
     for (const [name, info] of sorted) {
@@ -130,8 +161,12 @@ switch (command) {
     console.log(`  Started: ${session.first_time}`);
     console.log(`  Last:    ${session.last_time}`);
     console.log(`  Msgs:    ${session.messages} inputs, ${session.detail_messages || 0} total`);
-    if (cost.cost > 0) {
-      console.log(`  Cost:    $${cost.cost.toFixed(2)} (${cost.model || 'unknown'})`);
+    if (cost.cost > 0 || cost.unavailable) {
+      if (cost.unavailable) {
+        console.log(`  Cost:    unavailable (${cost.model || 'unknown'})`);
+      } else {
+        console.log(`  Cost:    $${cost.cost.toFixed(2)} (${cost.model || 'unknown'})`);
+      }
       console.log(`  Tokens:  ${(cost.inputTokens/1000).toFixed(0)}K in / ${(cost.outputTokens/1000).toFixed(0)}K out`);
     }
     console.log('');
@@ -146,7 +181,7 @@ switch (command) {
       console.log('');
     }
 
-    console.log(`  Resume: \x1b[2m${session.tool === 'codex' ? 'codex resume' : 'claude --resume'} ${session.id}\x1b[0m`);
+    console.log(`  Resume: \x1b[2m${getResumeCommand(session.tool, session.id)}\x1b[0m`);
     console.log('');
     break;
   }
@@ -167,26 +202,26 @@ switch (command) {
 
   Generates a context document for continuing a session in another tool.
 
-  Targets: claude, codex, opencode, any (default)
+  Targets: claude, codex, qwen, opencode, any (default)
   Options:
     --verbosity=minimal|standard|verbose|full
     --out=file.md  (save to file instead of stdout)
 
   Examples:
     codbash handoff 13ae5748                    Print handoff doc
-    codbash handoff 13ae5748 codex              For Codex specifically
+    codbash handoff 13ae5748 qwen               For Qwen specifically
     codbash handoff 13ae5748 --verbosity=full   Include more context
     codbash handoff 13ae5748 --out=handoff.md   Save to file
 
   Quick handoff (latest session):
-    codbash handoff claude codex                Latest Claude → Codex
+    codbash handoff qwen codex                  Latest Qwen → Codex
 `);
       break;
     }
 
     // Check if sid is a tool name (quick handoff)
     let result;
-    if (['claude', 'codex', 'opencode'].includes(sid)) {
+    if (['claude', 'codex', 'qwen', 'opencode'].includes(sid)) {
       result = quickHandoff(sid, target, { verbosity });
     } else {
       const allH = loadSessions();
@@ -217,18 +252,19 @@ switch (command) {
 
   case 'convert': {
     const sid = args[1];
-    const target = args[2]; // 'claude' or 'codex'
+    const target = args[2]; // 'claude' or 'codex' or 'qwen'
     if (!sid || !target) {
       console.log(`
   \x1b[36m\x1b[1mConvert session between agents\x1b[0m
 
   Usage: codbash convert <session-id> <target-format>
 
-  Formats: claude, codex
+  Formats: claude, codex, qwen
 
   Examples:
     codbash convert 019d54ed codex     Convert Claude session to Codex
     codbash convert 13ae5748 claude    Convert Codex session to Claude
+    codbash convert 13ae5748 qwen      Convert Claude/Codex session to Qwen
 `);
       break;
     }
@@ -348,7 +384,7 @@ switch (command) {
     codbash list [limit]                List sessions in terminal
     codbash stats                       Show session statistics
     codbash handoff <id> [target]       Generate handoff document
-    codbash convert <id> <format>       Convert session (claude/codex)
+    codbash convert <id> <format>       Convert session (claude/codex/qwen)
     codbash export [file.tar.gz]        Export all sessions to archive
     codbash import <file.tar.gz>        Import sessions from archive
     codbash cloud <command>             Cloud session sync (setup/push/pull/list/status)

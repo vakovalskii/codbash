@@ -26,6 +26,9 @@ function generateHandoff(sessionId, project, options) {
   const detail = loadSessionDetail(session.id, session.project || project);
   const messages = (detail.messages || []).slice(-msgLimit);
   const cost = computeSessionCost(session.id, session.project || project);
+  const costLabel = cost.unavailable
+    ? `unavailable (${cost.model || 'unknown model'})`
+    : `$${cost.cost.toFixed(2)} (${cost.model || 'unknown'})`;
 
   // Build handoff document
   const lines = [];
@@ -34,7 +37,7 @@ function generateHandoff(sessionId, project, options) {
   lines.push(`> Transferred from **${session.tool}** session \`${session.id}\``);
   lines.push(`> Project: \`${session.project_short || session.project || 'unknown'}\``);
   lines.push(`> Started: ${session.first_time} | Last active: ${session.last_time}`);
-  lines.push(`> Messages: ${session.detail_messages || session.messages} | Cost: $${cost.cost.toFixed(2)} (${cost.model || 'unknown'})`);
+  lines.push(`> Messages: ${session.detail_messages || session.messages} | Cost: ${costLabel}`);
   lines.push('');
 
   // Summary of what was being worked on

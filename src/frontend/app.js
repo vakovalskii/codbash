@@ -11,6 +11,7 @@ let layout = localStorage.getItem('codedash-layout') || 'grid'; // 'grid' or 'li
 let groupingMode = normalizeGroupingMode(localStorage.getItem('codedash-grouping-mode'));
 let searchQuery = '';
 let toolFilter = null;  // null, 'claude', 'codex'
+let gitProjectFilter = null; // null or { key, name } — drill-down from Projects view
 let tagFilter = '';
 let dateFrom = '';
 let dateTo = '';
@@ -103,6 +104,35 @@ function getSessionDisplayName(session) {
     || '';
 }
 
+var TOOL_META = {
+  claude: { label: 'Claude Code', shortLabel: 'claude', color: '#60a5fa' },
+  'claude-ext': { label: 'Claude Ext', shortLabel: 'claude ext', color: '#60a5fa' },
+  codex: { label: 'Codex', shortLabel: 'codex', color: '#22d3ee' },
+  qwen: { label: 'Qwen Code', shortLabel: 'qwen', color: '#fbbf24' },
+  cursor: { label: 'Cursor', shortLabel: 'cursor', color: '#4a9eff' },
+  opencode: { label: 'OpenCode', shortLabel: 'opencode', color: '#c084fc' },
+  kiro: { label: 'Kiro', shortLabel: 'kiro', color: '#fb923c' },
+  kilo: { label: 'Kilo CLI', shortLabel: 'kilo', color: '#34d399' },
+  'copilot-chat': { label: 'Copilot Chat', shortLabel: 'copilot', color: '#8b6fc0' }
+};
+
+function getToolLabel(tool, shortLabel) {
+  var meta = TOOL_META[tool] || { label: tool || 'unknown', shortLabel: tool || 'unknown' };
+  return shortLabel ? meta.shortLabel : meta.label;
+}
+
+function getResumeCommand(tool, sessionId, project) {
+  if (tool === 'codex') return 'codex resume ' + sessionId;
+  if (tool === 'qwen') return 'qwen -r ' + sessionId;
+  if (tool === 'cursor') return 'cursor ' + (project ? '"' + project + '"' : '.');
+  return 'claude --resume ' + sessionId;
+}
+
+function getConvertTargets(tool) {
+  if (tool !== 'claude' && tool !== 'codex' && tool !== 'qwen') return [];
+  return ['claude', 'codex', 'qwen'].filter(function(target) { return target !== tool; });
+}
+
 // ── Utilities ──────────────────────────────────────────────────
 
 function timeAgo(dateStr) {
@@ -183,6 +213,11 @@ function estimateCost(fileSize) {
   var tokens = fileSize / 4;
   // Quick card badge estimate (Sonnet 4.6: $3/M in, $15/M out)
   return tokens * 0.3 * (3.0 / 1e6) + tokens * 0.7 * (15.0 / 1e6);
+}
+
+function getEstimatedSessionCost(session) {
+  if (!session || session.tool === 'qwen') return 0;
+  return estimateCost(session.file_size);
 }
 
 // ── Subscription service plans (pricing as of 2025) ─────────────
@@ -447,10 +482,17 @@ function generateAllTitles() {
 
 // ── Data loading ───────────────────────────────────────────────
 
+var _loadSessionsInFlight = false;
+
 async function loadSessions() {
+  if (_loadSessionsInFlight) return;
+  _loadSessionsInFlight = true;
   try {
     var resp = await fetch('/api/sessions');
     allSessions = await resp.json();
+    // Invalidate analytics cache so stale aggregates are not shown
+    _analyticsHtmlCache = null;
+    _analyticsCacheUrl = null;
     applyFilters();
     // Progressive loading: if server is still loading cursor vscdb sessions, auto-refresh
     if (resp.headers.get('X-Loading') === '1') {
@@ -458,6 +500,8 @@ async function loadSessions() {
     }
   } catch (e) {
     document.getElementById('content').innerHTML = '<div class="empty-state">Failed to load sessions. Is the server running?</div>';
+  } finally {
+    _loadSessionsInFlight = false;
   }
 }
 
@@ -649,6 +693,12 @@ function applyFilters() {
       if (!toolMatch) continue;
     }
 
+    // Git project drill-down filter (always uses git-root key, independent of groupingMode)
+    if (gitProjectFilter) {
+      var sessionProjectKey = getRepoInfo(s.project, s.git_root).key;
+      if (sessionProjectKey !== gitProjectFilter.key) continue;
+    }
+
     // Tag filter
     if (tagFilter) {
       var sessionTags = tags[s.id] || [];
@@ -714,12 +764,12 @@ function renderCard(s, idx) {
   var isSelected = selectedIds.has(s.id);
   var isFocused = focusedIndex === idx;
   var sessionTags = tags[s.id] || [];
-  var cost = estimateCost(s.file_size);
+  var cost = getEstimatedSessionCost(s);
   var costStr = cost > 0 ? '~$' + cost.toFixed(2) : '';
   var projName = getProjectName(s.project);
   var projColor = getProjectColor(projName);
   var toolClass = 'tool-' + s.tool;
-  var toolLabel = s.tool === 'claude-ext' ? 'claude ext' : s.tool;
+  var toolLabel = getToolLabel(s.tool, true);
 
   var classes = 'card';
   if (isSelected) classes += ' selected';
@@ -820,7 +870,7 @@ function renderListCard(s, idx) {
   if (isFocused) classes += ' focused';
 
   var html = '<div class="' + classes + '" data-id="' + s.id + '" onclick="onCardClick(\'' + s.id + '\', event)">';
-  var listToolLabel = s.tool === 'claude-ext' ? 'claude ext' : s.tool;
+  var listToolLabel = getToolLabel(s.tool, true);
   html += '<span class="tool-badge tool-' + s.tool + '">' + escHtml(listToolLabel) + '</span>';
   if (showBadges && s.mcp_servers && s.mcp_servers.length > 0) {
     s.mcp_servers.forEach(function(m) {
@@ -975,9 +1025,28 @@ function render() {
 
   // Stats
   if (stats) {
-    stats.textContent = sessions.length + ' sessions' +
-      (toolFilter ? ' (' + toolFilter + ')' : '') +
-      (tagFilter ? ' [' + tagFilter + ']' : '');
+    var statsText = sessions.length + ' sessions';
+    if (toolFilter) statsText += ' (' + toolFilter + ')';
+    if (tagFilter) statsText += ' [' + tagFilter + ']';
+    stats.textContent = statsText;
+  }
+
+  // Project filter breadcrumb
+  var existingBreadcrumb = document.getElementById('gitProjectBreadcrumb');
+  if (gitProjectFilter && currentView === 'sessions') {
+    if (!existingBreadcrumb) {
+      var bc = document.createElement('div');
+      bc.id = 'gitProjectBreadcrumb';
+      bc.className = 'git-project-breadcrumb';
+      var toolbar = document.querySelector('.toolbar');
+      if (toolbar) toolbar.parentNode.insertBefore(bc, toolbar.nextSibling);
+    }
+    document.getElementById('gitProjectBreadcrumb').innerHTML =
+      '<span class="bc-label">Project:</span>' +
+      '<span class="bc-name">' + escHtml(gitProjectFilter.name) + '</span>' +
+      '<button class="bc-clear" onclick="clearGitProjectFilter()" title="Show all projects">&times; Clear filter</button>';
+  } else if (existingBreadcrumb) {
+    existingBreadcrumb.remove();
   }
 
   // Route to view
@@ -1152,9 +1221,9 @@ function renderTimeline(container, sessions) {
 
 function renderQACard(s, idx) {
   var isStarred = stars.indexOf(s.id) >= 0;
-  var toolLabel = s.tool === 'claude-ext' ? 'claude ext' : s.tool;
+  var toolLabel = getToolLabel(s.tool, true);
   var toolClass = 'tool-' + s.tool;
-  var cost = estimateCost(s.file_size);
+  var cost = getEstimatedSessionCost(s);
   var costStr = cost > 0 ? '~$' + cost.toFixed(2) : '';
   var classes = 'qa-item' + (selectedIds.has(s.id) ? ' selected' : '');
 
@@ -1172,15 +1241,15 @@ function renderQACard(s, idx) {
 }
 
 function renderProjects(container, sessions) {
-  var byGit = {};
+  var byGit = {};   // key → { name, list }
   sessions.forEach(function(s) {
-    var name = getGitProjectName(s.project, s.git_root);
-    if (!byGit[name]) byGit[name] = [];
-    byGit[name].push(s);
+    var info = getRepoInfo(s.project, s.git_root);
+    if (!byGit[info.key]) byGit[info.key] = { name: info.name, list: [] };
+    byGit[info.key].list.push(s);
   });
 
   var sorted = Object.entries(byGit).sort(function(a, b) {
-    return b[1][0].last_ts - a[1][0].last_ts;
+    return b[1].list[0].last_ts - a[1].list[0].last_ts;
   });
 
   if (sorted.length === 0) {
@@ -1195,18 +1264,20 @@ function renderProjects(container, sessions) {
   html += '</div>';
   html += '<div class="git-projects">';
   sorted.forEach(function(entry) {
-    var name = entry[0];
-    var list = entry[1].slice().sort(function(a, b) { return b.last_ts - a.last_ts; });
-    var color = getProjectColor(name);
+    var projKey = entry[0];
+    var projName = entry[1].name;
+    var list = entry[1].list.slice().sort(function(a, b) { return b.last_ts - a.last_ts; });
+    var color = getProjectColor(projName);
     var totalMsgs = list.reduce(function(s, e) { return s + (e.messages || 0); }, 0);
-    var totalCost = list.reduce(function(s, e) { return s + estimateCost(e.file_size); }, 0);
+    var totalCost = list.reduce(function(s, e) { return s + getEstimatedSessionCost(e); }, 0);
     var costLabel = totalCost > 0 ? ' · ~$' + totalCost.toFixed(2) : '';
 
     html += '<div class="git-project-group">';
     html += '<div class="git-project-header" onclick="this.parentElement.classList.toggle(\'collapsed\')">';
     html += '<span class="group-dot" style="background:' + color + '"></span>';
-    html += '<span class="git-project-name">' + escHtml(name) + '</span>';
+    html += '<span class="git-project-name">' + escHtml(projName) + '</span>';
     html += '<span class="git-project-stats">' + list.length + ' sessions · ' + totalMsgs + ' msgs' + escHtml(costLabel) + '</span>';
+    html += '<button class="git-project-open-btn" data-proj-key="' + escHtml(projKey) + '" data-proj-name="' + escHtml(projName) + '" onclick="event.stopPropagation();drillIntoGitProject(this.dataset.projKey,this.dataset.projName)" title="Show only this project\'s sessions">Open &rsaquo;</button>';
     html += '<span class="group-chevron">&#9660;</span>';
     html += '</div>';
     html += '<div class="qa-list">';
@@ -1381,6 +1452,34 @@ function openProject(name) {
   applyFilters();
 }
 
+function drillIntoGitProject(key, name) {
+  gitProjectFilter = { key: key, name: name };
+  currentView = 'sessions';
+  // Reset other filters so they don't silently suppress results
+  searchQuery = '';
+  tagFilter = '';
+  dateFrom = '';
+  dateTo = '';
+  var searchBox = document.querySelector('.search-box');
+  if (searchBox) searchBox.value = '';
+  var tagSel = document.getElementById('tagFilter');
+  if (tagSel) tagSel.value = '';
+  updateDateBtn();
+  document.querySelectorAll('.sidebar-item').forEach(function(el) {
+    el.classList.toggle('active', el.getAttribute('data-view') === 'sessions');
+  });
+  applyFilters();
+}
+
+function clearGitProjectFilter() {
+  gitProjectFilter = null;
+  currentView = 'projects';
+  document.querySelectorAll('.sidebar-item').forEach(function(el) {
+    el.classList.toggle('active', el.getAttribute('data-view') === 'projects');
+  });
+  applyFilters();
+}
+
 // ── Themes ─────────────────────────────────────────────────────
 
 function setTheme(theme) {
@@ -1523,7 +1622,7 @@ function renderRunningCard(a, s) {
   html += '<div class="running-card-header">';
   html += '<span class="live-badge live-' + a.status + '">' + (a.status === 'waiting' ? 'WAITING' : 'LIVE') + '</span>';
   html += '<span class="running-project" style="color:' + projColor + '">' + escHtml(projName) + '</span>';
-  html += '<span class="running-tool">' + escHtml(a.entrypoint || a.kind || 'claude') + '</span>';
+  html += '<span class="running-tool">' + escHtml(getToolLabel(a.entrypoint || a.kind || 'claude')) + '</span>';
   html += '</div>';
   html += '<div class="running-stats">';
   html += '<div class="running-stat"><span class="running-stat-val">' + a.cpu.toFixed(1) + '%</span><span class="running-stat-label">CPU</span></div>';
@@ -1550,7 +1649,7 @@ function renderDoneCard(s) {
   html += '<div class="running-card-header">';
   html += '<span class="live-badge live-done">DONE</span>';
   html += '<span class="running-project" style="color:' + projColor + '">' + escHtml(projName) + '</span>';
-  html += '<span class="running-tool tool-' + (s.tool || 'claude') + '">' + escHtml(s.tool || 'claude') + '</span>';
+  html += '<span class="running-tool tool-' + (s.tool || 'claude') + '">' + escHtml(getToolLabel(s.tool || 'claude', true)) + '</span>';
   html += '</div>';
   var displayName = getSessionDisplayName(s);
   if (displayName) html += '<div class="running-msg">' + escHtml(displayName.slice(0, 120)) + '</div>';
@@ -1575,7 +1674,7 @@ function renderRunning(container, sessions) {
   }).slice(0, 8);
 
   if (allActiveIds.length === 0 && done.length === 0) {
-    container.innerHTML = '<div class="empty-state">No running sessions detected.<br><span style="font-size:12px;color:var(--text-muted)">Start a Claude Code or Codex session and it will appear here.</span></div>';
+    container.innerHTML = '<div class="empty-state">No running sessions detected.<br><span style="font-size:12px;color:var(--text-muted)">Start a supported agent session and it will appear here.</span></div>';
     return;
   }
 
@@ -1851,6 +1950,12 @@ var AGENT_INSTALL = {
     alt: 'brew install --cask codex',
     url: 'https://github.com/openai/codex',
   },
+  qwen: {
+    name: 'Qwen Code',
+    cmd: 'npm i -g @qwen-code/qwen-code',
+    alt: null,
+    url: 'https://github.com/QwenLM/qwen-code',
+  },
   kiro: {
     name: 'Kiro CLI',
     cmd: 'curl -fsSL https://cli.kiro.dev/install | bash',
@@ -1868,6 +1973,12 @@ var AGENT_INSTALL = {
     cmd: 'npm i -g @kilocode/cli',
     alt: null,
     url: 'https://kilo.ai',
+  },
+  'copilot-chat': {
+    name: 'Copilot Chat (VS Code)',
+    cmd: null,
+    alt: null,
+    url: 'https://github.com/features/copilot',
   },
 };
 
@@ -1980,6 +2091,7 @@ function dismissUpdate() {
   loadTerminals();
   checkForUpdates();
   setInterval(checkForUpdates, 10000); // check every 10s
+  setInterval(loadSessions, 60000);    // refresh sessions + invalidate analytics cache every 60s
   startActivePolling();
 
   // Apply saved theme

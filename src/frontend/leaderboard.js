@@ -78,7 +78,7 @@ function renderGlobalBoard() {
     var agents = Object.entries(u.stats?.agents || {}).sort(function(a,b){return b[1]-a[1]}).slice(0,3);
     if (agents.length) {
       html += '<div class="lb-global-agents">';
-      agents.forEach(function(a) { html += '<span class="lb-agent-mini tool-' + a[0] + '">' + a[0] + '</span>'; });
+      agents.forEach(function(a) { html += '<span class="lb-agent-mini tool-' + a[0] + '">' + escHtml(getToolLabel(a[0], true)) + '</span>'; });
       html += '</div>';
     }
     html += '</div>';
@@ -236,7 +236,7 @@ async function renderLeaderboard(container) {
     agentEntries.forEach(function(e) {
       var pct = data.totals.sessions > 0 ? Math.round(e[1] / data.totals.sessions * 100) : 0;
       html += '<div class="lb-agent-row">';
-      html += '<span class="tool-badge tool-' + e[0] + '">' + escHtml(e[0]) + '</span>';
+      html += '<span class="tool-badge tool-' + e[0] + '">' + escHtml(getToolLabel(e[0], true)) + '</span>';
       html += '<div class="lb-agent-bar"><div class="lb-agent-bar-fill" style="width:' + pct + '%"></div></div>';
       html += '<span class="lb-agent-count">' + e[1] + ' (' + pct + '%)</span>';
       html += '</div>';

@@ -8,6 +8,19 @@ const { findSessionFile, extractContent, isSystemMessage } = require('./data');
 
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const CODEX_DIR = path.join(os.homedir(), '.codex');
+const QWEN_DIR = path.join(os.homedir(), '.qwen');
+
+function extractQwenText(parts) {
+  if (!Array.isArray(parts)) return '';
+  return parts
+    .map(part => {
+      if (!part || typeof part !== 'object' || part.thought) return '';
+      return typeof part.text === 'string' ? part.text : '';
+    })
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+}
 
 // ── Read session into canonical format ────────────────────
 
@@ -48,6 +61,22 @@ function readSession(sessionId, project) {
             model: msg.model || '',
           });
         }
+      } else if (found.format === 'qwen') {
+        if (!sessionMeta.cwd && entry.cwd) sessionMeta.cwd = entry.cwd;
+        if (!sessionMeta.version && entry.version) sessionMeta.version = entry.version;
+        if (!sessionMeta.gitBranch && entry.gitBranch) sessionMeta.gitBranch = entry.gitBranch;
+        if (!sessionMeta.originalSessionId && entry.sessionId) sessionMeta.originalSessionId = entry.sessionId;
+
+        if (entry.type !== 'user' && entry.type !== 'assistant') continue;
+        const content = extractQwenText(((entry.message || {}).parts));
+        if (!content || isSystemMessage(content)) continue;
+
+        messages.push({
+          role: entry.type === 'assistant' ? 'assistant' : 'user',
+          content: content,
+          timestamp: entry.timestamp || '',
+          model: entry.type === 'assistant' ? (entry.model || '') : '',
+        });
       } else {
         // Codex
         if (entry.type === 'session_meta' && entry.payload) {
@@ -238,6 +267,61 @@ function writeCodex(canonical, targetProject) {
   };
 }
 
+function writeQwen(canonical, targetProject) {
+  const newSessionId = crypto.randomUUID();
+  const cwd = targetProject || canonical.meta.cwd || os.homedir();
+  const projectKey = cwd.replace(/[^a-zA-Z0-9-]/g, '-');
+  const chatsDir = path.join(QWEN_DIR, 'projects', projectKey, 'chats');
+
+  if (!fs.existsSync(chatsDir)) {
+    fs.mkdirSync(chatsDir, { recursive: true });
+  }
+
+  const outFile = path.join(chatsDir, `${newSessionId}.jsonl`);
+  const nowIso = new Date().toISOString();
+  const version = canonical.meta.version || '0.14.0';
+  const gitBranch = canonical.meta.gitBranch || 'main';
+  const lines = [];
+  let prevUuid = null;
+
+  for (const msg of canonical.messages) {
+    const uuid = crypto.randomUUID();
+    const entry = {
+      uuid,
+      parentUuid: prevUuid,
+      sessionId: newSessionId,
+      timestamp: msg.timestamp || nowIso,
+      type: msg.role === 'assistant' ? 'assistant' : 'user',
+      cwd,
+      version,
+      gitBranch,
+      message: {
+        role: msg.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: msg.content }],
+      },
+    };
+
+    if (msg.role === 'assistant') {
+      entry.model = msg.model || canonical.meta.model || 'converted-session';
+    }
+
+    lines.push(JSON.stringify(entry));
+    prevUuid = uuid;
+  }
+
+  const tmpFile = outFile + '.tmp';
+  fs.writeFileSync(tmpFile, lines.join('\n') + '\n');
+  fs.renameSync(tmpFile, outFile);
+
+  return {
+    sessionId: newSessionId,
+    file: outFile,
+    format: 'qwen',
+    messages: canonical.messages.length,
+    resumeCmd: `qwen -r ${newSessionId}`,
+  };
+}
+
 // ── Main convert function ─────────────────────────────────
 
 function convertSession(sessionId, project, targetFormat) {
@@ -259,6 +343,8 @@ function convertSession(sessionId, project, targetFormat) {
     result = writeClaude(canonical, project);
   } else if (targetFormat === 'codex') {
     result = writeCodex(canonical, project);
+  } else if (targetFormat === 'qwen') {
+    result = writeQwen(canonical, project);
   } else {
     return { ok: false, error: `Unknown target format: ${targetFormat}` };
   }

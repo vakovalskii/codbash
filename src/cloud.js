@@ -113,6 +113,60 @@ function cloudRequest(method, reqPath, token, body, headers) {
   });
 }
 
+// ── Cross-machine project identity ───────────
+
+function normalizeGitRemote(url) {
+  if (!url || typeof url !== 'string') return '';
+  let s = url.trim();
+  if (!s) return '';
+  s = s.replace(/^(https?:\/\/)[^@\/]*@/, '$1');
+  s = s.replace(/^git@/, '');
+  s = s.replace(/^ssh:\/\/(?:[^@\/]*@)?/, '');
+  s = s.replace(/^https?:\/\//, '');
+  s = s.replace(/^git:\/\//, '');
+  s = s.replace(/:/, '/');
+  s = s.replace(/\/+$/, '').replace(/\.git$/i, '').replace(/\/+$/, '');
+  return s.toLowerCase();
+}
+
+function slugifyRemoteForDir(remote) {
+  const s = String(remote || '').replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return s || 'unknown';
+}
+
+let _remoteProjectCache = null;
+let _remoteProjectCacheTs = 0;
+
+function findLocalProjectByRemote(gitRemote) {
+  if (!gitRemote) return '';
+  const now = Date.now();
+  if (_remoteProjectCache && (now - _remoteProjectCacheTs) < 30000) {
+    return _remoteProjectCache[gitRemote] || '';
+  }
+  _remoteProjectCache = {};
+  _remoteProjectCacheTs = now;
+  try {
+    const { loadSessions, getProjectGitInfo } = require('./data');
+    const sessions = loadSessions();
+    const counts = {};
+    for (const s of sessions) {
+      if (!s || !s.project) continue;
+      let info = null;
+      try { info = getProjectGitInfo(s.project); } catch {}
+      if (!info || !info.remoteUrl) continue;
+      const key = normalizeGitRemote(info.remoteUrl);
+      if (!key) continue;
+      if (!counts[key]) counts[key] = {};
+      counts[key][s.project] = (counts[key][s.project] || 0) + 1;
+    }
+    for (const key of Object.keys(counts)) {
+      const paths = Object.entries(counts[key]).sort((a, b) => b[1] - a[1]);
+      _remoteProjectCache[key] = paths[0][0];
+    }
+  } catch {}
+  return _remoteProjectCache[gitRemote] || '';
+}
+
 // ── Session Serialization ────────────────────
 
 function serializeSession(sessionId, sessions) {
@@ -145,11 +199,25 @@ function serializeSession(sessionId, sessions) {
     rawMessages = detail.messages || [];
   }
 
+  // Capture git identity for cross-machine project remap on pull
+  let gitRemote = '';
+  let gitRoot = '';
+  try {
+    const { getProjectGitInfo } = require('./data');
+    const info = getProjectGitInfo(session.project);
+    if (info) {
+      gitRoot = info.gitRoot || '';
+      gitRemote = normalizeGitRemote(info.remoteUrl || '');
+    }
+  } catch {}
+
   const canonical = {
-    version: 1,
+    version: 2,
     agent: session.tool,
     sessionId: sessionId,
     project: session.project || '',
+    gitRemote: gitRemote,
+    gitRoot: gitRoot,
     projectShort: session.project_short || '',
     sessionName: session.session_name || '',
     firstMessage: session.first_message || '',
@@ -183,8 +251,23 @@ function deserializeSession(canonical) {
   const sid = canonical.sessionId;
 
   if (agent === 'claude') {
-    // Write to ~/.claude/projects/{key}/{sid}.jsonl
-    const projectKey = (canonical.project || 'unknown').replace(/[^a-zA-Z0-9-]/g, '-');
+    // Try to remap source-machine path to a local project with matching git remote
+    const remapped = canonical.gitRemote ? findLocalProjectByRemote(canonical.gitRemote) : '';
+    let projectKey;
+    let historyProject;
+    let remapNote = '';
+    if (remapped) {
+      projectKey = remapped.replace(/[\/\.]/g, '-');
+      historyProject = remapped;
+      remapNote = `Remapped to local project ${remapped} via git remote ${canonical.gitRemote}`;
+    } else if (canonical.gitRemote) {
+      projectKey = '-cloud-import-' + slugifyRemoteForDir(canonical.gitRemote);
+      historyProject = projectKey;
+      remapNote = `No local checkout of ${canonical.gitRemote} found — imported to neutral bucket ${projectKey}`;
+    } else {
+      projectKey = (canonical.project || 'unknown').replace(/[^a-zA-Z0-9-]/g, '-');
+      historyProject = projectKey;
+    }
     const dir = path.join(PROJECTS_DIR, projectKey);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     const file = path.join(dir, `${sid}.jsonl`);
@@ -197,12 +280,12 @@ function deserializeSession(canonical) {
     const historyFile = path.join(CLAUDE_DIR, 'history.jsonl');
     const historyEntry = {
       sessionId: sid,
-      project: projectKey,
+      project: historyProject,
       timestamp: new Date(canonical.lastTs || Date.now()).toISOString(),
       summary: canonical.firstMessage?.slice(0, 200) || '',
     };
     fs.appendFileSync(historyFile, JSON.stringify(historyEntry) + '\n');
-    return { ok: true, file };
+    return { ok: true, file, note: remapNote || undefined };
   }
 
   if (agent === 'codex') {
@@ -228,7 +311,18 @@ function deserializeSession(canonical) {
   if (agent === 'cursor') {
     // Write to ~/.cursor/projects/{key}/agent-transcripts/{sid}/{sid}.jsonl
     const cursorProjects = path.join(os.homedir(), '.cursor', 'projects');
-    const projectKey = (canonical.project || 'unknown').replace(/[^a-zA-Z0-9-]/g, '-');
+    const remapped = canonical.gitRemote ? findLocalProjectByRemote(canonical.gitRemote) : '';
+    let projectKey;
+    let remapNote = '';
+    if (remapped) {
+      projectKey = remapped.replace(/[\/\.]/g, '-');
+      remapNote = `Remapped to local project ${remapped} via git remote ${canonical.gitRemote}`;
+    } else if (canonical.gitRemote) {
+      projectKey = '-cloud-import-' + slugifyRemoteForDir(canonical.gitRemote);
+      remapNote = `No local checkout of ${canonical.gitRemote} found — imported to neutral bucket ${projectKey}`;
+    } else {
+      projectKey = (canonical.project || 'unknown').replace(/[^a-zA-Z0-9-]/g, '-');
+    }
     const dir = path.join(cursorProjects, projectKey, 'agent-transcripts', sid);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     const file = path.join(dir, `${sid}.jsonl`);
@@ -236,7 +330,7 @@ function deserializeSession(canonical) {
 
     const lines = canonical.messages.map(m => JSON.stringify(m)).join('\n') + '\n';
     fs.writeFileSync(file, lines);
-    return { ok: true, file };
+    return { ok: true, file, note: remapNote || undefined };
   }
 
   // OpenCode and Kiro — store as JSONL in ~/.codedash/cloud-imports/
@@ -587,4 +681,8 @@ module.exports = {
   cloudRequest,
   getCloudAPI,
   CLOUD_API,
+  __test: {
+    normalizeGitRemote,
+    slugifyRemoteForDir,
+  },
 };

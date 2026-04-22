@@ -90,6 +90,11 @@ async function renderAnalytics(container) {
         coverageparts.push('<span class="coverage-ok">Claude Extension \u2713</span>');
       if (byAgent['codex'] && byAgent['codex'].sessions > 0)
         coverageparts.push('<span class="coverage-est">Codex ~est.</span>');
+      if (byAgent['qwen'] && byAgent['qwen'].sessions > 0) {
+        coverageparts.push(byAgent['qwen'].unavailable
+          ? '<span class="coverage-est">Qwen tokens only</span>'
+          : '<span class="coverage-ok">Qwen Code \u2713</span>');
+      }
       if (byAgent['opencode'] && byAgent['opencode'].sessions > 0)
         coverageparts.push(byAgent['opencode'].estimated
           ? '<span class="coverage-est">OpenCode ~est.</span>'
@@ -115,8 +120,10 @@ async function renderAnalytics(container) {
       agentEntriesOv.forEach(function(entry) {
         var name = entry[0]; var info = entry[1];
         var pct = maxAgentCostOv > 0 ? (info.cost / maxAgentCostOv * 100) : 0;
-        var label = { 'claude': 'Claude Code', 'claude-ext': 'Claude Ext', 'codex': 'Codex', 'opencode': 'OpenCode', 'cursor': 'Cursor', 'kiro': 'Kiro' }[name] || name;
-        var estMark = info.estimated ? ' <span style="font-size:10px;opacity:0.6">~est.</span>' : '';
+        var label = getToolLabel(name);
+        var estMark = info.unavailable
+          ? ' <span style="font-size:10px;opacity:0.6">tokens only</span>'
+          : (info.estimated ? ' <span style="font-size:10px;opacity:0.6">~est.</span>' : '');
         html += '<div class="hbar-row">';
         html += '<span class="hbar-name">' + label + estMark + '</span>';
         html += '<div class="hbar-track"><div class="hbar-fill" style="width:' + pct + '%"></div></div>';
@@ -143,7 +150,7 @@ async function renderAnalytics(container) {
       html += '<div class="token-type-card token-cache-read"><span class="token-type-val">' + formatTokens(data.totalCacheReadTokens) + '</span><span class="token-type-label">Cache read</span><span class="token-type-pct">' + pctOf(data.totalCacheReadTokens) + '%</span></div>';
       html += '<div class="token-type-card token-cache-create"><span class="token-type-val">' + formatTokens(data.totalCacheCreateTokens) + '</span><span class="token-type-label">Cache write</span><span class="token-type-pct">' + pctOf(data.totalCacheCreateTokens) + '%</span></div>';
       if (data.avgContextPct > 0) {
-        html += '<div class="token-type-card token-context"><span class="token-type-val">' + data.avgContextPct + '%</span><span class="token-type-label">Avg context used</span><span class="token-type-pct">of 200K</span></div>';
+        html += '<div class="token-type-card token-context"><span class="token-type-val">' + data.avgContextPct + '%</span><span class="token-type-label">Avg context used</span><span class="token-type-pct">window avg</span></div>';
       }
       html += '</div>';
 

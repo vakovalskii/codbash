@@ -2,7 +2,7 @@
 
 ## Overview
 
-CodeDash is a zero-dependency Node.js dashboard for AI coding agent sessions. Supports 6 agents: Claude Code, Claude Extension, Codex, Cursor, OpenCode, Kiro. Single process serves a web UI at `localhost:3847`.
+CodeDash is a zero-dependency Node.js dashboard for AI coding agent sessions. Supports 8 agents: Claude Code, Claude Extension, Codex, Cursor, OpenCode, Kiro, Kilo, Copilot Chat. Single process serves a web UI at `localhost:3847`.
 
 ```
 Browser (localhost:3847)            Node.js Server
@@ -21,10 +21,11 @@ Browser (localhost:3847)            Node.js Server
        | convert/export/   |        |    +-- changelog.js            |
        | import/update     |        +-------------------------------+
        +-------------------+                    |
-                                   reads from 5 locations:
+                                   reads from 6 locations:
                               ~/.claude/  ~/.codex/  ~/.cursor/
                               ~/.local/share/opencode/opencode.db
                               ~/Library/Application Support/kiro-cli/data.sqlite3
+                              ~/.config/Code/User/workspaceStorage/*/chatSessions/
 ```
 
 ## Project Structure
@@ -197,6 +198,40 @@ FROM conversations_v2 ORDER BY updated_at DESC
 }
 ```
 
+### 7. Copilot (VS Code Extension)
+
+| Item | Location |
+|------|----------|
+| Sessions | `~/.config/Code/User/workspaceStorage/[hash]/chatSessions/` (JSON/JSONL) |
+
+**Storage formats**: Two file formats coexist in `chatSessions/`:
+- **`.json`** — complete session state as a single JSON object
+- **`.jsonl`** — mutation-based format (kind:0 init, kind:1 set, kind:2 splice)
+
+**Session JSON structure**:
+```json
+{
+  "version": 3,
+  "creationDate": 1772452223289,
+  "requests": [
+    {
+      "requestId": "request_uuid",
+      "message": {"text": "user prompt"},
+      "response": [
+        {"kind": "text", "value": "assistant response"},
+        {"kind": "thinking", "value": "..."},
+        {"kind": "toolInvocationSerialized", "value": {...}}
+      ],
+      "modelId": "copilot/claude-sonnet-4.6"
+    }
+  ]
+}
+```
+
+**Project mapping**: `workspaceStorage/[hash]/workspace.json` contains `folder` URI → decoded to local path.
+
+**Cost**: No token usage stored locally — returns empty cost.
+
 ---
 
 ## Data Flow
@@ -209,6 +244,7 @@ FROM conversations_v2 ORDER BY updated_at DESC
 3. scanOpenCodeSessions() → merge (tool: "opencode")
 4. scanCursorSessions() → merge (tool: "cursor")
 5. scanKiroSessions() → merge (tool: "kiro")
+5a. scanCopilotSessions() → merge (tool: "copilot-chat")
 6. Enrich Claude sessions with detail files:
    - Count messages, get file size
    - Check entrypoint → change tool to "claude-ext" if not "cli"

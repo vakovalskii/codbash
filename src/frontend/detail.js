@@ -9,7 +9,7 @@ async function openDetail(s) {
 
   title.textContent = escHtml(getProjectName(s.project)) + ' / ' + s.id.slice(0, 12);
 
-  var cost = estimateCost(s.file_size);
+  var cost = getEstimatedSessionCost(s);
   var costStr = cost > 0 ? '~$' + cost.toFixed(2) : '';
   var isStarred = stars.indexOf(s.id) >= 0;
   var sessionTags = tags[s.id] || [];
@@ -26,7 +26,7 @@ async function openDetail(s) {
   } else if (s.has_detail) {
     infoHtml += '<div class="detail-row"><span class="detail-label">Name</span><button class="toolbar-btn" style="font-size:11px;padding:2px 8px" onclick="generateTitle(\'' + s.id + '\',\'' + escProject + '\')">Generate AI Name</button></div>';
   }
-  var detailToolLabel = s.tool === 'claude-ext' ? 'claude ext' : s.tool;
+  var detailToolLabel = getToolLabel(s.tool);
   infoHtml += '<div class="detail-row"><span class="detail-label">Tool</span><span class="tool-badge tool-' + s.tool + '">' + escHtml(detailToolLabel) + '</span></div>';
   infoHtml += '<div class="detail-row"><span class="detail-label">Project</span><span>' + escHtml(s.project_short || s.project || '') + '</span></div>';
   infoHtml += '<div class="detail-git-info" id="detail-git-info"></div>';
@@ -81,8 +81,9 @@ async function openDetail(s) {
   if (s.has_detail) {
     infoHtml += '<button class="launch-btn btn-secondary" onclick="closeDetail();openReplay(\'' + s.id + '\',\'' + escHtml(s.project || '') + '\')">Replay</button>';
     infoHtml += '<button class="launch-btn btn-secondary" onclick="exportMd(\'' + s.id + '\',\'' + escHtml(s.project || '') + '\')">Export MD</button>';
-    var convertTarget = s.tool === 'codex' ? 'claude' : 'codex';
-    infoHtml += '<button class="launch-btn btn-secondary" onclick="convertTo(\'' + s.id + '\',\'' + escHtml(s.project || '') + '\',\'' + convertTarget + '\')">Convert to ' + convertTarget + '</button>';
+    getConvertTargets(s.tool).forEach(function(target) {
+      infoHtml += '<button class="launch-btn btn-secondary" onclick="convertTo(\'' + s.id + '\',\'' + escHtml(s.project || '') + '\',\'' + target + '\')">Convert to ' + getToolLabel(target) + '</button>';
+    });
     infoHtml += '<button class="launch-btn btn-secondary" onclick="downloadHandoff(\'' + s.id + '\',\'' + escHtml(s.project || '') + '\')">Handoff</button>';
   }
   infoHtml += '<button class="star-btn detail-star' + (isStarred ? ' active' : '') + '" onclick="toggleStar(\'' + s.id + '\')">&#9733; ' + (isStarred ? 'Starred' : 'Star') + '</button>';
@@ -115,15 +116,20 @@ async function openDetail(s) {
 
   // Load real cost
   loadRealCost(s.id, s.project || '').then(function(costData) {
-    if (!costData || !costData.cost) return;
+    if (!costData) return;
+    var totalTokens = (costData.inputTokens || 0) + (costData.outputTokens || 0) + (costData.cacheReadTokens || 0) + (costData.cacheCreateTokens || 0);
+    if (!costData.cost && !totalTokens) return;
     var row = document.getElementById('detail-real-cost');
     if (row) {
       row.style.display = '';
       var cacheStr = '';
       if ((costData.cacheReadTokens || 0) + (costData.cacheCreateTokens || 0) > 0)
         cacheStr = ' / ' + formatTokens((costData.cacheReadTokens||0) + (costData.cacheCreateTokens||0)) + ' cache';
+      var valueHtml = costData.unavailable
+        ? '<span class="cost-badge" style="background:rgba(251,191,36,0.2);color:#fbbf24">pricing unavailable</span>'
+        : '<span class="cost-badge" style="background:rgba(74,222,128,0.2);color:var(--accent-green)">$' + costData.cost.toFixed(2) + '</span>';
       row.querySelector('span:last-child').innerHTML =
-        '<span class="cost-badge" style="background:rgba(74,222,128,0.2);color:var(--accent-green)">$' + costData.cost.toFixed(2) + '</span>' +
+        valueHtml +
         ' <span style="font-size:11px;color:var(--text-muted)">' +
         formatTokens(costData.inputTokens) + ' in / ' + formatTokens(costData.outputTokens) + ' out' + cacheStr +
         (costData.model ? ' (' + costData.model + ')' : '') + '</span>';
@@ -206,7 +212,6 @@ function renderStructuredMeta(label, text) {
   if (!text) return '';
   return '<div class="structured-context"><span class="structured-context-label">' + escHtml(label) + '</span> ' + escHtml(text) + '</div>';
 }
-
 function renderCodexUserShellCommand(fields) {
   if (!fields || !fields.command || !fields.result) return '';
   var html = '<div class="msg-content structured-message">';
@@ -294,7 +299,6 @@ function renderClaudeTaskNotification(fields) {
   html += '</div>';
   return html;
 }
-
 function renderMessageContent(message) {
   var structured = message && message.structured;
   if (structured && structured.agent && structured.kind) {
@@ -314,7 +318,6 @@ function getMessageRoleMeta(role) {
   if (role === 'system') return { className: 'msg-system', label: 'System' };
   return { className: 'msg-assistant', label: 'Assistant' };
 }
-
 function renderDetailMessages(container, messages) {
   var sort = localStorage.getItem('codedash-msg-sort') || 'asc';
   var sorted = sort === 'desc' ? messages.slice().reverse() : messages;
@@ -428,16 +431,7 @@ function launchSession(sessionId, tool, project, flags) {
 
 function copyResume(sessionId, tool) {
   var s = allSessions.find(function(x) { return x.id === sessionId; });
-  var cmd;
-  if (tool === 'codex') {
-    cmd = 'codex resume ' + sessionId;
-  } else if (tool === 'kilo') {
-    cmd = 'kilo resume ' + sessionId;
-  } else if (tool === 'cursor') {
-    cmd = 'cursor ' + (s && s.project ? '"' + s.project + '"' : '.');
-  } else {
-    cmd = 'claude --resume ' + sessionId;
-  }
+  var cmd = getResumeCommand(tool, sessionId, s && s.project ? s.project : '');
   copyText(cmd, 'Copied: ' + cmd);
 }
 
