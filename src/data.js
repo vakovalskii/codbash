@@ -152,6 +152,8 @@ const CODEX_DIR = path.join(ALL_HOMES[0], '.codex');
 const QWEN_DIR = path.join(ALL_HOMES[0], '.qwen');
 const OPENCODE_DB = path.join(ALL_HOMES[0], '.local', 'share', 'opencode', 'opencode.db');
 const KIRO_DB = path.join(ALL_HOMES[0], 'Library', 'Application Support', 'kiro-cli', 'data.sqlite3');
+const COPILOT_SESSION_DIR = path.join(ALL_HOMES[0], '.copilot', 'session-state');
+const COPILOT_JB_DIR = path.join(ALL_HOMES[0], '.copilot', 'jb');
 const KILO_DB = path.join(ALL_HOMES[0], '.local', 'share', 'kilo', 'kilo.db');
 const CURSOR_DIR = path.join(ALL_HOMES[0], '.cursor');
 const CURSOR_PROJECTS = path.join(CURSOR_DIR, 'projects');
@@ -1141,6 +1143,252 @@ function loadKiloCliDetail(sessionId) {
   } catch {
     return { messages: [] };
   }
+}
+
+function parseWorkspaceYaml(text) {
+  const result = {};
+  const lines = text.split('\n');
+  let i = 0;
+  while (i < lines.length) {
+    const m = lines[i].match(/^(\w+):\s*(.*)$/);
+    if (m) {
+      const key = m[1];
+      const val = m[2].trim();
+      if (val === '|-' || val === '|') {
+        const parts = [];
+        i++;
+        while (i < lines.length && /^\s+/.test(lines[i])) {
+          parts.push(lines[i].trim());
+          i++;
+        }
+        result[key] = parts.join(' ').trim();
+        continue;
+      }
+      result[key] = val;
+    }
+    i++;
+  }
+  return result;
+}
+
+function scanCopilotCliSessions() {
+  const sessions = [];
+  const homedir = ALL_HOMES[0];
+
+  // VS Code / CLI sessions
+  let uuids = [];
+  try { uuids = fs.readdirSync(COPILOT_SESSION_DIR); } catch {}
+  for (const uuid of uuids) {
+    if (uuid.length !== 36) continue;
+    const dir = path.join(COPILOT_SESSION_DIR, uuid);
+    try {
+      const yamlPath = path.join(dir, 'workspace.yaml');
+      const eventsPath = path.join(dir, 'events.jsonl');
+      if (!fs.existsSync(yamlPath) || !fs.existsSync(eventsPath)) continue;
+
+      const yaml = parseWorkspaceYaml(fs.readFileSync(yamlPath, 'utf8'));
+      const cwd = yaml.cwd || '';
+      let summary = yaml.summary || '';
+      if (summary === 'exit' || summary === '') summary = '';
+
+      let userMsgCount = 0;
+      let firstUserMsg = '';
+      const eventsText = fs.readFileSync(eventsPath, 'utf8');
+      for (const line of eventsText.split('\n')) {
+        if (!line.trim()) continue;
+        try {
+          const ev = JSON.parse(line);
+          if (ev.type === 'user.message' && ev.data && ev.data.content) {
+            userMsgCount++;
+            if (!firstUserMsg) firstUserMsg = ev.data.content;
+          }
+        } catch {}
+      }
+
+      let isActive = false;
+      try {
+        const files = fs.readdirSync(dir);
+        for (const f of files) {
+          const lm = f.match(/^inuse\.(\d+)\.lock$/);
+          if (lm) {
+            try { process.kill(parseInt(lm[1], 10), 0); isActive = true; } catch {}
+          }
+        }
+      } catch {}
+
+      const stat = fs.statSync(eventsPath);
+      sessions.push({
+        id: uuid,
+        tool: 'copilot',
+        project: cwd,
+        project_short: cwd.replace(homedir, '~'),
+        first_ts: yaml.created_at ? Date.parse(yaml.created_at) : stat.ctimeMs,
+        last_ts: yaml.updated_at ? Date.parse(yaml.updated_at) : stat.mtimeMs,
+        messages: userMsgCount,
+        first_message: summary || firstUserMsg || '',
+        has_detail: true,
+        file_size: stat.size,
+        detail_messages: eventsText.split('\n').filter(l => l.trim()).length,
+        mcp_servers: [],
+        skills: [],
+        active: isActive,
+      });
+    } catch {}
+  }
+
+  // JetBrains sessions
+  let jbUuids = [];
+  try { jbUuids = fs.readdirSync(COPILOT_JB_DIR); } catch {}
+  for (const uuid of jbUuids) {
+    if (uuid.length !== 36) continue;
+    const partitionPath = path.join(COPILOT_JB_DIR, uuid, 'partition-1.jsonl');
+    try {
+      if (!fs.existsSync(partitionPath)) continue;
+      const eventsText = fs.readFileSync(partitionPath, 'utf8');
+      let conversationId = uuid;
+      let cwd = '';
+      let userMsgCount = 0;
+      let firstUserMsg = '';
+      let firstTs = 0;
+      let lastTs = 0;
+
+      for (const line of eventsText.split('\n')) {
+        if (!line.trim()) continue;
+        try {
+          const ev = JSON.parse(line);
+          if (ev.type === 'partition.created' && ev.data && ev.data.conversationId) {
+            conversationId = ev.data.conversationId;
+          }
+          if (ev.type === 'session.start' && ev.data && ev.data.context) {
+            cwd = ev.data.context.cwd || '';
+            if (ev.timestamp) firstTs = Date.parse(ev.timestamp);
+          }
+          if (ev.type === 'user.message' && ev.data && ev.data.content) {
+            userMsgCount++;
+            if (!firstUserMsg) firstUserMsg = ev.data.content;
+            if (ev.timestamp) lastTs = Date.parse(ev.timestamp);
+          }
+        } catch {}
+      }
+
+      const stat = fs.statSync(partitionPath);
+      sessions.push({
+        id: conversationId,
+        tool: 'copilot',
+        project: cwd,
+        project_short: cwd.replace(ALL_HOMES[0], '~'),
+        first_ts: firstTs || stat.ctimeMs,
+        last_ts: lastTs || stat.mtimeMs,
+        messages: userMsgCount,
+        first_message: firstUserMsg || '',
+        has_detail: true,
+        file_size: stat.size,
+        detail_messages: eventsText.split('\n').filter(l => l.trim()).length,
+        mcp_servers: [],
+        skills: [],
+        active: false,
+        _jbPath: partitionPath,
+      });
+    } catch {}
+  }
+
+  return sessions;
+}
+
+function loadCopilotCliDetail(sessionId) {
+  // Validate UUID to prevent path traversal
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId)) {
+    return { messages: [] };
+  }
+  // Try VS Code session dir first
+  let eventsPath = path.join(COPILOT_SESSION_DIR, sessionId, 'events.jsonl');
+  if (!fs.existsSync(eventsPath)) {
+    // Try JetBrains: scan for matching conversationId
+    try {
+      const jbUuids = fs.readdirSync(COPILOT_JB_DIR);
+      for (const uuid of jbUuids) {
+        const p = path.join(COPILOT_JB_DIR, uuid, 'partition-1.jsonl');
+        if (fs.existsSync(p)) {
+          const text = fs.readFileSync(p, 'utf8');
+          for (const line of text.split('\n')) {
+            if (!line.trim()) continue;
+            try {
+              const ev = JSON.parse(line);
+              if (ev.type === 'partition.created' && ev.data && ev.data.conversationId === sessionId) {
+                eventsPath = p;
+                break;
+              }
+            } catch {}
+          }
+        }
+        if (eventsPath !== path.join(COPILOT_SESSION_DIR, sessionId, 'events.jsonl')) break;
+      }
+    } catch {}
+  }
+  if (!fs.existsSync(eventsPath)) return { messages: [] };
+
+  const messages = [];
+  let currentModel = '';
+  let assistantBuffer = '';
+  let assistantTurnId = null;
+  let assistantTurnStart = null;
+
+  const lines = fs.readFileSync(eventsPath, 'utf8').split('\n');
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    let ev;
+    try { ev = JSON.parse(line); } catch { continue; }
+
+    if (ev.type === 'session.model_change' && ev.data) {
+      currentModel = ev.data.newModel || currentModel;
+    }
+    if (ev.type === 'assistant.turn_start') {
+      assistantBuffer = '';
+      assistantTurnId = (ev.id) || (ev.data && ev.data.turnId) || null;
+      assistantTurnStart = ev.timestamp || null;
+    }
+    if (ev.type === 'assistant.message' && ev.data) {
+      const content = ev.data.content || '';
+      if (content) assistantBuffer += content;
+    }
+    if (ev.type === 'assistant.turn_end') {
+      if (assistantBuffer.trim()) {
+        messages.push({
+          role: 'assistant',
+          content: assistantBuffer.trim(),
+          uuid: assistantTurnId,
+          timestamp: assistantTurnStart,
+          model: currentModel || undefined,
+        });
+      }
+      assistantBuffer = '';
+      assistantTurnId = null;
+    }
+    if (ev.type === 'user.message' && ev.data) {
+      const content = ev.data.content || ev.data.transformedContent || '';
+      if (content.trim()) {
+        messages.push({
+          role: 'user',
+          content: content.trim(),
+          uuid: ev.id || null,
+          timestamp: ev.timestamp || null,
+        });
+      }
+    }
+  }
+
+  // Flush incomplete assistant turn (stream cut before turn_end)
+  if (assistantBuffer.trim()) {
+    messages.push({
+      role: 'assistant',
+      content: assistantBuffer.trim(),
+      uuid: assistantTurnId,
+      timestamp: assistantTurnStart,
+      model: currentModel || undefined,
+    });
+  }
+
+  return { messages: messages.slice(0, 200) };
 }
 
 function scanKiroSessions() {
@@ -2222,6 +2470,8 @@ const SESSIONS_CACHE_TTL = 60000; // 60 seconds — hot cache, invalidated by fi
 let _historyMtime = 0;
 let _historySize = 0;
 let _projectsDirMtime = 0;
+let _copilotDirMtime = 0;
+let _copilotJbDirMtime = 0;
 let _projectsSubDirMtimes = {}; // { subDirPath: mtimeMs }
 
 function _sessionsNeedRescan() {
@@ -2243,6 +2493,14 @@ function _sessionsNeedRescan() {
         if (subSt.mtimeMs !== (_projectsSubDirMtimes[subDir] || 0)) return true;
       }
     }
+    if (fs.existsSync(COPILOT_SESSION_DIR)) {
+      const st = fs.statSync(COPILOT_SESSION_DIR);
+      if (st.mtimeMs !== _copilotDirMtime) return true;
+    }
+    if (fs.existsSync(COPILOT_JB_DIR)) {
+      const st = fs.statSync(COPILOT_JB_DIR);
+      if (st.mtimeMs !== _copilotJbDirMtime) return true;
+    }
   } catch {}
   return false;
 }
@@ -2262,6 +2520,12 @@ function _updateScanMarkers() {
         const subDir = path.join(PROJECTS_DIR, entry.name);
         try { _projectsSubDirMtimes[subDir] = fs.statSync(subDir).mtimeMs; } catch {}
       }
+    }
+    if (fs.existsSync(COPILOT_SESSION_DIR)) {
+      _copilotDirMtime = fs.statSync(COPILOT_SESSION_DIR).mtimeMs;
+    }
+    if (fs.existsSync(COPILOT_JB_DIR)) {
+      _copilotJbDirMtime = fs.statSync(COPILOT_JB_DIR).mtimeMs;
     }
   } catch {}
 }
@@ -2488,9 +2752,15 @@ function loadSessions() {
     for (const ks of kiroSessions) {
       sessions[ks.id] = ks;
     }
+} catch {}
+
+// Load Copilot CLI sessions
+  try {
+    const copilotSessions = scanCopilotCliSessions();
+    for (const cs of copilotSessions) sessions[cs.id] = cs;
   } catch {}
 
-  // Load Kilo CLI sessions
+// Load Kilo CLI sessions
   try {
     const kiloSessions = scanKiloCliSessions();
     for (const ks of kiloSessions) {
@@ -2498,7 +2768,7 @@ function loadSessions() {
     }
   } catch {}
 
-  // Load Copilot Chat sessions
+// Load Copilot Chat sessions
   try {
     const copilotSessions = scanCopilotSessions();
     for (const cs of copilotSessions) {
@@ -2506,7 +2776,7 @@ function loadSessions() {
     }
   } catch {}
 
-  // WSL: also load from Windows-side dirs
+// WSL: also load from Windows-side dirs
   for (const extraClaudeDir of EXTRA_CLAUDE_DIRS) {
     try {
       const extraHistory = path.join(extraClaudeDir, 'history.jsonl');
@@ -2729,6 +2999,11 @@ function loadSessionDetail(sessionId, project) {
   // Kiro uses SQLite
   if (found.format === 'kiro') {
     return loadKiroDetail(sessionId);
+  }
+
+// Copilot CLI uses JSONL events
+  if (found.format === 'copilot') {
+    return loadCopilotCliDetail(sessionId);
   }
 
   // Kilo CLI uses SQLite
@@ -3238,34 +3513,34 @@ function findSessionFile(sessionId, project) {
       if (parseInt(check) > 0) {
         return { file: KIRO_DB, format: 'kiro', sessionId: sessionId };
       }
-    } catch {}
+} catch {}
   }
 
-  // Try Kilo CLI (SQLite)
-  if (fs.existsSync(KILO_DB) && sessionId.startsWith('ses_')) {
-    try {
-      const check = execFileSync('sqlite3', [
-        KILO_DB,
-        `SELECT COUNT(*) FROM session WHERE id = '${sessionId.replace(/'/g, "''")}';`
-      ], { encoding: 'utf8', timeout: 3000, windowsHide: true }).trim();
-      if (parseInt(check) > 0) {
-        return { file: KILO_DB, format: 'kilo', sessionId: sessionId };
-      }
-    } catch {}
+  // Try Copilot CLI (VS Code session dir)
+  const copilotEventsPath = path.join(COPILOT_SESSION_DIR, sessionId, 'events.jsonl');
+  if (fs.existsSync(copilotEventsPath)) {
+    return { file: copilotEventsPath, format: 'copilot', sessionId: sessionId };
   }
 
-  // Try Copilot Chat (file-based, prefixed IDs)
-  if (sessionId.startsWith('copilot-')) {
-    const baseName = sessionId.replace(/^copilot-/, '');
-    const wsMap = buildCopilotWorkspaceMap();
-    for (const hash of Object.keys(wsMap)) {
-      const { chatDir } = wsMap[hash];
-      for (const ext of ['.json', '.jsonl']) {
-        const candidate = path.join(chatDir, baseName + ext);
-        if (fs.existsSync(candidate)) return { file: candidate, format: 'copilot-chat' };
+  // Try Copilot CLI (JetBrains)
+  try {
+    const jbUuids = fs.readdirSync(COPILOT_JB_DIR);
+    for (const uuid of jbUuids) {
+      const p = path.join(COPILOT_JB_DIR, uuid, 'partition-1.jsonl');
+      if (fs.existsSync(p)) {
+        const text = fs.readFileSync(p, 'utf8');
+        for (const line of text.split('\n')) {
+          if (!line.trim()) continue;
+          try {
+            const ev = JSON.parse(line);
+            if (ev.type === 'partition.created' && ev.data && ev.data.conversationId === sessionId) {
+              return { file: p, format: 'copilot', sessionId: sessionId };
+            }
+          } catch {}
+        }
       }
     }
-  }
+  } catch {}
 
   return null;
 }
@@ -5069,11 +5344,14 @@ module.exports = {
   extractContent,
   isSystemMessage,
   loadOpenCodeDetail,
+  loadCopilotDetail,
   CLAUDE_DIR,
   CODEX_DIR,
   QWEN_DIR,
   OPENCODE_DB,
   KIRO_DB,
+  COPILOT_SESSION_DIR,
+  COPILOT_JB_DIR,
   KILO_DB,
   HISTORY_FILE,
   PROJECTS_DIR,
