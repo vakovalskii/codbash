@@ -1296,6 +1296,10 @@ function scanCopilotCliSessions() {
 }
 
 function loadCopilotCliDetail(sessionId) {
+  // Validate UUID to prevent path traversal
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId)) {
+    return { messages: [] };
+  }
   // Try VS Code session dir first
   let eventsPath = path.join(COPILOT_SESSION_DIR, sessionId, 'events.jsonl');
   if (!fs.existsSync(eventsPath)) {
@@ -2467,6 +2471,7 @@ let _historyMtime = 0;
 let _historySize = 0;
 let _projectsDirMtime = 0;
 let _copilotDirMtime = 0;
+let _copilotJbDirMtime = 0;
 let _projectsSubDirMtimes = {}; // { subDirPath: mtimeMs }
 
 function _sessionsNeedRescan() {
@@ -2492,6 +2497,10 @@ function _sessionsNeedRescan() {
       const st = fs.statSync(COPILOT_SESSION_DIR);
       if (st.mtimeMs !== _copilotDirMtime) return true;
     }
+    if (fs.existsSync(COPILOT_JB_DIR)) {
+      const st = fs.statSync(COPILOT_JB_DIR);
+      if (st.mtimeMs !== _copilotJbDirMtime) return true;
+    }
   } catch {}
   return false;
 }
@@ -2514,6 +2523,9 @@ function _updateScanMarkers() {
     }
     if (fs.existsSync(COPILOT_SESSION_DIR)) {
       _copilotDirMtime = fs.statSync(COPILOT_SESSION_DIR).mtimeMs;
+    }
+    if (fs.existsSync(COPILOT_JB_DIR)) {
+      _copilotJbDirMtime = fs.statSync(COPILOT_JB_DIR).mtimeMs;
     }
   } catch {}
 }
@@ -2991,7 +3003,7 @@ function loadSessionDetail(sessionId, project) {
 
 // Copilot CLI uses JSONL events
   if (found.format === 'copilot') {
-    return loadCopilotDetail(sessionId);
+    return loadCopilotCliDetail(sessionId);
   }
 
   // Kilo CLI uses SQLite
