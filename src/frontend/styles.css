@@ -9,6 +9,7 @@
 /* ── CSS Custom Properties (Dark Theme — Default) ──────────────── */
 
 :root {
+    color-scheme: dark;
     --bg-primary: #1a1d23;
     --bg-secondary: #22262e;
     --bg-card: #2a2e37;
@@ -3116,17 +3117,8 @@ body {
     font-size: 13px;
 }
 
-.sub-add-form select {
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 6px 10px;
-    color: var(--text);
-    font-size: 13px;
-    cursor: pointer;
-}
-.sub-add-form select:first-child { width: 170px; }
-.sub-add-form select:nth-child(2) { width: 150px; }
+#sub-new-service { width: 180px; }
+#sub-new-plan { width: 130px; }
 .sub-add-form input[type="number"] { width: 80px; }
 .sub-add-form input[type="date"] { width: 140px; }
 

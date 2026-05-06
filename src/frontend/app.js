@@ -248,18 +248,17 @@ var SERVICE_PLANS = {
 
 function onSubServiceChange() {
   var serviceEl = document.getElementById('sub-new-service');
-  var planEl = document.getElementById('sub-new-plan');
+  var planOpts = document.getElementById('sub-plan-opts');
+  var service = serviceEl ? serviceEl.value.trim() : '';
+  if (!planOpts) return;
+  planOpts.innerHTML = '';
   var paidEl = document.getElementById('sub-new-paid');
-  var service = serviceEl ? serviceEl.value : '';
-  if (!planEl) return;
-  planEl.innerHTML = '<option value="">— select plan —</option>';
-  paidEl.value = '';
+  if (paidEl) paidEl.value = '';
   if (service && SERVICE_PLANS[service]) {
     SERVICE_PLANS[service].plans.forEach(function(p) {
       var opt = document.createElement('option');
       opt.value = p.name;
-      opt.textContent = p.name + ' ($' + p.price + '/mo)';
-      planEl.appendChild(opt);
+      planOpts.appendChild(opt);
     });
   }
 }
@@ -268,10 +267,11 @@ function onSubPlanChange() {
   var serviceEl = document.getElementById('sub-new-service');
   var planEl = document.getElementById('sub-new-plan');
   var paidEl = document.getElementById('sub-new-paid');
-  var service = serviceEl ? serviceEl.value : '';
-  var planName = planEl ? planEl.value : '';
+  var service = serviceEl ? serviceEl.value.trim() : '';
+  var planName = planEl ? planEl.value.trim() : '';
   if (service && planName && SERVICE_PLANS[service]) {
-    var found = SERVICE_PLANS[service].plans.find(function(p) { return p.name === planName; });
+    var planLower = planName.toLowerCase();
+    var found = SERVICE_PLANS[service].plans.find(function(p) { return p.name.toLowerCase() === planLower; });
     if (found && paidEl) paidEl.value = found.price;
   }
 }
@@ -293,6 +293,8 @@ function addSubEntry() {
   var paid = parseFloat(document.getElementById('sub-new-paid').value) || 0;
   var from = (document.getElementById('sub-new-from').value || '').trim();
   if (!paid) return;
+  _analyticsHtmlCache = null;
+  _analyticsCacheUrl = null;
   var cfg = getSubscriptionConfig();
   cfg.entries.push({ service: service || '', plan: plan || 'Subscription', paid: paid, from: from });
   cfg.entries.sort(function(a,b){return (a.from||'').localeCompare(b.from||'');});
@@ -300,6 +302,8 @@ function addSubEntry() {
   render();
 }
 function removeSubEntry(idx) {
+  _analyticsHtmlCache = null;
+  _analyticsCacheUrl = null;
   var cfg = getSubscriptionConfig();
   cfg.entries.splice(idx, 1);
   saveSubscriptionConfig(cfg);
