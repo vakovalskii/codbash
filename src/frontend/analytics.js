@@ -216,7 +216,8 @@ async function renderAnalytics(container) {
       var multiplier = data.totalCost / totalPaid;
       var savingsPositive = savings > 0;
       var breakdown = subEntries.map(function(e) {
-        return escHtml(e.plan || 'Sub') + ' $' + parseFloat(e.paid).toFixed(0);
+        var prefix = e.service ? escHtml(e.service) + ' ' : '';
+        return prefix + escHtml(e.plan || 'Sub') + ' $' + parseFloat(e.paid).toFixed(0);
       }).join(' + ');
       html += '<div class="sub-comparison">';
       html += '<div class="sub-card sub-paid"><span class="sub-val">$' + totalPaid.toFixed(2) + '</span><span class="sub-label">Paid (' + breakdown + ')</span></div>';
@@ -240,7 +241,7 @@ async function renderAnalytics(container) {
         if (serviceLabel) html += '<span class="sub-entry-service">' + escHtml(serviceLabel) + '</span>';
         html += '<span class="sub-entry-plan">' + escHtml(e.plan || '\u2014') + '</span>';
         html += '<span class="sub-entry-paid">$' + parseFloat(e.paid || 0).toFixed(2) + '/mo</span>';
-        html += '<span class="sub-entry-from">' + (e.from ? 'from ' + e.from : 'no date') + '</span>';
+        html += '<span class="sub-entry-from">' + (e.from ? 'from ' + escHtml(e.from) : 'no date') + '</span>';
         html += '<button class="sub-entry-remove" onclick="removeSubEntry(' + i + ')" title="Remove">\u00d7</button>';
         html += '</div>';
       });
@@ -248,15 +249,16 @@ async function renderAnalytics(container) {
     html += '</div>';
 
     // Add form
-    var serviceOptions = '<option value="">— service —</option>' +
-      Object.keys(SERVICE_PLANS).map(function(k) {
-        return '<option value="' + k + '">' + SERVICE_PLANS[k].label + '</option>';
-      }).join('');
+    var serviceDatalistOpts = Object.keys(SERVICE_PLANS).map(function(k) {
+      return '<option value="' + escHtml(k) + '">';
+    }).join('');
     html += '<div class="sub-add-form">';
-    html += '<select id="sub-new-service" onchange="onSubServiceChange()">' + serviceOptions + '</select>';
-    html += '<select id="sub-new-plan" onchange="onSubPlanChange()"><option value="">— plan —</option></select>';
-    html += '<input id="sub-new-paid" type="number" min="0" step="0.01" placeholder="$/mo" />';
-    html += '<input id="sub-new-from" type="date" title="Start date of this billing period" />';
+    html += '<datalist id="sub-service-opts">' + serviceDatalistOpts + '</datalist>';
+    html += '<datalist id="sub-plan-opts"></datalist>';
+    html += '<input id="sub-new-service" list="sub-service-opts" placeholder="Service" aria-label="Service name" oninput="onSubServiceChange()" autocomplete="off" />';
+    html += '<input id="sub-new-plan" list="sub-plan-opts" placeholder="Plan" aria-label="Plan name" oninput="onSubPlanChange()" autocomplete="off" />';
+    html += '<input id="sub-new-paid" type="number" min="0" step="0.01" placeholder="$/mo" aria-label="Monthly price in dollars" />';
+    html += '<input id="sub-new-from" type="date" title="Start date of this billing period" aria-label="Subscription start date" />';
     html += '<button onclick="addSubEntry()">+ Add period</button>';
     html += '</div>';
     html += '</div>';
