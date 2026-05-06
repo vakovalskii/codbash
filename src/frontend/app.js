@@ -113,7 +113,8 @@ var TOOL_META = {
   opencode: { label: 'OpenCode', shortLabel: 'opencode', color: '#c084fc' },
   kiro: { label: 'Kiro', shortLabel: 'kiro', color: '#fb923c' },
   kilo: { label: 'Kilo CLI', shortLabel: 'kilo', color: '#34d399' },
-  'copilot-chat': { label: 'Copilot Chat', shortLabel: 'copilot', color: '#8b6fc0' }
+  'copilot-chat': { label: 'Copilot Chat', shortLabel: 'copilot', color: '#8b6fc0' },
+  copilot: { label: 'Copilot CLI', shortLabel: 'copilot', color: '#7c3aed' }
 };
 
 function getToolLabel(tool, shortLabel) {
@@ -1994,6 +1995,12 @@ var AGENT_INSTALL = {
     name: 'Copilot Chat (VS Code)',
     cmd: null,
     alt: null,
+    url: 'https://github.com/features/copilot',
+  },
+  copilot: {
+    name: 'Copilot CLI',
+    cmd: 'npm i -g @github/copilot',
+    alt: 'brew install github/tap/copilot',
     url: 'https://github.com/features/copilot',
   },
 };
