@@ -3513,10 +3513,26 @@ function findSessionFile(sessionId, project) {
       if (parseInt(check) > 0) {
         return { file: KIRO_DB, format: 'kiro', sessionId: sessionId };
       }
-} catch {}
+    } catch {}
+  }
+
+  // Try Kilo CLI (SQLite)
+  if (fs.existsSync(KILO_DB) && sessionId.startsWith('ses_')) {
+    try {
+      const check = execFileSync('sqlite3', [
+        KILO_DB,
+        `SELECT COUNT(*) FROM session WHERE id = '${sessionId.replace(/'/g, "''")}';`
+      ], { encoding: 'utf8', timeout: 3000, windowsHide: true }).trim();
+      if (parseInt(check) > 0) {
+        return { file: KILO_DB, format: 'kilo', sessionId: sessionId };
+      }
+    } catch {}
   }
 
   // Try Copilot CLI (VS Code session dir)
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId)) {
+    return null;
+  }
   const copilotEventsPath = path.join(COPILOT_SESSION_DIR, sessionId, 'events.jsonl');
   if (fs.existsSync(copilotEventsPath)) {
     return { file: copilotEventsPath, format: 'copilot', sessionId: sessionId };
