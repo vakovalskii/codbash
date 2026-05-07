@@ -196,6 +196,9 @@ function setView(view) {
   } else if (view === 'copilot-chat-only') {
     toolFilter = toolFilter === 'copilot-chat' ? null : 'copilot-chat';
     currentView = 'sessions';
+  } else if (view === 'copilot-only') {
+    toolFilter = toolFilter === 'copilot' ? null : 'copilot';
+    currentView = 'sessions';
   } else if (view === 'opencode-only') {
     toolFilter = toolFilter === 'opencode' ? null : 'opencode';
     currentView = 'sessions';
