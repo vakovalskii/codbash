@@ -192,11 +192,29 @@ function termLog(tag, msg) {
   console.log(`  ${color}${ts} [${tag}]\x1b[0m ${msg}`);
 }
 
-function openInTerminal(sessionId, tool, flags, projectDir, terminalId) {
+function openInTerminal(sessionId, tool, flags, projectDir, terminalId, mode) {
   const skipPerms = flags.includes('skip-permissions');
+  const fresh = mode === 'fresh';
   let cmd;
 
-  if (tool === 'codex') {
+  if (fresh) {
+    // Start a brand new session in projectDir (no --resume). We map known
+    // tools to their CLI entry point; unrecognised tools fall back to claude
+    // so a misconfigured UI doesn't silently open the wrong agent.
+    switch (tool) {
+      case 'codex': cmd = 'codex'; break;
+      case 'qwen': cmd = 'qwen'; break;
+      case 'kilo': cmd = 'kilo'; break;
+      case 'kiro': cmd = 'kiro-cli'; break;
+      case 'opencode': cmd = 'opencode'; break;
+      case 'cursor': cmd = 'cursor-agent'; break;
+      case 'copilot':
+      case 'copilot-chat': cmd = 'gh copilot suggest'; break;
+      default:
+        cmd = 'claude';
+        if (skipPerms) cmd += ' --dangerously-skip-permissions';
+    }
+  } else if (tool === 'codex') {
     cmd = `codex resume ${sessionId}`;
   } else if (tool === 'qwen') {
     cmd = `qwen -r ${sessionId}`;
@@ -291,8 +309,14 @@ function openInTerminal(sessionId, tool, flags, projectDir, terminalId) {
       }
     }
   } else if (platform === 'linux' && isWSL()) {
-    assertSafeSessionId(sessionId);
-    const tag = sessionTag(sessionId);
+    let effectiveSessionId = sessionId;
+    if (fresh) {
+      // No session yet — generate a placeholder so window tagging still works.
+      effectiveSessionId = 'fresh-' + Date.now().toString(36);
+    } else {
+      assertSafeSessionId(sessionId);
+    }
+    const tag = sessionTag(effectiveSessionId);
     const tid = terminalId || 'wsl-windows-terminal';
     const winSide = isWindowsSidePath(projectDir);
     termLog('TERM', `WSL launch: winSide=${winSide} terminal=${tid}`);

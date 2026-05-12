@@ -9,6 +9,7 @@ const { convertSession } = require('./convert');
 const { generateHandoff } = require('./handoff');
 const { CHANGELOG } = require('./changelog');
 const { getHTML } = require('./html');
+const projectsApi = require('./projects');
 
 // ── Logging ──────────────────────────────────
 const LOG_VERBOSE = process.env.CODEDASH_LOG !== '0';
@@ -28,7 +29,20 @@ function log(tag, msg, data) {
 
 function startServer(host, port, openBrowser = true) {
   const browserUrl = getBrowserUrl(host, port);
+  // DNS rebinding defense: only enforce when bound to a loopback address.
+  // Users who deliberately bind to a LAN address (e.g. for cross-device
+  // access) skip this check so they can hit the server by IP/hostname.
+  const isLoopbackBind = host === '127.0.0.1' || host === 'localhost' || host === '::1';
+  const allowedHosts = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
   const server = http.createServer((req, res) => {
+    if (isLoopbackBind) {
+      const hostName = String(req.headers.host || '').toLowerCase().split(':')[0];
+      if (hostName && !allowedHosts.has(hostName)) {
+        res.writeHead(403, { 'Content-Type': 'text/plain' });
+        res.end('Forbidden: host header must be localhost');
+        return;
+      }
+    }
     // req.url is usually relative, so this base is only for URL parsing.
     // Keep it stable instead of reusing the bind host, which may be a wildcard listen address.
     const parsed = new URL(req.url, `http://localhost:${port}`);
@@ -109,12 +123,24 @@ function startServer(host, port, openBrowser = true) {
     else if (req.method === 'POST' && pathname === '/api/launch') {
       readBody(req, body => {
         try {
-          const { sessionId, tool, flags, project, terminal } = JSON.parse(body);
-          if (!/^[A-Za-z0-9._-]{1,128}$/.test(String(sessionId || ''))) {
+          const { sessionId, tool, flags, project, terminal, mode } = JSON.parse(body);
+          const fresh = mode === 'fresh';
+          if (!fresh && !/^[A-Za-z0-9._-]{1,128}$/.test(String(sessionId || ''))) {
             throw new Error('invalid sessionId');
           }
-          log('LAUNCH', `session=${sessionId} tool=${tool || 'claude'} terminal=${terminal || 'default'} project=${project || '(none)'} flags=${(flags || []).join(',') || '(none)'}`);
-          openInTerminal(sessionId, tool || 'claude', flags || [], project || '', terminal || '');
+          if (fresh && !project) {
+            throw new Error('project path required for fresh session');
+          }
+          // The project path flows into a shell command string in terminals.js
+          // (`cd "..." && claude ...`). Even though JSON.stringify wraps the
+          // value in double quotes, bash still expands $() and backticks
+          // inside double-quoted strings. We refuse anything other than a
+          // plain on-disk directory path.
+          if (project && !projectsApi.isSafeLaunchPath(project)) {
+            throw new Error('invalid or unsafe project path');
+          }
+          log('LAUNCH', `mode=${fresh ? 'fresh' : 'resume'} session=${sessionId || '(none)'} tool=${tool || 'claude'} terminal=${terminal || 'default'} project=${project || '(none)'} flags=${(flags || []).join(',') || '(none)'}`);
+          openInTerminal(fresh ? '' : sessionId, tool || 'claude', flags || [], project || '', terminal || '', fresh ? 'fresh' : 'resume');
           log('LAUNCH', 'ok');
           json(res, { ok: true });
         } catch (e) {
@@ -394,12 +420,182 @@ function startServer(host, port, openBrowser = true) {
 
     else if (req.method === 'GET' && pathname === '/api/github/profile') {
       const profile = loadGitHubProfile();
-      json(res, profile || { authenticated: false });
+      if (!profile) return json(res, { authenticated: false });
+      // Never vend raw tokens to the browser. The frontend only needs to know
+      // *whether* the user is connected and what the display fields are.
+      const { token: _t, repoToken: _rt, ...safe } = profile;
+      json(res, safe);
     }
 
     else if (req.method === 'POST' && pathname === '/api/github/logout') {
       saveGitHubProfile(null);
       json(res, { ok: true });
+    }
+
+    // ── Repo-scope auth: separate token for /user/repos enumeration ──
+    else if (req.method === 'POST' && pathname === '/api/github/repo-scope/device-code') {
+      readBody(req, body => {
+        let payload = {};
+        try { payload = body ? JSON.parse(body) : {}; } catch {}
+        githubRepoScopeDeviceCode(!!payload.publicOnly)
+          .then(data => json(res, data))
+          .catch(e => json(res, { error: e.message }, 400));
+      });
+    }
+
+    else if (req.method === 'POST' && pathname === '/api/github/repo-scope/poll-token') {
+      readBody(req, body => {
+        try {
+          const { device_code } = JSON.parse(body);
+          if (!device_code) throw new Error('device_code required');
+          githubRepoScopePollToken(device_code)
+            .then(data => json(res, data))
+            .catch(e => json(res, { error: e.message }, 400));
+        } catch (e) {
+          json(res, { error: e.message }, 400);
+        }
+      });
+    }
+
+    else if (req.method === 'GET' && pathname === '/api/github/repo-scope/status') {
+      const profile = loadGitHubProfile();
+      if (!profile || !profile.repoToken) {
+        return json(res, { connected: false });
+      }
+      json(res, {
+        connected: true,
+        scope: profile.repoTokenScope || 'read:user repo',
+        connectedAt: profile.repoTokenConnectedAt || null,
+      });
+    }
+
+    else if (req.method === 'POST' && pathname === '/api/github/repo-scope/disconnect') {
+      try {
+        updateGitHubProfile({ repoToken: null, repoTokenScope: null, repoTokenConnectedAt: null });
+        log('AUTH', 'Repo-scope GitHub token cleared locally (GitHub authorization must be revoked manually)');
+        // Provide the deep link so the UI can nudge the user to also revoke
+        // the OAuth authorization on github.com — clearing locally does not
+        // invalidate the token at GitHub.
+        json(res, {
+          ok: true,
+          revokeUrl: 'https://github.com/settings/connections/applications/' + GITHUB_CLIENT_ID,
+        });
+      } catch (e) {
+        json(res, { ok: false, error: e.message }, 500);
+      }
+    }
+
+    // ── GitHub repos (for project launcher) ────────────────────
+    // GET /api/github/repos?type=owned|contributing
+    // Requires the repo-scope token (separate from the leaderboard token) —
+    // the `read:user` scope alone is not enough for /user/repos to return any
+    // entries.
+    else if (req.method === 'GET' && pathname === '/api/github/repos') {
+      const profile = loadGitHubProfile();
+      if (!profile || !profile.token) {
+        return json(res, { error: 'GitHub not connected', needsRepoScope: true }, 401);
+      }
+      if (!profile.repoToken) {
+        return json(res, { error: 'Repo access not granted yet', needsRepoScope: true }, 401);
+      }
+      const type = parsed.searchParams.get('type') || 'owned';
+      projectsApi.listGithubRepos(profile.repoToken, type)
+        .then(repos => json(res, repos))
+        .catch(e => {
+          const status = /401|unauthorized|bad credentials/i.test(e.message) ? 401 : 500;
+          log('ERROR', `github/repos failed: ${e.message}`);
+          json(res, { error: e.message, needsRepoScope: status === 401 }, status);
+        });
+    }
+
+    // ── Manual / cloned projects registry ──────────────────────
+    else if (req.method === 'GET' && pathname === '/api/projects/manual') {
+      // Enrich each with current git info so the UI can render branch/last commit.
+      const list = projectsApi.loadProjects().map(p => {
+        const info = getProjectGitInfo(p.path) || null;
+        return { ...p, git: info };
+      });
+      json(res, list);
+    }
+
+    else if (req.method === 'POST' && pathname === '/api/projects/manual') {
+      readBody(req, body => {
+        let payload;
+        try { payload = JSON.parse(body || '{}'); }
+        catch (e) { return json(res, { ok: false, error: 'invalid json' }, 400); }
+        Promise.resolve()
+          .then(() => projectsApi.addProject({
+            name: payload.name,
+            path: payload.path,
+            source: payload.source,
+            remoteUrl: payload.remoteUrl,
+            defaultBranch: payload.defaultBranch,
+          }))
+          .then(project => {
+            log('PROJECT', `registered ${project.name} (${project.path})`);
+            json(res, { ok: true, project });
+          })
+          .catch(e => {
+            log('ERROR', `register project failed: ${e.message}`);
+            json(res, { ok: false, error: e.message }, 400);
+          });
+      });
+    }
+
+    else if (req.method === 'DELETE' && pathname.startsWith('/api/projects/manual/')) {
+      const id = pathname.split('/').pop();
+      if (!/^[a-f0-9]{16}$/.test(String(id || ''))) {
+        return json(res, { ok: false, error: 'invalid id' }, 400);
+      }
+      projectsApi.removeProject(id)
+        .then(removed => json(res, { ok: removed }))
+        .catch(e => json(res, { ok: false, error: e.message }, 500));
+    }
+
+    // POST /api/projects/clone — { fullName, cloneUrl, sshUrl } → clone into ~/code/<repo> + register
+    else if (req.method === 'POST' && pathname === '/api/projects/clone') {
+      readBody(req, body => {
+        try {
+          const { fullName, cloneUrl, sshUrl, defaultBranch } = JSON.parse(body || '{}');
+          if (!fullName || !cloneUrl) throw new Error('fullName and cloneUrl required');
+          // Validate fullName shape (owner/repo) and reject anything weird so
+          // it cannot poison log output or downstream string handling.
+          if (!/^[A-Za-z0-9._-]{1,100}\/[A-Za-z0-9._-]{1,100}$/.test(String(fullName))) {
+            throw new Error('invalid fullName (must be owner/repo)');
+          }
+          // Cross-check: the cloneUrl must point to the same owner/repo so a
+          // crafted request can't show "victim/legit" in the UI while cloning
+          // attacker-controlled code.
+          const urlMatch = String(cloneUrl).match(/^https:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/i);
+          if (!urlMatch) throw new Error('cloneUrl must be a github.com https URL');
+          const urlFullName = urlMatch[1] + '/' + urlMatch[2].replace(/\.git$/, '');
+          if (urlFullName.toLowerCase() !== String(fullName).toLowerCase()) {
+            throw new Error('fullName does not match cloneUrl');
+          }
+          const repoName = urlMatch[2].replace(/\.git$/, '');
+          if (!projectsApi.isSafeRepoName(repoName)) throw new Error('invalid repo name');
+          const destDir = projectsApi.suggestCloneDir(repoName);
+          log('CLONE', `start ${urlFullName} → ${destDir}`);
+          projectsApi.cloneRepo(cloneUrl, destDir)
+            .then(result => projectsApi.addProject({
+              name: repoName,
+              path: result.path,
+              source: 'github-clone',
+              remoteUrl: cloneUrl,
+              defaultBranch: defaultBranch || '',
+            }).then(project => ({ project, result })))
+            .then(({ project, result }) => {
+              log('CLONE', `done ${urlFullName} (${result.alreadyExisted ? 'reused' : 'cloned'})`);
+              json(res, { ok: true, project, alreadyExisted: result.alreadyExisted });
+            })
+            .catch(e => {
+              log('ERROR', `clone failed: ${e.message}`);
+              json(res, { ok: false, error: e.message, sshFallback: sshUrl || null }, 400);
+            });
+        } catch (e) {
+          json(res, { ok: false, error: e.message }, 400);
+        }
+      });
     }
 
     // ── Cloud Sync Proxy ─────────────────────
@@ -885,6 +1081,9 @@ function githubRequest(hostname, reqPath, method, body) {
 }
 
 async function githubDeviceCode() {
+  // Keep scope minimal: the token is forwarded to leaderboard.neuraldeep.ru by
+  // syncLeaderboard, so broader scopes would leak write access to a 3rd party.
+  // Use the separate repo-scope flow below if you need /user/repos coverage.
   const data = await githubRequest('github.com', '/login/device/code', 'POST',
     JSON.stringify({ client_id: GITHUB_CLIENT_ID, scope: 'read:user' }));
   if (data.error) throw new Error(data.error_description || data.error);
@@ -925,10 +1124,95 @@ async function githubPollToken(deviceCode) {
   return { status: 'ok', profile: { username: profile.username, avatar: profile.avatar, name: profile.name, url: profile.url } };
 }
 
+// ── Repo-scope auth (separate from leaderboard token) ──────────
+//
+// The base /login/device/code flow gets only `read:user` so the token is safe
+// to forward to leaderboard.neuraldeep.ru. To enumerate the user's repos for
+// the project launcher we run a second, scope-tagged device flow and store
+// the resulting token in `repoToken` — kept strictly away from leaderboard
+// sync. The user must explicitly opt in via the Add Project modal.
+
+// In-memory map of pending device codes → requested scope. Bounded by GitHub's
+// 15 min device-code TTL plus a small slack. Survives the lifetime of the
+// process only — a restart invalidates all in-flight codes, which is fine.
+const _pendingRepoScopeCodes = new Map();
+const PENDING_CODE_TTL = 16 * 60 * 1000;
+
+function _rememberPendingCode(deviceCode, scope) {
+  _pendingRepoScopeCodes.set(deviceCode, { scope, exp: Date.now() + PENDING_CODE_TTL });
+  // Cheap GC: prune expired entries opportunistically.
+  for (const [code, meta] of _pendingRepoScopeCodes) {
+    if (meta.exp < Date.now()) _pendingRepoScopeCodes.delete(code);
+  }
+}
+
+async function githubRepoScopeDeviceCode(publicOnly) {
+  const scope = publicOnly ? 'read:user public_repo' : 'read:user repo';
+  const data = await githubRequest('github.com', '/login/device/code', 'POST',
+    JSON.stringify({ client_id: GITHUB_CLIENT_ID, scope }));
+  if (data.error) throw new Error(data.error_description || data.error);
+  // Don't log the user_code itself — anyone with log access could authorize
+  // the device flow against the user's account before they enter it.
+  log('AUTH', `Repo-scope device code issued (scope=${scope})`);
+  _rememberPendingCode(data.device_code, scope);
+  return {
+    user_code: data.user_code,
+    verification_uri: data.verification_uri,
+    device_code: data.device_code,
+    interval: data.interval || 5,
+    expires_in: data.expires_in,
+    scope,
+  };
+}
+
+async function githubRepoScopePollToken(deviceCode) {
+  const data = await githubRequest('github.com', '/login/oauth/access_token', 'POST',
+    JSON.stringify({ client_id: GITHUB_CLIENT_ID, device_code: deviceCode, grant_type: 'urn:ietf:params:oauth:grant-type:device_code' }));
+  if (data.error === 'authorization_pending') return { status: 'pending' };
+  if (data.error === 'slow_down') return { status: 'slow_down' };
+  if (data.error === 'expired_token') {
+    _pendingRepoScopeCodes.delete(deviceCode);
+    return { status: 'expired' };
+  }
+  if (data.error) throw new Error(data.error_description || data.error);
+  if (!data.access_token) throw new Error('No access token received');
+
+  // Prefer the scope returned by GitHub on the token itself; fall back to the
+  // scope we recorded when we issued the device code. We deliberately do not
+  // accept a client-supplied scope to keep the stored label trustworthy.
+  const requestedScope = (_pendingRepoScopeCodes.get(deviceCode) || {}).scope;
+  const grantedScope = data.scope
+    ? String(data.scope).split(',').map(s => s.trim()).join(' ')
+    : (requestedScope || 'read:user repo');
+  _pendingRepoScopeCodes.delete(deviceCode);
+
+  updateGitHubProfile({
+    repoToken: data.access_token,
+    repoTokenScope: grantedScope,
+    repoTokenConnectedAt: new Date().toISOString(),
+  });
+  log('AUTH', `Repo-scope GitHub token saved (scope=${grantedScope})`);
+  return { status: 'ok', scope: grantedScope };
+}
+
 function loadGitHubProfile() {
   try {
     const data = JSON.parse(fs.readFileSync(GITHUB_PROFILE_FILE, 'utf8'));
-    if (data.authenticated) return { authenticated: true, username: data.username, avatar: data.avatar, name: data.name, url: data.url, token: data.token };
+    if (data.authenticated) return {
+      authenticated: true,
+      username: data.username,
+      avatar: data.avatar,
+      name: data.name,
+      url: data.url,
+      token: data.token,
+      connectedAt: data.connectedAt,
+      // Optional separate token with broader scope, used only by the project
+      // launcher. Kept distinct from `token` so the leaderboard sync never
+      // sees a write-capable credential.
+      repoToken: data.repoToken || null,
+      repoTokenScope: data.repoTokenScope || null,
+      repoTokenConnectedAt: data.repoTokenConnectedAt || null,
+    };
   } catch {}
   return null;
 }
@@ -937,10 +1221,38 @@ function saveGitHubProfile(profile) {
   const dir = path.dirname(GITHUB_PROFILE_FILE);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   if (profile) {
-    fs.writeFileSync(GITHUB_PROFILE_FILE, JSON.stringify(profile, null, 2));
+    // Atomic write + restrictive perms (owner read/write only). The token file
+    // would otherwise be world-readable on shared boxes/CI runners.
+    const tmp = GITHUB_PROFILE_FILE + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(profile, null, 2), { mode: 0o600 });
+    fs.renameSync(tmp, GITHUB_PROFILE_FILE);
   } else {
     try { fs.unlinkSync(GITHUB_PROFILE_FILE); } catch {}
   }
+}
+
+// Merge partial fields into the existing profile so endpoints that touch
+// just one slice (e.g. repoToken) don't have to rebuild the whole object.
+// Bails on parse error so a corrupt file can't silently erase the user's
+// existing leaderboard token. Setting a field to null *removes* it from the
+// stored JSON instead of persisting an explicit null.
+function updateGitHubProfile(partial) {
+  let current;
+  if (fs.existsSync(GITHUB_PROFILE_FILE)) {
+    try {
+      current = JSON.parse(fs.readFileSync(GITHUB_PROFILE_FILE, 'utf8')) || {};
+    } catch (e) {
+      throw new Error('github profile file is corrupt; refusing to overwrite');
+    }
+  } else {
+    current = {};
+  }
+  const next = { ...current, ...partial };
+  for (const key of Object.keys(partial)) {
+    if (partial[key] === null) delete next[key];
+  }
+  saveGitHubProfile(next);
+  return next;
 }
 
 // ── Leaderboard Sync ──────────────────────
@@ -966,6 +1278,8 @@ async function syncLeaderboard() {
     avatar: profile.avatar,
     name: profile.name,
     deviceId: anon.id || require('crypto').randomUUID(),
+    // SECURITY: leaderboard receives only the read:user-scoped token. Never
+    // forward `repoToken` here — that token has repo write access.
     token: profile.token, // for server-side GitHub verification
     version: pkg.version,
     integrity: integrity,

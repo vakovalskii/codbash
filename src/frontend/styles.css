@@ -737,6 +737,104 @@ body {
 .btn-delete { background: var(--accent-red); color: #fff; border-color: var(--accent-red); }
 .btn-delete:hover { opacity: 0.85; }
 
+/* ── Add Project modal ────────────────────────────────────────── */
+.add-project-box { max-width: 640px; width: 92%; }
+.ap-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+.ap-tab {
+    padding: 8px 14px;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+}
+.ap-tab.active { color: var(--text-primary); border-bottom-color: #3b82f6; }
+.ap-tab:hover { color: var(--text-primary); }
+.ap-body { min-height: 240px; }
+.ap-pane label { display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; }
+.ap-pane input[type="text"] {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-card);
+    color: var(--text-primary);
+    font-size: 13px;
+}
+.ap-hint { font-size: 11px; color: var(--text-muted); margin-top: 6px; }
+.ap-error { font-size: 12px; color: var(--accent-red); margin-top: 8px; min-height: 18px; }
+.ap-filter { margin-bottom: 8px; }
+.ap-repos { max-height: 360px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; }
+.ap-loading { padding: 16px; text-align: center; color: var(--text-muted); font-size: 13px; }
+.ap-repo {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    gap: 12px;
+}
+.ap-repo:last-child { border-bottom: none; }
+.ap-repo-info { min-width: 0; flex: 1; }
+.ap-repo-name { font-size: 13px; font-weight: 500; color: var(--text-primary); }
+.ap-repo-meta { font-size: 11px; color: var(--text-muted); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ap-repo-clone {
+    padding: 6px 12px;
+    background: #3b82f6;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+.ap-repo-clone:hover { opacity: 0.9; }
+.ap-repo-clone:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.ap-connect { padding: 16px; }
+.ap-connect-title { font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 6px; }
+.ap-connect-body { font-size: 12px; color: var(--text-secondary); line-height: 1.5; margin-bottom: 10px; }
+.ap-connect-toggle { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); cursor: pointer; }
+.ap-connect-status { margin-top: 12px; font-size: 12px; color: var(--text-secondary); }
+.ap-device-code { padding: 12px; background: var(--bg-card); border-radius: 6px; line-height: 1.7; }
+.ap-device-code a { color: #3b82f6; }
+.ap-code { font-family: monospace; font-size: 14px; padding: 2px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; letter-spacing: 2px; }
+.ap-copy { padding: 2px 8px; font-size: 11px; background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; }
+.ap-copy:hover { background: var(--bg-card-hover); }
+.ap-poll-status { margin-top: 8px; color: var(--text-muted); font-size: 11px; }
+.ap-disconnect { font-size: 11px; color: var(--text-muted); cursor: pointer; text-decoration: underline; background: none; border: none; padding: 0; margin-left: auto; }
+.ap-disconnect:hover { color: var(--accent-red); }
+
+/* New / Last session buttons in the project group header */
+.git-project-launch-btn {
+    padding: 4px 10px;
+    background: var(--bg-card);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 11px;
+    cursor: pointer;
+    margin-left: 6px;
+}
+.git-project-launch-btn:hover { background: var(--bg-card-hover); }
+.git-project-launch-btn.primary { background: #3b82f6; color: #fff; border-color: #3b82f6; }
+.git-project-launch-btn.primary:hover { opacity: 0.9; }
+
+.git-project-source-tag {
+    display: inline-block;
+    padding: 1px 6px;
+    background: var(--bg-card);
+    color: var(--text-muted);
+    border-radius: 3px;
+    font-size: 10px;
+    margin-left: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
 /* ── Detail Panel ──────────────────────────────────────────────── */
 
 .detail-panel {
