@@ -2253,6 +2253,8 @@ function openAddProject() {
 function closeAddProject() {
   var overlay = document.getElementById('addProjectOverlay');
   if (overlay) overlay.classList.remove('open');
+  // Stop any in-flight device-code polling when the user dismisses the modal.
+  if (_repoScopePolling) { clearInterval(_repoScopePolling); _repoScopePolling = null; }
 }
 
 function addProjectSwitchTab(tab) {
@@ -2306,7 +2308,12 @@ async function loadGithubRepos(apiType) {
   try {
     var resp = await fetch('/api/github/repos?type=' + apiType);
     if (resp.status === 401) {
-      container.innerHTML = '<div class="ap-loading">GitHub not connected. Open <strong>Cloud</strong> view → connect GitHub, then return here.</div>';
+      var data401 = await resp.json().catch(function() { return {}; });
+      if (data401.needsRepoScope) {
+        renderRepoScopeConnectPanel(containerId, apiType);
+      } else {
+        container.innerHTML = '<div class="ap-loading">GitHub not connected. Open <strong>Cloud</strong> view → connect GitHub, then return here.</div>';
+      }
       return;
     }
     var data = await resp.json();
@@ -2318,6 +2325,121 @@ async function loadGithubRepos(apiType) {
     renderRepoList(apiType);
   } catch (e) {
     container.innerHTML = '<div class="ap-loading">Failed to load: ' + escHtml(e.message) + '</div>';
+  }
+}
+
+// ── Repo-scope connect panel + device-code polling ──────────────
+
+var _repoScopePolling = null;
+
+function renderRepoScopeConnectPanel(containerId, apiType) {
+  var container = document.getElementById(containerId);
+  if (!container) return;
+  container.innerHTML = ''
+    + '<div class="ap-connect">'
+    + '  <div class="ap-connect-title">Repo access not granted yet</div>'
+    + '  <div class="ap-connect-body">'
+    + '    To list your repositories the dashboard needs a separate GitHub authorization. The new token is stored locally and is <strong>never</strong> sent to the leaderboard — it is used only here in the project launcher.'
+    + '  </div>'
+    + '  <label class="ap-connect-toggle">'
+    + '    <input type="checkbox" id="apPublicOnlyToggle" /> <span>Public repos only (skips private/collaborator listings)</span>'
+    + '  </label>'
+    + '  <div style="display:flex;gap:8px;align-items:center;margin-top:10px">'
+    + '    <button class="ap-repo-clone" onclick="startRepoScopeConnect(\'' + apiType + '\')">Connect GitHub for repo access</button>'
+    + '  </div>'
+    + '  <div class="ap-connect-status" id="apConnectStatus"></div>'
+    + '</div>';
+}
+
+async function startRepoScopeConnect(apiType) {
+  var status = document.getElementById('apConnectStatus');
+  if (status) status.textContent = 'Requesting device code…';
+  var publicOnly = !!(document.getElementById('apPublicOnlyToggle') && document.getElementById('apPublicOnlyToggle').checked);
+  try {
+    var resp = await fetch('/api/github/repo-scope/device-code', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ publicOnly: publicOnly }),
+    });
+    var data = await resp.json();
+    if (data.error) {
+      if (status) status.textContent = 'Failed: ' + data.error;
+      return;
+    }
+    showDeviceCodePanel(data, apiType);
+  } catch (e) {
+    if (status) status.textContent = 'Failed: ' + e.message;
+  }
+}
+
+function showDeviceCodePanel(deviceData, apiType) {
+  var status = document.getElementById('apConnectStatus');
+  if (!status) return;
+  status.innerHTML = ''
+    + '<div class="ap-device-code">'
+    + '  <div>1. Open <a href="' + escHtml(deviceData.verification_uri) + '" target="_blank" rel="noopener">' + escHtml(deviceData.verification_uri) + '</a></div>'
+    + '  <div>2. Enter code: <code class="ap-code">' + escHtml(deviceData.user_code) + '</code> <button class="ap-copy" onclick="copyText(\'' + escHtml(deviceData.user_code) + '\', \'Copied code\')">Copy</button></div>'
+    + '  <div class="ap-poll-status" id="apPollStatus">Waiting for authorization…</div>'
+    + '</div>';
+  if (_repoScopePolling) { clearInterval(_repoScopePolling); _repoScopePolling = null; }
+  var deadline = Date.now() + (deviceData.expires_in || 900) * 1000;
+  var intervalMs = (deviceData.interval || 5) * 1000;
+  _repoScopePolling = setInterval(function() {
+    if (Date.now() > deadline) {
+      clearInterval(_repoScopePolling); _repoScopePolling = null;
+      var st = document.getElementById('apPollStatus');
+      if (st) st.textContent = 'Code expired. Click Connect to try again.';
+      return;
+    }
+    pollRepoScopeOnce(deviceData.device_code, deviceData.scope, apiType);
+  }, intervalMs);
+}
+
+async function pollRepoScopeOnce(deviceCode, scope, apiType) {
+  try {
+    var resp = await fetch('/api/github/repo-scope/poll-token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device_code: deviceCode, scope: scope }),
+    });
+    var data = await resp.json();
+    if (data.error) {
+      var st = document.getElementById('apPollStatus');
+      if (st) st.textContent = 'Error: ' + data.error;
+      clearInterval(_repoScopePolling); _repoScopePolling = null;
+      return;
+    }
+    if (data.status === 'pending' || data.status === 'slow_down') return;
+    if (data.status === 'expired') {
+      var st2 = document.getElementById('apPollStatus');
+      if (st2) st2.textContent = 'Code expired. Click Connect to try again.';
+      clearInterval(_repoScopePolling); _repoScopePolling = null;
+      return;
+    }
+    if (data.status === 'ok') {
+      clearInterval(_repoScopePolling); _repoScopePolling = null;
+      showToast('GitHub repo access granted');
+      // Invalidate cache and reload the relevant tab
+      _githubReposCache.owned = null;
+      _githubReposCache.contributing = null;
+      loadGithubRepos(apiType);
+    }
+  } catch (e) {
+    // transient — keep polling
+  }
+}
+
+async function disconnectRepoScope() {
+  if (!confirm('Disconnect repo-scope GitHub access? You can re-connect any time.')) return;
+  try {
+    await fetch('/api/github/repo-scope/disconnect', { method: 'POST' });
+    _githubReposCache.owned = null;
+    _githubReposCache.contributing = null;
+    showToast('Repo access disconnected');
+    var tab = document.querySelector('.ap-tab.active');
+    if (tab) addProjectSwitchTab(tab.getAttribute('data-tab'));
+  } catch (e) {
+    showToast('Disconnect failed: ' + e.message);
   }
 }
 
@@ -2341,7 +2463,11 @@ function renderRepoList(apiType) {
     return;
   }
   var registeredPaths = (window.manualProjects || []).map(function(p) { return p.remoteUrl; }).filter(Boolean);
-  var html = '';
+  var html = ''
+    + '<div style="padding:6px 12px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;font-size:11px;color:var(--text-muted)">'
+    + '<span>Showing ' + filtered.length + ' repos</span>'
+    + '<button class="ap-disconnect" onclick="disconnectRepoScope()">Disconnect repo access</button>'
+    + '</div>';
   // No client-side truncation: the backend already caps at 300 repos and the
   // filter has narrowed the list. Truncating here would hide matching repos
   // when the user has many.

@@ -794,6 +794,20 @@ body {
 .ap-repo-clone:hover { opacity: 0.9; }
 .ap-repo-clone:disabled { opacity: 0.5; cursor: not-allowed; }
 
+.ap-connect { padding: 16px; }
+.ap-connect-title { font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 6px; }
+.ap-connect-body { font-size: 12px; color: var(--text-secondary); line-height: 1.5; margin-bottom: 10px; }
+.ap-connect-toggle { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); cursor: pointer; }
+.ap-connect-status { margin-top: 12px; font-size: 12px; color: var(--text-secondary); }
+.ap-device-code { padding: 12px; background: var(--bg-card); border-radius: 6px; line-height: 1.7; }
+.ap-device-code a { color: #3b82f6; }
+.ap-code { font-family: monospace; font-size: 14px; padding: 2px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; letter-spacing: 2px; }
+.ap-copy { padding: 2px 8px; font-size: 11px; background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; }
+.ap-copy:hover { background: var(--bg-card-hover); }
+.ap-poll-status { margin-top: 8px; color: var(--text-muted); font-size: 11px; }
+.ap-disconnect { font-size: 11px; color: var(--text-muted); cursor: pointer; text-decoration: underline; background: none; border: none; padding: 0; margin-left: auto; }
+.ap-disconnect:hover { color: var(--accent-red); }
+
 /* New / Last session buttons in the project group header */
 .git-project-launch-btn {
     padding: 4px 10px;

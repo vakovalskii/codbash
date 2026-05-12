@@ -428,20 +428,69 @@ function startServer(host, port, openBrowser = true) {
       json(res, { ok: true });
     }
 
+    // ── Repo-scope auth: separate token for /user/repos enumeration ──
+    else if (req.method === 'POST' && pathname === '/api/github/repo-scope/device-code') {
+      readBody(req, body => {
+        let payload = {};
+        try { payload = body ? JSON.parse(body) : {}; } catch {}
+        githubRepoScopeDeviceCode(!!payload.publicOnly)
+          .then(data => json(res, data))
+          .catch(e => json(res, { error: e.message }, 400));
+      });
+    }
+
+    else if (req.method === 'POST' && pathname === '/api/github/repo-scope/poll-token') {
+      readBody(req, body => {
+        try {
+          const { device_code, scope } = JSON.parse(body);
+          if (!device_code) throw new Error('device_code required');
+          githubRepoScopePollToken(device_code, scope)
+            .then(data => json(res, data))
+            .catch(e => json(res, { error: e.message }, 400));
+        } catch (e) {
+          json(res, { error: e.message }, 400);
+        }
+      });
+    }
+
+    else if (req.method === 'GET' && pathname === '/api/github/repo-scope/status') {
+      const profile = loadGitHubProfile();
+      if (!profile || !profile.repoToken) {
+        return json(res, { connected: false });
+      }
+      json(res, {
+        connected: true,
+        scope: profile.repoTokenScope || 'read:user repo',
+        connectedAt: profile.repoTokenConnectedAt || null,
+      });
+    }
+
+    else if (req.method === 'POST' && pathname === '/api/github/repo-scope/disconnect') {
+      updateGitHubProfile({ repoToken: null, repoTokenScope: null, repoTokenConnectedAt: null });
+      log('AUTH', 'Repo-scope GitHub token cleared');
+      json(res, { ok: true });
+    }
+
     // ── GitHub repos (for project launcher) ────────────────────
     // GET /api/github/repos?type=owned|contributing
+    // Requires the repo-scope token (separate from the leaderboard token) —
+    // the `read:user` scope alone is not enough for /user/repos to return any
+    // entries.
     else if (req.method === 'GET' && pathname === '/api/github/repos') {
       const profile = loadGitHubProfile();
       if (!profile || !profile.token) {
-        return json(res, { error: 'GitHub not connected' }, 401);
+        return json(res, { error: 'GitHub not connected', needsRepoScope: true }, 401);
+      }
+      if (!profile.repoToken) {
+        return json(res, { error: 'Repo access not granted yet', needsRepoScope: true }, 401);
       }
       const type = parsed.searchParams.get('type') || 'owned';
-      projectsApi.listGithubRepos(profile.token, type)
+      projectsApi.listGithubRepos(profile.repoToken, type)
         .then(repos => json(res, repos))
         .catch(e => {
           const status = /401|unauthorized|bad credentials/i.test(e.message) ? 401 : 500;
           log('ERROR', `github/repos failed: ${e.message}`);
-          json(res, { error: e.message }, status);
+          json(res, { error: e.message, needsRepoScope: status === 401 }, status);
         });
     }
 
@@ -1019,10 +1068,8 @@ function githubRequest(hostname, reqPath, method, body) {
 
 async function githubDeviceCode() {
   // Keep scope minimal: the token is forwarded to leaderboard.neuraldeep.ru by
-  // syncLeaderboard, so broader scopes would leak repo write access to a 3rd
-  // party. With `read:user` alone, /user/repos still returns the user's public
-  // repos — enough for the project launcher's "My repos" tab. Private and
-  // collaborator listings will appear empty; that's a deliberate trade-off.
+  // syncLeaderboard, so broader scopes would leak write access to a 3rd party.
+  // Use the separate repo-scope flow below if you need /user/repos coverage.
   const data = await githubRequest('github.com', '/login/device/code', 'POST',
     JSON.stringify({ client_id: GITHUB_CLIENT_ID, scope: 'read:user' }));
   if (data.error) throw new Error(data.error_description || data.error);
@@ -1063,10 +1110,66 @@ async function githubPollToken(deviceCode) {
   return { status: 'ok', profile: { username: profile.username, avatar: profile.avatar, name: profile.name, url: profile.url } };
 }
 
+// ── Repo-scope auth (separate from leaderboard token) ──────────
+//
+// The base /login/device/code flow gets only `read:user` so the token is safe
+// to forward to leaderboard.neuraldeep.ru. To enumerate the user's repos for
+// the project launcher we run a second, scope-tagged device flow and store
+// the resulting token in `repoToken` — kept strictly away from leaderboard
+// sync. The user must explicitly opt in via the Add Project modal.
+
+async function githubRepoScopeDeviceCode(publicOnly) {
+  const scope = publicOnly ? 'read:user public_repo' : 'read:user repo';
+  const data = await githubRequest('github.com', '/login/device/code', 'POST',
+    JSON.stringify({ client_id: GITHUB_CLIENT_ID, scope }));
+  if (data.error) throw new Error(data.error_description || data.error);
+  log('AUTH', `Repo-scope device code: ${data.user_code} → ${data.verification_uri} (scope=${scope})`);
+  return {
+    user_code: data.user_code,
+    verification_uri: data.verification_uri,
+    device_code: data.device_code,
+    interval: data.interval || 5,
+    expires_in: data.expires_in,
+    scope,
+  };
+}
+
+async function githubRepoScopePollToken(deviceCode, scope) {
+  const data = await githubRequest('github.com', '/login/oauth/access_token', 'POST',
+    JSON.stringify({ client_id: GITHUB_CLIENT_ID, device_code: deviceCode, grant_type: 'urn:ietf:params:oauth:grant-type:device_code' }));
+  if (data.error === 'authorization_pending') return { status: 'pending' };
+  if (data.error === 'slow_down') return { status: 'slow_down' };
+  if (data.error === 'expired_token') return { status: 'expired' };
+  if (data.error) throw new Error(data.error_description || data.error);
+  if (!data.access_token) throw new Error('No access token received');
+
+  updateGitHubProfile({
+    repoToken: data.access_token,
+    repoTokenScope: scope || 'read:user repo',
+    repoTokenConnectedAt: new Date().toISOString(),
+  });
+  log('AUTH', `Repo-scope GitHub token saved (scope=${scope || 'read:user repo'})`);
+  return { status: 'ok', scope: scope || 'read:user repo' };
+}
+
 function loadGitHubProfile() {
   try {
     const data = JSON.parse(fs.readFileSync(GITHUB_PROFILE_FILE, 'utf8'));
-    if (data.authenticated) return { authenticated: true, username: data.username, avatar: data.avatar, name: data.name, url: data.url, token: data.token };
+    if (data.authenticated) return {
+      authenticated: true,
+      username: data.username,
+      avatar: data.avatar,
+      name: data.name,
+      url: data.url,
+      token: data.token,
+      connectedAt: data.connectedAt,
+      // Optional separate token with broader scope, used only by the project
+      // launcher. Kept distinct from `token` so the leaderboard sync never
+      // sees a write-capable credential.
+      repoToken: data.repoToken || null,
+      repoTokenScope: data.repoTokenScope || null,
+      repoTokenConnectedAt: data.repoTokenConnectedAt || null,
+    };
   } catch {}
   return null;
 }
@@ -1079,6 +1182,16 @@ function saveGitHubProfile(profile) {
   } else {
     try { fs.unlinkSync(GITHUB_PROFILE_FILE); } catch {}
   }
+}
+
+// Merge partial fields into the existing profile so endpoints that touch
+// just one slice (e.g. repoToken) don't have to rebuild the whole object.
+function updateGitHubProfile(partial) {
+  let current = {};
+  try { current = JSON.parse(fs.readFileSync(GITHUB_PROFILE_FILE, 'utf8')) || {}; } catch {}
+  const next = { ...current, ...partial };
+  saveGitHubProfile(next);
+  return next;
 }
 
 // ── Leaderboard Sync ──────────────────────
@@ -1104,6 +1217,8 @@ async function syncLeaderboard() {
     avatar: profile.avatar,
     name: profile.name,
     deviceId: anon.id || require('crypto').randomUUID(),
+    // SECURITY: leaderboard receives only the read:user-scoped token. Never
+    // forward `repoToken` here — that token has repo write access.
     token: profile.token, // for server-side GitHub verification
     version: pkg.version,
     integrity: integrity,
