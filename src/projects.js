@@ -31,11 +31,20 @@ function loadProjects() {
 // Atomic write — temp file + rename so a crashed write never leaves a partial
 // file behind. The mutex below serializes read-modify-write operations to
 // prevent the classic interleaved-load lost-update race.
+// File mode 0600 — contains the user's local workspace layout which is mildly
+// sensitive on shared machines. Double-chmod (tmp + final) defends against
+// rename-preserves-destination-mode quirks on some Linux filesystems.
 function saveProjects(list) {
   ensureDir(path.dirname(PROJECTS_FILE));
   const tmp = PROJECTS_FILE + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify({ projects: list }, null, 2));
+  fs.writeFileSync(tmp, JSON.stringify({ projects: list }, null, 2), { mode: 0o600 });
+  if (process.platform !== 'win32') {
+    try { fs.chmodSync(tmp, 0o600); } catch {}
+  }
   fs.renameSync(tmp, PROJECTS_FILE);
+  if (process.platform !== 'win32') {
+    try { fs.chmodSync(PROJECTS_FILE, 0o600); } catch {}
+  }
 }
 
 let _writeLock = Promise.resolve();
@@ -80,14 +89,19 @@ function isSafeLaunchPath(p) {
   try {
     const abs = normalizePath(p);
     if (!fs.existsSync(abs)) return false;
-    if (!fs.statSync(abs).isDirectory()) return false;
+    // lstat first so a symlink pointing to e.g. /opt cannot smuggle a path
+    // out of $HOME past the auto-register boundary check. validatePath
+    // applies the same defense for the registry-write path.
+    const lst = fs.lstatSync(abs);
+    if (lst.isSymbolicLink()) return false;
+    if (!lst.isDirectory()) return false;
   } catch {
     return false;
   }
   return true;
 }
 
-const ALLOWED_SOURCES = new Set(['manual', 'github-clone']);
+const ALLOWED_SOURCES = new Set(['manual', 'github-clone', 'auto']);
 
 function addProject({ name, path: projectPath, source, remoteUrl, defaultBranch }) {
   const abs = validatePath(projectPath);

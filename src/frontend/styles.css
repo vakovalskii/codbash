@@ -3355,3 +3355,371 @@ body {
     flex-direction: column;
     gap: 2px;
 }
+
+
+/* ── Projects tab restructure ──────────────────────────────
+ * Uses the actual codbash theme variables (--bg-card, --bg-input,
+ * --text-primary, --text-secondary, --text-muted, --accent-blue, --border)
+ * so light/dark/monokai themes inherit the right colors automatically.
+ * Border-radius and hover patterns match existing .card / .toolbar-btn rules.
+ */
+
+/* Subtab strip above Projects content */
+.projects-subtabs {
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 14px;
+}
+.projects-subtab {
+    padding: 8px 16px;
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    transition: color 0.15s, border-color 0.15s;
+}
+.projects-subtab:hover { color: var(--text-primary); }
+.projects-subtab.active {
+    color: var(--text-primary);
+    border-bottom-color: var(--accent-blue);
+}
+.projects-subtab:focus-visible {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: -2px;
+    border-radius: 4px;
+}
+
+/* History filter bar (shown when "View N sessions →" deeplinked from a card) */
+.history-filter-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    margin-bottom: 12px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent-blue);
+    border-radius: 8px;
+    font-size: 12px;
+    color: var(--text-primary);
+}
+.history-filter-bar .toolbar-btn { margin-left: auto; padding: 4px 10px; font-size: 11px; }
+
+/* Launcher landing — cards match existing .card pattern (radius 10, hover transform) */
+.projects-launcher-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr));
+    gap: 14px;
+    animation: subtab-fade-in 120ms ease-out;
+}
+@keyframes subtab-fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .projects-launcher-grid, .launcher-card-skel { animation: none !important; }
+}
+.launcher-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    transition: all 0.15s;
+}
+.launcher-card:hover {
+    background: var(--bg-card-hover);
+    border-color: rgba(255,255,255,0.1);
+    transform: translateY(-1px);
+}
+[data-theme="light"] .launcher-card:hover { border-color: rgba(0,0,0,0.08); }
+.launcher-card-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+.launcher-card-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.launcher-card-name {
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+}
+.launcher-card-tag {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 2px 6px;
+    color: var(--text-muted);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    flex-shrink: 0;
+}
+.launcher-card-path {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.launcher-card-meta {
+    font-size: 11px;
+    color: var(--text-secondary);
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+.launcher-card-meta > *:not(:first-child)::before {
+    content: '· ';
+    margin-right: 2px;
+}
+.launcher-card-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 6px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+.launcher-card-actions .split-btn { display: inline-flex; }
+.launcher-card-actions .split-btn .new-btn {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+    border-right: 1px solid rgba(255, 255, 255, 0.2);
+    padding: 6px 10px;
+}
+.launcher-card-actions .split-btn .picker-btn {
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+    padding: 6px 8px;
+    font-size: 11px;
+    line-height: 1;
+}
+[data-theme="light"] .launcher-card-actions .split-btn .new-btn {
+    border-right-color: rgba(0, 0, 0, 0.2);
+}
+.launcher-card-actions button.git-project-launch-btn {
+    margin: 0;
+    padding: 6px 12px;
+    font-size: 12px;
+}
+.launcher-card-actions button.git-project-launch-btn:focus-visible {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: 2px;
+}
+.launcher-card-link {
+    margin-top: auto;
+    font-size: 11px;
+    color: var(--accent-blue);
+    cursor: pointer;
+    background: none;
+    border: none;
+    text-align: left;
+    padding: 0;
+    font-family: inherit;
+}
+.launcher-card-link:hover { text-decoration: underline; }
+.launcher-card-link:focus-visible {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: 2px;
+    border-radius: 2px;
+}
+
+/* Pre-detection skeleton placeholder cards */
+.launcher-card-skel {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    height: 140px;
+    opacity: 0.5;
+    animation: launcher-skel-pulse 1.4s ease-in-out infinite;
+}
+@keyframes launcher-skel-pulse {
+    0%, 100% { opacity: 0.35; }
+    50% { opacity: 0.55; }
+}
+
+/* Toolbar above the launcher grid */
+.projects-toolbar {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-bottom: 14px;
+}
+.projects-toolbar-warning {
+    color: var(--accent-orange);
+    font-size: 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.projects-toolbar-warning a {
+    color: var(--accent-blue);
+    text-decoration: underline;
+}
+.projects-empty {
+    padding: 40px 20px;
+    text-align: center;
+    color: var(--text-secondary);
+    background: var(--bg-card);
+    border: 1px dashed var(--border);
+    border-radius: 10px;
+}
+
+/* Primary toolbar/dialog button — matches .toolbar-btn pattern */
+.toolbar-btn-primary,
+.btn-primary {
+    background: var(--accent-blue);
+    color: #fff;
+    border: 1px solid var(--accent-blue);
+    border-radius: 8px;
+    padding: 8px 14px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+    transition: all 0.15s;
+}
+.toolbar-btn-primary:hover,
+.btn-primary:hover {
+    filter: brightness(1.1);
+}
+.toolbar-btn-primary:focus-visible,
+.btn-primary:focus-visible {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: 2px;
+}
+.btn-primary[disabled],
+.toolbar-btn-primary[disabled] {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+/* Per-launch agent picker popover (position: fixed, viewport-clamped in JS) */
+.agent-picker {
+    position: fixed;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    padding: 4px;
+    min-width: 180px;
+    z-index: 250;
+    display: none;
+}
+.agent-picker.open { display: block; }
+.agent-picker-item {
+    padding: 8px 12px;
+    cursor: pointer;
+    border-radius: 4px;
+    font-size: 13px;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.agent-picker-item:hover {
+    background: var(--bg-card-hover);
+    color: var(--accent-blue);
+}
+.agent-picker-item:focus-visible {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: -2px;
+    background: var(--bg-card-hover);
+    color: var(--accent-blue);
+}
+.agent-picker-empty {
+    padding: 10px 12px;
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+/* Projects settings modal */
+.projects-settings-box {
+    max-width: 440px !important;
+}
+.ps-label {
+    display: block;
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 6px;
+}
+.ps-select {
+    width: 100%;
+    background: var(--bg-input);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font: inherit;
+}
+.ps-select:focus-visible {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: 1px;
+}
+
+/* Detected-agents list inside the Projects settings modal */
+.ps-detected-list {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px;
+    max-height: 220px;
+    overflow-y: auto;
+}
+.ps-detected-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 8px;
+    font-size: 12px;
+    color: var(--text-primary);
+    border-radius: 4px;
+}
+.ps-detected-item + .ps-detected-item { margin-top: 2px; }
+.ps-detected-item.installed { /* default look */ }
+.ps-detected-item.missing { color: var(--text-muted); }
+.ps-detected-status {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    white-space: nowrap;
+}
+.ps-detected-status.installed {
+    color: var(--accent-green);
+    border-color: var(--accent-green);
+}
+.ps-detected-status.missing {
+    color: var(--text-muted);
+}
+.ps-detected-name { flex: 1; }
+.ps-detected-via {
+    font-size: 10px;
+    color: var(--text-muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
