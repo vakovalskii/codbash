@@ -1428,7 +1428,9 @@ function renderLauncherCard(projKey, projInfo) {
   var projName = projInfo.name;
   var projPath = projInfo.path;
   var color = getProjectColor(projName);
-  var list = projInfo.list || [];
+  // Sort by last_ts desc so lastSession is reliably the most recent — the
+  // upstream sessions feed doesn't guarantee insertion order matches recency.
+  var list = (projInfo.list || []).slice().sort(function(a, b) { return (b.last_ts || 0) - (a.last_ts || 0); });
   var lastSession = list[0];
   var totalSessions = list.length;
 
@@ -1530,11 +1532,24 @@ function mergeRegistryWithSessions(sessions) {
 
 // Shared sort: most-recent session timestamp first; falls back to the
 // registry add date when no session exists yet.
+// Most-recent timestamp across all of a project's sessions; falls back to the
+// registry add date when there are no sessions yet. Used to sort the launcher
+// grid by activity (desc) so the project you used most recently is on top.
+function projectActivityTs(projInfo) {
+  if (projInfo.list && projInfo.list.length) {
+    var maxTs = 0;
+    for (var i = 0; i < projInfo.list.length; i++) {
+      var t = projInfo.list[i].last_ts;
+      if (t && t > maxTs) maxTs = t;
+    }
+    if (maxTs) return maxTs;
+  }
+  return projInfo._lastAdded ? Date.parse(projInfo._lastAdded) : 0;
+}
+
 function sortMergedEntries(byPath) {
   return Object.entries(byPath).sort(function(a, b) {
-    var aTs = a[1].list[0] ? a[1].list[0].last_ts : (a[1]._lastAdded ? Date.parse(a[1]._lastAdded) : 0);
-    var bTs = b[1].list[0] ? b[1].list[0].last_ts : (b[1]._lastAdded ? Date.parse(b[1]._lastAdded) : 0);
-    return bTs - aTs;
+    return projectActivityTs(b[1]) - projectActivityTs(a[1]);
   });
 }
 

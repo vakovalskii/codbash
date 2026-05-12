@@ -3358,38 +3358,38 @@ body {
 
 
 /* ── Projects tab restructure ──────────────────────────────
- * Theme-aware throughout: uses --border / --text-primary / --text-muted /
- * --accent-blue / --card-bg from the base theme file, with fallbacks for
- * environments that haven't loaded the variable block.
+ * Uses the actual codbash theme variables (--bg-card, --bg-input,
+ * --text-primary, --text-secondary, --text-muted, --accent-blue, --border)
+ * so light/dark/monokai themes inherit the right colors automatically.
+ * Border-radius and hover patterns match existing .card / .toolbar-btn rules.
  */
 
 /* Subtab strip above Projects content */
 .projects-subtabs {
     display: flex;
     gap: 4px;
-    border-bottom: 1px solid var(--border, #2a2a2a);
+    border-bottom: 1px solid var(--border);
     margin-bottom: 14px;
-    padding-bottom: 0;
 }
 .projects-subtab {
     padding: 8px 16px;
     background: transparent;
     border: none;
-    color: var(--text-muted, #888);
+    color: var(--text-secondary);
     font: inherit;
     font-size: 13px;
     cursor: pointer;
     border-bottom: 2px solid transparent;
     margin-bottom: -1px;
-    transition: color .12s, border-color .12s;
+    transition: color 0.15s, border-color 0.15s;
 }
-.projects-subtab:hover { color: var(--text-primary, #ddd); }
+.projects-subtab:hover { color: var(--text-primary); }
 .projects-subtab.active {
-    color: var(--text-primary, #fff);
-    border-bottom-color: var(--accent-blue, #3b82f6);
+    color: var(--text-primary);
+    border-bottom-color: var(--accent-blue);
 }
 .projects-subtab:focus-visible {
-    outline: 2px solid var(--accent-blue, #3b82f6);
+    outline: 2px solid var(--accent-blue);
     outline-offset: -2px;
     border-radius: 4px;
 }
@@ -3401,22 +3401,20 @@ body {
     gap: 10px;
     padding: 8px 12px;
     margin-bottom: 12px;
-    background: rgba(59, 130, 246, 0.08);
-    border: 1px solid var(--border, #2a2a2a);
-    border-left: 3px solid var(--accent-blue, #3b82f6);
-    border-radius: 4px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent-blue);
+    border-radius: 8px;
     font-size: 12px;
-    color: var(--text-primary, #ddd);
+    color: var(--text-primary);
 }
 .history-filter-bar .toolbar-btn { margin-left: auto; padding: 4px 10px; font-size: 11px; }
 
-/* Launcher landing — clean cards distinct from session groups */
+/* Launcher landing — cards match existing .card pattern (radius 10, hover transform) */
 .projects-launcher-grid {
     display: grid;
-    /* min(320px, 100%) keeps very narrow viewports from horizontal-scrolling */
     grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr));
     gap: 14px;
-    /* Subtle fade so subtab switches feel intentional instead of a hard swap */
     animation: subtab-fade-in 120ms ease-out;
 }
 @keyframes subtab-fade-in {
@@ -3427,16 +3425,21 @@ body {
     .projects-launcher-grid, .launcher-card-skel { animation: none !important; }
 }
 .launcher-card {
-    background: var(--card-bg, #1a1a1a);
-    border: 1px solid var(--border, #2a2a2a);
-    border-radius: 8px;
-    padding: 16px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
     display: flex;
     flex-direction: column;
     gap: 10px;
-    transition: border-color .12s, transform .12s;
+    transition: all 0.15s;
 }
-.launcher-card:hover { border-color: var(--accent-blue, #3b82f6); }
+.launcher-card:hover {
+    background: var(--bg-card-hover);
+    border-color: rgba(255,255,255,0.1);
+    transform: translateY(-1px);
+}
+[data-theme="light"] .launcher-card:hover { border-color: rgba(0,0,0,0.08); }
 .launcher-card-header {
     display: flex;
     align-items: center;
@@ -3452,27 +3455,26 @@ body {
 .launcher-card-name {
     font-weight: 600;
     font-size: 14px;
-    color: var(--text-primary, #fff);
+    color: var(--text-primary);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     flex: 1;
 }
 .launcher-card-tag {
-    /* De-emphasized provenance hint — does NOT compete with the project name */
     font-size: 9px;
     text-transform: uppercase;
     letter-spacing: 0.5px;
     padding: 2px 6px;
-    color: var(--text-muted, #888);
+    color: var(--text-muted);
     background: transparent;
-    border: 1px solid var(--border, #2a2a2a);
-    border-radius: 3px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
     flex-shrink: 0;
 }
 .launcher-card-path {
     font-size: 11px;
-    color: var(--text-muted, #888);
+    color: var(--text-muted);
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -3480,7 +3482,7 @@ body {
 }
 .launcher-card-meta {
     font-size: 11px;
-    color: var(--text-muted, #888);
+    color: var(--text-secondary);
     display: flex;
     gap: 10px;
     flex-wrap: wrap;
@@ -3496,14 +3498,11 @@ body {
     align-items: center;
     flex-wrap: wrap;
 }
-.launcher-card-actions .split-btn {
-    display: inline-flex;
-    /* Group role for accessibility — both halves announce together */
-}
+.launcher-card-actions .split-btn { display: inline-flex; }
 .launcher-card-actions .split-btn .new-btn {
     border-top-right-radius: 0;
     border-bottom-right-radius: 0;
-    border-right: 1px solid var(--split-btn-divider, rgba(255, 255, 255, 0.2));
+    border-right: 1px solid rgba(255, 255, 255, 0.2);
     padding: 6px 10px;
 }
 .launcher-card-actions .split-btn .picker-btn {
@@ -3514,17 +3513,21 @@ body {
     line-height: 1;
 }
 [data-theme="light"] .launcher-card-actions .split-btn .new-btn {
-    --split-btn-divider: rgba(0, 0, 0, 0.2);
+    border-right-color: rgba(0, 0, 0, 0.2);
 }
-.launcher-card-actions button.git-project-launch-btn { margin: 0; padding: 6px 12px; font-size: 12px; }
+.launcher-card-actions button.git-project-launch-btn {
+    margin: 0;
+    padding: 6px 12px;
+    font-size: 12px;
+}
 .launcher-card-actions button.git-project-launch-btn:focus-visible {
-    outline: 2px solid var(--accent-blue, #3b82f6);
+    outline: 2px solid var(--accent-blue);
     outline-offset: 2px;
 }
 .launcher-card-link {
     margin-top: auto;
     font-size: 11px;
-    color: var(--accent-blue, #3b82f6);
+    color: var(--accent-blue);
     cursor: pointer;
     background: none;
     border: none;
@@ -3534,16 +3537,16 @@ body {
 }
 .launcher-card-link:hover { text-decoration: underline; }
 .launcher-card-link:focus-visible {
-    outline: 2px solid var(--accent-blue, #3b82f6);
+    outline: 2px solid var(--accent-blue);
     outline-offset: 2px;
     border-radius: 2px;
 }
 
 /* Pre-detection skeleton placeholder cards */
 .launcher-card-skel {
-    background: var(--card-bg, #1a1a1a);
-    border: 1px solid var(--border, #2a2a2a);
-    border-radius: 8px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
     height: 140px;
     opacity: 0.5;
     animation: launcher-skel-pulse 1.4s ease-in-out infinite;
@@ -3553,7 +3556,7 @@ body {
     50% { opacity: 0.55; }
 }
 
-/* Top toolbar inside the landing view */
+/* Toolbar above the launcher grid */
 .projects-toolbar {
     display: flex;
     gap: 8px;
@@ -3562,47 +3565,51 @@ body {
     margin-bottom: 14px;
 }
 .projects-toolbar-warning {
-    color: #d97706;
+    color: var(--accent-orange);
     font-size: 12px;
     display: inline-flex;
     align-items: center;
     gap: 6px;
 }
-[data-theme="dark"] .projects-toolbar-warning { color: #f59e0b; }
 .projects-toolbar-warning a {
-    color: var(--accent-blue, #3b82f6);
+    color: var(--accent-blue);
     text-decoration: underline;
 }
 .projects-empty {
     padding: 40px 20px;
     text-align: center;
-    color: var(--text-muted, #888);
-    border: 1px dashed var(--border, #2a2a2a);
-    border-radius: 8px;
+    color: var(--text-secondary);
+    background: var(--bg-card);
+    border: 1px dashed var(--border);
+    border-radius: 10px;
 }
 
-/* Reusable primary toolbar/dialog button (replaces inline blue overrides) */
+/* Primary toolbar/dialog button — matches .toolbar-btn pattern */
 .toolbar-btn-primary,
 .btn-primary {
-    background: var(--accent-blue, #3b82f6) !important;
-    color: #fff !important;
-    border: 1px solid var(--accent-blue, #3b82f6) !important;
-    padding: 8px 18px;
-    border-radius: 4px;
+    background: var(--accent-blue);
+    color: #fff;
+    border: 1px solid var(--accent-blue);
+    border-radius: 8px;
+    padding: 8px 14px;
     cursor: pointer;
     font: inherit;
+    font-size: 13px;
     font-weight: 500;
+    white-space: nowrap;
+    transition: all 0.15s;
 }
 .toolbar-btn-primary:hover,
 .btn-primary:hover {
-    filter: brightness(1.08);
+    filter: brightness(1.1);
 }
 .toolbar-btn-primary:focus-visible,
 .btn-primary:focus-visible {
-    outline: 2px solid var(--accent-blue, #3b82f6);
+    outline: 2px solid var(--accent-blue);
     outline-offset: 2px;
 }
-.btn-primary[disabled] {
+.btn-primary[disabled],
+.toolbar-btn-primary[disabled] {
     opacity: 0.6;
     cursor: not-allowed;
 }
@@ -3610,13 +3617,12 @@ body {
 /* Per-launch agent picker popover (position: fixed, viewport-clamped in JS) */
 .agent-picker {
     position: fixed;
-    background: var(--card-bg, #1a1a1a);
-    border: 1px solid var(--border, #3a3a3a);
-    border-radius: 6px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
     padding: 4px;
     min-width: 180px;
-    /* Below modal overlays (z-index ~300) but above page chrome. */
     z-index: 250;
     display: none;
 }
@@ -3626,25 +3632,25 @@ body {
     cursor: pointer;
     border-radius: 4px;
     font-size: 13px;
-    color: var(--text-primary, #ddd);
+    color: var(--text-primary);
     display: flex;
     align-items: center;
     gap: 8px;
 }
 .agent-picker-item:hover {
-    background: rgba(59, 130, 246, 0.15);
-    color: var(--accent-blue, #3b82f6);
+    background: var(--bg-card-hover);
+    color: var(--accent-blue);
 }
 .agent-picker-item:focus-visible {
-    outline: 2px solid var(--accent-blue, #3b82f6);
+    outline: 2px solid var(--accent-blue);
     outline-offset: -2px;
-    background: rgba(59, 130, 246, 0.25);
-    color: var(--accent-blue, #3b82f6);
+    background: var(--bg-card-hover);
+    color: var(--accent-blue);
 }
 .agent-picker-empty {
     padding: 10px 12px;
     font-size: 12px;
-    color: var(--text-muted, #888);
+    color: var(--text-muted);
 }
 
 /* Projects settings modal */
@@ -3654,19 +3660,19 @@ body {
 .ps-label {
     display: block;
     font-size: 12px;
-    color: var(--text-muted, #888);
+    color: var(--text-secondary);
     margin-bottom: 6px;
 }
 .ps-select {
     width: 100%;
-    background: var(--input-bg, #0d0d0d);
-    color: var(--text-primary, #fff);
-    border: 1px solid var(--border, #2a2a2a);
-    border-radius: 4px;
-    padding: 8px;
+    background: var(--bg-input);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 12px;
     font: inherit;
 }
 .ps-select:focus-visible {
-    outline: 2px solid var(--accent-blue, #3b82f6);
+    outline: 2px solid var(--accent-blue);
     outline-offset: 1px;
 }
