@@ -420,7 +420,11 @@ function startServer(host, port, openBrowser = true) {
 
     else if (req.method === 'GET' && pathname === '/api/github/profile') {
       const profile = loadGitHubProfile();
-      json(res, profile || { authenticated: false });
+      if (!profile) return json(res, { authenticated: false });
+      // Never vend raw tokens to the browser. The frontend only needs to know
+      // *whether* the user is connected and what the display fields are.
+      const { token: _t, repoToken: _rt, ...safe } = profile;
+      json(res, safe);
     }
 
     else if (req.method === 'POST' && pathname === '/api/github/logout') {
@@ -442,9 +446,9 @@ function startServer(host, port, openBrowser = true) {
     else if (req.method === 'POST' && pathname === '/api/github/repo-scope/poll-token') {
       readBody(req, body => {
         try {
-          const { device_code, scope } = JSON.parse(body);
+          const { device_code } = JSON.parse(body);
           if (!device_code) throw new Error('device_code required');
-          githubRepoScopePollToken(device_code, scope)
+          githubRepoScopePollToken(device_code)
             .then(data => json(res, data))
             .catch(e => json(res, { error: e.message }, 400));
         } catch (e) {
@@ -466,9 +470,19 @@ function startServer(host, port, openBrowser = true) {
     }
 
     else if (req.method === 'POST' && pathname === '/api/github/repo-scope/disconnect') {
-      updateGitHubProfile({ repoToken: null, repoTokenScope: null, repoTokenConnectedAt: null });
-      log('AUTH', 'Repo-scope GitHub token cleared');
-      json(res, { ok: true });
+      try {
+        updateGitHubProfile({ repoToken: null, repoTokenScope: null, repoTokenConnectedAt: null });
+        log('AUTH', 'Repo-scope GitHub token cleared locally (GitHub authorization must be revoked manually)');
+        // Provide the deep link so the UI can nudge the user to also revoke
+        // the OAuth authorization on github.com — clearing locally does not
+        // invalidate the token at GitHub.
+        json(res, {
+          ok: true,
+          revokeUrl: 'https://github.com/settings/connections/applications/' + GITHUB_CLIENT_ID,
+        });
+      } catch (e) {
+        json(res, { ok: false, error: e.message }, 500);
+      }
     }
 
     // ── GitHub repos (for project launcher) ────────────────────
@@ -1118,12 +1132,29 @@ async function githubPollToken(deviceCode) {
 // the resulting token in `repoToken` — kept strictly away from leaderboard
 // sync. The user must explicitly opt in via the Add Project modal.
 
+// In-memory map of pending device codes → requested scope. Bounded by GitHub's
+// 15 min device-code TTL plus a small slack. Survives the lifetime of the
+// process only — a restart invalidates all in-flight codes, which is fine.
+const _pendingRepoScopeCodes = new Map();
+const PENDING_CODE_TTL = 16 * 60 * 1000;
+
+function _rememberPendingCode(deviceCode, scope) {
+  _pendingRepoScopeCodes.set(deviceCode, { scope, exp: Date.now() + PENDING_CODE_TTL });
+  // Cheap GC: prune expired entries opportunistically.
+  for (const [code, meta] of _pendingRepoScopeCodes) {
+    if (meta.exp < Date.now()) _pendingRepoScopeCodes.delete(code);
+  }
+}
+
 async function githubRepoScopeDeviceCode(publicOnly) {
   const scope = publicOnly ? 'read:user public_repo' : 'read:user repo';
   const data = await githubRequest('github.com', '/login/device/code', 'POST',
     JSON.stringify({ client_id: GITHUB_CLIENT_ID, scope }));
   if (data.error) throw new Error(data.error_description || data.error);
-  log('AUTH', `Repo-scope device code: ${data.user_code} → ${data.verification_uri} (scope=${scope})`);
+  // Don't log the user_code itself — anyone with log access could authorize
+  // the device flow against the user's account before they enter it.
+  log('AUTH', `Repo-scope device code issued (scope=${scope})`);
+  _rememberPendingCode(data.device_code, scope);
   return {
     user_code: data.user_code,
     verification_uri: data.verification_uri,
@@ -1134,22 +1165,34 @@ async function githubRepoScopeDeviceCode(publicOnly) {
   };
 }
 
-async function githubRepoScopePollToken(deviceCode, scope) {
+async function githubRepoScopePollToken(deviceCode) {
   const data = await githubRequest('github.com', '/login/oauth/access_token', 'POST',
     JSON.stringify({ client_id: GITHUB_CLIENT_ID, device_code: deviceCode, grant_type: 'urn:ietf:params:oauth:grant-type:device_code' }));
   if (data.error === 'authorization_pending') return { status: 'pending' };
   if (data.error === 'slow_down') return { status: 'slow_down' };
-  if (data.error === 'expired_token') return { status: 'expired' };
+  if (data.error === 'expired_token') {
+    _pendingRepoScopeCodes.delete(deviceCode);
+    return { status: 'expired' };
+  }
   if (data.error) throw new Error(data.error_description || data.error);
   if (!data.access_token) throw new Error('No access token received');
 
+  // Prefer the scope returned by GitHub on the token itself; fall back to the
+  // scope we recorded when we issued the device code. We deliberately do not
+  // accept a client-supplied scope to keep the stored label trustworthy.
+  const requestedScope = (_pendingRepoScopeCodes.get(deviceCode) || {}).scope;
+  const grantedScope = data.scope
+    ? String(data.scope).split(',').map(s => s.trim()).join(' ')
+    : (requestedScope || 'read:user repo');
+  _pendingRepoScopeCodes.delete(deviceCode);
+
   updateGitHubProfile({
     repoToken: data.access_token,
-    repoTokenScope: scope || 'read:user repo',
+    repoTokenScope: grantedScope,
     repoTokenConnectedAt: new Date().toISOString(),
   });
-  log('AUTH', `Repo-scope GitHub token saved (scope=${scope || 'read:user repo'})`);
-  return { status: 'ok', scope: scope || 'read:user repo' };
+  log('AUTH', `Repo-scope GitHub token saved (scope=${grantedScope})`);
+  return { status: 'ok', scope: grantedScope };
 }
 
 function loadGitHubProfile() {
@@ -1178,7 +1221,11 @@ function saveGitHubProfile(profile) {
   const dir = path.dirname(GITHUB_PROFILE_FILE);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   if (profile) {
-    fs.writeFileSync(GITHUB_PROFILE_FILE, JSON.stringify(profile, null, 2));
+    // Atomic write + restrictive perms (owner read/write only). The token file
+    // would otherwise be world-readable on shared boxes/CI runners.
+    const tmp = GITHUB_PROFILE_FILE + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(profile, null, 2), { mode: 0o600 });
+    fs.renameSync(tmp, GITHUB_PROFILE_FILE);
   } else {
     try { fs.unlinkSync(GITHUB_PROFILE_FILE); } catch {}
   }
@@ -1186,10 +1233,24 @@ function saveGitHubProfile(profile) {
 
 // Merge partial fields into the existing profile so endpoints that touch
 // just one slice (e.g. repoToken) don't have to rebuild the whole object.
+// Bails on parse error so a corrupt file can't silently erase the user's
+// existing leaderboard token. Setting a field to null *removes* it from the
+// stored JSON instead of persisting an explicit null.
 function updateGitHubProfile(partial) {
-  let current = {};
-  try { current = JSON.parse(fs.readFileSync(GITHUB_PROFILE_FILE, 'utf8')) || {}; } catch {}
+  let current;
+  if (fs.existsSync(GITHUB_PROFILE_FILE)) {
+    try {
+      current = JSON.parse(fs.readFileSync(GITHUB_PROFILE_FILE, 'utf8')) || {};
+    } catch (e) {
+      throw new Error('github profile file is corrupt; refusing to overwrite');
+    }
+  } else {
+    current = {};
+  }
   const next = { ...current, ...partial };
+  for (const key of Object.keys(partial)) {
+    if (partial[key] === null) delete next[key];
+  }
   saveGitHubProfile(next);
   return next;
 }

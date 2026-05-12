@@ -2254,7 +2254,8 @@ function closeAddProject() {
   var overlay = document.getElementById('addProjectOverlay');
   if (overlay) overlay.classList.remove('open');
   // Stop any in-flight device-code polling when the user dismisses the modal.
-  if (_repoScopePolling) { clearInterval(_repoScopePolling); _repoScopePolling = null; }
+  _stopRepoScopePolling();
+  _repoScopeDeviceCode = '';
 }
 
 function addProjectSwitchTab(tab) {
@@ -2304,6 +2305,9 @@ async function loadGithubRepos(apiType) {
   var containerId = apiType === 'owned' ? 'apOwnedRepos' : 'apContribRepos';
   var container = document.getElementById(containerId);
   if (!container) return;
+  // Re-entering this view cancels any stale polling that was running for a
+  // previous device-code flow.
+  _stopRepoScopePolling();
   container.innerHTML = '<div class="ap-loading">Loading repos…</div>';
   try {
     var resp = await fetch('/api/github/repos?type=' + apiType);
@@ -2314,6 +2318,11 @@ async function loadGithubRepos(apiType) {
       } else {
         container.innerHTML = '<div class="ap-loading">GitHub not connected. Open <strong>Cloud</strong> view → connect GitHub, then return here.</div>';
       }
+      return;
+    }
+    if (!resp.ok) {
+      var errBody = await resp.json().catch(function() { return {}; });
+      container.innerHTML = '<div class="ap-loading">' + escHtml(errBody.error || ('HTTP ' + resp.status)) + '</div>';
       return;
     }
     var data = await resp.json();
@@ -2331,8 +2340,19 @@ async function loadGithubRepos(apiType) {
 // ── Repo-scope connect panel + device-code polling ──────────────
 
 var _repoScopePolling = null;
+var _repoScopeInterval = 0;       // current poll interval in ms (mutable on slow_down)
+var _repoScopeDeadline = 0;
+var _repoScopeDeviceCode = '';
+var _repoScopeApiType = '';
+var _repoScopeErrorStreak = 0;
+
+function _stopRepoScopePolling() {
+  if (_repoScopePolling) { clearInterval(_repoScopePolling); _repoScopePolling = null; }
+}
 
 function renderRepoScopeConnectPanel(containerId, apiType) {
+  // A user re-entering the connect panel cancels any prior in-flight polling.
+  _stopRepoScopePolling();
   var container = document.getElementById(containerId);
   if (!container) return;
   container.innerHTML = ''
@@ -2345,13 +2365,14 @@ function renderRepoScopeConnectPanel(containerId, apiType) {
     + '    <input type="checkbox" id="apPublicOnlyToggle" /> <span>Public repos only (skips private/collaborator listings)</span>'
     + '  </label>'
     + '  <div style="display:flex;gap:8px;align-items:center;margin-top:10px">'
-    + '    <button class="ap-repo-clone" onclick="startRepoScopeConnect(\'' + apiType + '\')">Connect GitHub for repo access</button>'
+    + '    <button class="ap-repo-clone" id="apConnectBtn" data-api-type="' + escHtml(apiType) + '" onclick="startRepoScopeConnect(this.dataset.apiType, this)">Connect GitHub for repo access</button>'
     + '  </div>'
     + '  <div class="ap-connect-status" id="apConnectStatus"></div>'
     + '</div>';
 }
 
-async function startRepoScopeConnect(apiType) {
+async function startRepoScopeConnect(apiType, btn) {
+  if (btn) btn.disabled = true; // prevent double-clicks racing two device flows
   var status = document.getElementById('apConnectStatus');
   if (status) status.textContent = 'Requesting device code…';
   var publicOnly = !!(document.getElementById('apPublicOnlyToggle') && document.getElementById('apPublicOnlyToggle').checked);
@@ -2364,78 +2385,123 @@ async function startRepoScopeConnect(apiType) {
     var data = await resp.json();
     if (data.error) {
       if (status) status.textContent = 'Failed: ' + data.error;
+      if (btn) btn.disabled = false;
       return;
     }
     showDeviceCodePanel(data, apiType);
   } catch (e) {
     if (status) status.textContent = 'Failed: ' + e.message;
+    showToast('Connect failed: ' + e.message);
+    if (btn) btn.disabled = false;
   }
 }
 
 function showDeviceCodePanel(deviceData, apiType) {
   var status = document.getElementById('apConnectStatus');
   if (!status) return;
+  // user_code goes into innerHTML via escHtml AND into a data-attribute on the
+  // Copy button — the click handler reads from `dataset.code` instead of the
+  // attribute being interpolated into an inline JS string, so any quote
+  // characters in a future user_code value cannot break out of the handler.
   status.innerHTML = ''
     + '<div class="ap-device-code">'
     + '  <div>1. Open <a href="' + escHtml(deviceData.verification_uri) + '" target="_blank" rel="noopener">' + escHtml(deviceData.verification_uri) + '</a></div>'
-    + '  <div>2. Enter code: <code class="ap-code">' + escHtml(deviceData.user_code) + '</code> <button class="ap-copy" onclick="copyText(\'' + escHtml(deviceData.user_code) + '\', \'Copied code\')">Copy</button></div>'
+    + '  <div>2. Enter code: <code class="ap-code">' + escHtml(deviceData.user_code) + '</code> '
+    + '<button class="ap-copy" data-code="' + escHtml(deviceData.user_code) + '" onclick="copyText(this.dataset.code, &quot;Copied code&quot;)">Copy</button></div>'
     + '  <div class="ap-poll-status" id="apPollStatus">Waiting for authorization…</div>'
     + '</div>';
-  if (_repoScopePolling) { clearInterval(_repoScopePolling); _repoScopePolling = null; }
-  var deadline = Date.now() + (deviceData.expires_in || 900) * 1000;
-  var intervalMs = (deviceData.interval || 5) * 1000;
-  _repoScopePolling = setInterval(function() {
-    if (Date.now() > deadline) {
-      clearInterval(_repoScopePolling); _repoScopePolling = null;
-      var st = document.getElementById('apPollStatus');
-      if (st) st.textContent = 'Code expired. Click Connect to try again.';
-      return;
-    }
-    pollRepoScopeOnce(deviceData.device_code, deviceData.scope, apiType);
-  }, intervalMs);
+  _stopRepoScopePolling();
+  _repoScopeDeadline = Date.now() + (deviceData.expires_in || 900) * 1000;
+  _repoScopeInterval = (deviceData.interval || 5) * 1000;
+  _repoScopeDeviceCode = deviceData.device_code;
+  _repoScopeApiType = apiType;
+  _repoScopeErrorStreak = 0;
+  _repoScopePolling = setInterval(_repoScopeTick, _repoScopeInterval);
 }
 
-async function pollRepoScopeOnce(deviceCode, scope, apiType) {
+function _repoScopeTick() {
+  if (Date.now() > _repoScopeDeadline) {
+    _stopRepoScopePolling();
+    var st = document.getElementById('apPollStatus');
+    if (st) st.textContent = 'Code expired. Click Connect to try again.';
+    return;
+  }
+  pollRepoScopeOnce();
+}
+
+async function pollRepoScopeOnce() {
+  var deviceCode = _repoScopeDeviceCode;
+  var apiType = _repoScopeApiType;
   try {
     var resp = await fetch('/api/github/repo-scope/poll-token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ device_code: deviceCode, scope: scope }),
+      body: JSON.stringify({ device_code: deviceCode }),
     });
     var data = await resp.json();
+    // Bail out if a different flow took over while this poll was in flight.
+    if (deviceCode !== _repoScopeDeviceCode) return;
     if (data.error) {
       var st = document.getElementById('apPollStatus');
       if (st) st.textContent = 'Error: ' + data.error;
-      clearInterval(_repoScopePolling); _repoScopePolling = null;
+      _stopRepoScopePolling();
       return;
     }
-    if (data.status === 'pending' || data.status === 'slow_down') return;
+    if (data.status === 'pending') {
+      _repoScopeErrorStreak = 0;
+      return;
+    }
+    if (data.status === 'slow_down') {
+      // RFC 8628 §3.5: add at least 5s on slow_down and wait the new interval.
+      _stopRepoScopePolling();
+      _repoScopeInterval = _repoScopeInterval + 5000;
+      _repoScopePolling = setInterval(_repoScopeTick, _repoScopeInterval);
+      return;
+    }
     if (data.status === 'expired') {
       var st2 = document.getElementById('apPollStatus');
       if (st2) st2.textContent = 'Code expired. Click Connect to try again.';
-      clearInterval(_repoScopePolling); _repoScopePolling = null;
+      _stopRepoScopePolling();
       return;
     }
     if (data.status === 'ok') {
-      clearInterval(_repoScopePolling); _repoScopePolling = null;
+      _stopRepoScopePolling();
       showToast('GitHub repo access granted');
-      // Invalidate cache and reload the relevant tab
       _githubReposCache.owned = null;
       _githubReposCache.contributing = null;
       loadGithubRepos(apiType);
     }
   } catch (e) {
-    // transient — keep polling
+    // Transient network failures shouldn't kill the flow. Persistent failures
+    // (3 in a row) surface to the user instead of polling silently forever.
+    _repoScopeErrorStreak += 1;
+    if (_repoScopeErrorStreak >= 3) {
+      _stopRepoScopePolling();
+      var st3 = document.getElementById('apPollStatus');
+      if (st3) st3.textContent = 'Connection error. Please retry.';
+    }
   }
 }
 
 async function disconnectRepoScope() {
-  if (!confirm('Disconnect repo-scope GitHub access? You can re-connect any time.')) return;
+  if (!confirm('Disconnect repo-scope GitHub access locally? You can re-connect any time. To fully revoke the OAuth authorization you must also visit github.com → Settings → Applications.')) return;
+  // Cancel any in-flight polling first — otherwise a poll could race the
+  // disconnect and silently restore the token if GitHub returns ok at the
+  // same moment.
+  _stopRepoScopePolling();
+  _repoScopeDeviceCode = '';
   try {
-    await fetch('/api/github/repo-scope/disconnect', { method: 'POST' });
+    var resp = await fetch('/api/github/repo-scope/disconnect', { method: 'POST' });
+    var data = await resp.json().catch(function() { return {}; });
     _githubReposCache.owned = null;
     _githubReposCache.contributing = null;
-    showToast('Repo access disconnected');
+    showToast('Repo access disconnected locally');
+    if (data.revokeUrl) {
+      // Nudge the user toward fully revoking on github.com, since clearing
+      // locally does not invalidate the token at GitHub.
+      var go = confirm('Also fully revoke the GitHub OAuth authorization?\n\nThis opens github.com so you can disconnect the app there too.');
+      if (go) window.open(data.revokeUrl, '_blank', 'noopener');
+    }
     var tab = document.querySelector('.ap-tab.active');
     if (tab) addProjectSwitchTab(tab.getAttribute('data-tab'));
   } catch (e) {
