@@ -9,6 +9,7 @@ const { convertSession } = require('./convert');
 const { generateHandoff } = require('./handoff');
 const { CHANGELOG } = require('./changelog');
 const { getHTML } = require('./html');
+const projectsApi = require('./projects');
 
 // ── Logging ──────────────────────────────────
 const LOG_VERBOSE = process.env.CODEDASH_LOG !== '0';
@@ -28,7 +29,20 @@ function log(tag, msg, data) {
 
 function startServer(host, port, openBrowser = true) {
   const browserUrl = getBrowserUrl(host, port);
+  // DNS rebinding defense: only enforce when bound to a loopback address.
+  // Users who deliberately bind to a LAN address (e.g. for cross-device
+  // access) skip this check so they can hit the server by IP/hostname.
+  const isLoopbackBind = host === '127.0.0.1' || host === 'localhost' || host === '::1';
+  const allowedHosts = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
   const server = http.createServer((req, res) => {
+    if (isLoopbackBind) {
+      const hostName = String(req.headers.host || '').toLowerCase().split(':')[0];
+      if (hostName && !allowedHosts.has(hostName)) {
+        res.writeHead(403, { 'Content-Type': 'text/plain' });
+        res.end('Forbidden: host header must be localhost');
+        return;
+      }
+    }
     // req.url is usually relative, so this base is only for URL parsing.
     // Keep it stable instead of reusing the bind host, which may be a wildcard listen address.
     const parsed = new URL(req.url, `http://localhost:${port}`);
@@ -109,12 +123,24 @@ function startServer(host, port, openBrowser = true) {
     else if (req.method === 'POST' && pathname === '/api/launch') {
       readBody(req, body => {
         try {
-          const { sessionId, tool, flags, project, terminal } = JSON.parse(body);
-          if (!/^[A-Za-z0-9._-]{1,128}$/.test(String(sessionId || ''))) {
+          const { sessionId, tool, flags, project, terminal, mode } = JSON.parse(body);
+          const fresh = mode === 'fresh';
+          if (!fresh && !/^[A-Za-z0-9._-]{1,128}$/.test(String(sessionId || ''))) {
             throw new Error('invalid sessionId');
           }
-          log('LAUNCH', `session=${sessionId} tool=${tool || 'claude'} terminal=${terminal || 'default'} project=${project || '(none)'} flags=${(flags || []).join(',') || '(none)'}`);
-          openInTerminal(sessionId, tool || 'claude', flags || [], project || '', terminal || '');
+          if (fresh && !project) {
+            throw new Error('project path required for fresh session');
+          }
+          // The project path flows into a shell command string in terminals.js
+          // (`cd "..." && claude ...`). Even though JSON.stringify wraps the
+          // value in double quotes, bash still expands $() and backticks
+          // inside double-quoted strings. We refuse anything other than a
+          // plain on-disk directory path.
+          if (project && !projectsApi.isSafeLaunchPath(project)) {
+            throw new Error('invalid or unsafe project path');
+          }
+          log('LAUNCH', `mode=${fresh ? 'fresh' : 'resume'} session=${sessionId || '(none)'} tool=${tool || 'claude'} terminal=${terminal || 'default'} project=${project || '(none)'} flags=${(flags || []).join(',') || '(none)'}`);
+          openInTerminal(fresh ? '' : sessionId, tool || 'claude', flags || [], project || '', terminal || '', fresh ? 'fresh' : 'resume');
           log('LAUNCH', 'ok');
           json(res, { ok: true });
         } catch (e) {
@@ -400,6 +426,113 @@ function startServer(host, port, openBrowser = true) {
     else if (req.method === 'POST' && pathname === '/api/github/logout') {
       saveGitHubProfile(null);
       json(res, { ok: true });
+    }
+
+    // ── GitHub repos (for project launcher) ────────────────────
+    // GET /api/github/repos?type=owned|contributing
+    else if (req.method === 'GET' && pathname === '/api/github/repos') {
+      const profile = loadGitHubProfile();
+      if (!profile || !profile.token) {
+        return json(res, { error: 'GitHub not connected' }, 401);
+      }
+      const type = parsed.searchParams.get('type') || 'owned';
+      projectsApi.listGithubRepos(profile.token, type)
+        .then(repos => json(res, repos))
+        .catch(e => {
+          const status = /401|unauthorized|bad credentials/i.test(e.message) ? 401 : 500;
+          log('ERROR', `github/repos failed: ${e.message}`);
+          json(res, { error: e.message }, status);
+        });
+    }
+
+    // ── Manual / cloned projects registry ──────────────────────
+    else if (req.method === 'GET' && pathname === '/api/projects/manual') {
+      // Enrich each with current git info so the UI can render branch/last commit.
+      const list = projectsApi.loadProjects().map(p => {
+        const info = getProjectGitInfo(p.path) || null;
+        return { ...p, git: info };
+      });
+      json(res, list);
+    }
+
+    else if (req.method === 'POST' && pathname === '/api/projects/manual') {
+      readBody(req, body => {
+        let payload;
+        try { payload = JSON.parse(body || '{}'); }
+        catch (e) { return json(res, { ok: false, error: 'invalid json' }, 400); }
+        Promise.resolve()
+          .then(() => projectsApi.addProject({
+            name: payload.name,
+            path: payload.path,
+            source: payload.source,
+            remoteUrl: payload.remoteUrl,
+            defaultBranch: payload.defaultBranch,
+          }))
+          .then(project => {
+            log('PROJECT', `registered ${project.name} (${project.path})`);
+            json(res, { ok: true, project });
+          })
+          .catch(e => {
+            log('ERROR', `register project failed: ${e.message}`);
+            json(res, { ok: false, error: e.message }, 400);
+          });
+      });
+    }
+
+    else if (req.method === 'DELETE' && pathname.startsWith('/api/projects/manual/')) {
+      const id = pathname.split('/').pop();
+      if (!/^[a-f0-9]{16}$/.test(String(id || ''))) {
+        return json(res, { ok: false, error: 'invalid id' }, 400);
+      }
+      projectsApi.removeProject(id)
+        .then(removed => json(res, { ok: removed }))
+        .catch(e => json(res, { ok: false, error: e.message }, 500));
+    }
+
+    // POST /api/projects/clone — { fullName, cloneUrl, sshUrl } → clone into ~/code/<repo> + register
+    else if (req.method === 'POST' && pathname === '/api/projects/clone') {
+      readBody(req, body => {
+        try {
+          const { fullName, cloneUrl, sshUrl, defaultBranch } = JSON.parse(body || '{}');
+          if (!fullName || !cloneUrl) throw new Error('fullName and cloneUrl required');
+          // Validate fullName shape (owner/repo) and reject anything weird so
+          // it cannot poison log output or downstream string handling.
+          if (!/^[A-Za-z0-9._-]{1,100}\/[A-Za-z0-9._-]{1,100}$/.test(String(fullName))) {
+            throw new Error('invalid fullName (must be owner/repo)');
+          }
+          // Cross-check: the cloneUrl must point to the same owner/repo so a
+          // crafted request can't show "victim/legit" in the UI while cloning
+          // attacker-controlled code.
+          const urlMatch = String(cloneUrl).match(/^https:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/i);
+          if (!urlMatch) throw new Error('cloneUrl must be a github.com https URL');
+          const urlFullName = urlMatch[1] + '/' + urlMatch[2].replace(/\.git$/, '');
+          if (urlFullName.toLowerCase() !== String(fullName).toLowerCase()) {
+            throw new Error('fullName does not match cloneUrl');
+          }
+          const repoName = urlMatch[2].replace(/\.git$/, '');
+          if (!projectsApi.isSafeRepoName(repoName)) throw new Error('invalid repo name');
+          const destDir = projectsApi.suggestCloneDir(repoName);
+          log('CLONE', `start ${urlFullName} → ${destDir}`);
+          projectsApi.cloneRepo(cloneUrl, destDir)
+            .then(result => projectsApi.addProject({
+              name: repoName,
+              path: result.path,
+              source: 'github-clone',
+              remoteUrl: cloneUrl,
+              defaultBranch: defaultBranch || '',
+            }).then(project => ({ project, result })))
+            .then(({ project, result }) => {
+              log('CLONE', `done ${urlFullName} (${result.alreadyExisted ? 'reused' : 'cloned'})`);
+              json(res, { ok: true, project, alreadyExisted: result.alreadyExisted });
+            })
+            .catch(e => {
+              log('ERROR', `clone failed: ${e.message}`);
+              json(res, { ok: false, error: e.message, sshFallback: sshUrl || null }, 400);
+            });
+        } catch (e) {
+          json(res, { ok: false, error: e.message }, 400);
+        }
+      });
     }
 
     // ── Cloud Sync Proxy ─────────────────────
@@ -885,6 +1018,11 @@ function githubRequest(hostname, reqPath, method, body) {
 }
 
 async function githubDeviceCode() {
+  // Keep scope minimal: the token is forwarded to leaderboard.neuraldeep.ru by
+  // syncLeaderboard, so broader scopes would leak repo write access to a 3rd
+  // party. With `read:user` alone, /user/repos still returns the user's public
+  // repos — enough for the project launcher's "My repos" tab. Private and
+  // collaborator listings will appear empty; that's a deliberate trade-off.
   const data = await githubRequest('github.com', '/login/device/code', 'POST',
     JSON.stringify({ client_id: GITHUB_CLIENT_ID, scope: 'read:user' }));
   if (data.error) throw new Error(data.error_description || data.error);

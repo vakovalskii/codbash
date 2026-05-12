@@ -1246,47 +1246,97 @@ function renderQACard(s, idx) {
 }
 
 function renderProjects(container, sessions) {
-  var byGit = {};   // key → { name, list }
+  var byGit = {};   // key → { name, list, path, source, manualId }
   sessions.forEach(function(s) {
     var info = getRepoInfo(s.project, s.git_root);
-    if (!byGit[info.key]) byGit[info.key] = { name: info.name, list: [] };
+    if (!byGit[info.key]) byGit[info.key] = { name: info.name, list: [], path: info.key !== 'unknown' ? info.key : '', source: 'session', manualId: '' };
     byGit[info.key].list.push(s);
   });
 
-  var sorted = Object.entries(byGit).sort(function(a, b) {
-    return b[1].list[0].last_ts - a[1].list[0].last_ts;
+  // Merge manually-registered projects (local-only or cloned from GitHub) so
+  // they appear as project cards even before any session exists for them.
+  (window.manualProjects || []).forEach(function(p) {
+    if (!byGit[p.path]) {
+      byGit[p.path] = { name: p.name, list: [], path: p.path, source: p.source || 'manual', manualId: p.id, _git: p.git, _lastAdded: p.addedAt };
+    } else {
+      // Existing key from sessions — annotate with manual id so the launcher
+      // buttons can still show source and offer "remove from registry".
+      byGit[p.path].manualId = p.id;
+      if (!byGit[p.path].source || byGit[p.path].source === 'session') byGit[p.path].source = p.source || 'manual';
+    }
   });
 
+  var sorted = Object.entries(byGit).sort(function(a, b) {
+    var aTs = a[1].list[0] ? a[1].list[0].last_ts : (a[1]._lastAdded ? Date.parse(a[1]._lastAdded) : 0);
+    var bTs = b[1].list[0] ? b[1].list[0].last_ts : (b[1]._lastAdded ? Date.parse(b[1]._lastAdded) : 0);
+    return bTs - aTs;
+  });
+
+  var html = '<div style="display:flex;gap:8px;margin-bottom:12px;align-items:center">';
+  html += '<button class="toolbar-btn" onclick="openAddProject()" title="Register a local folder or clone from GitHub" style="background:#3b82f6;color:#fff;border-color:#3b82f6">+ Add Project</button>';
+  html += '<button class="toolbar-btn" onclick="document.querySelectorAll(\'.git-project-group\').forEach(function(g){g.classList.add(\'collapsed\')})">Collapse All</button>';
+  html += '<button class="toolbar-btn" onclick="document.querySelectorAll(\'.git-project-group\').forEach(function(g){g.classList.remove(\'collapsed\')})">Expand All</button>';
+  html += '</div>';
+
   if (sorted.length === 0) {
-    container.innerHTML = '<div class="empty-state">No projects found.</div>';
+    container.innerHTML = html + '<div class="empty-state">No projects yet. Click <strong>+ Add Project</strong> to register a local folder or clone one from GitHub.</div>';
     return;
   }
 
   var globalIdx = 0;
-  var html = '<div style="display:flex;gap:8px;margin-bottom:12px">';
-  html += '<button class="toolbar-btn" onclick="document.querySelectorAll(\'.git-project-group\').forEach(function(g){g.classList.add(\'collapsed\')})">Collapse All</button>';
-  html += '<button class="toolbar-btn" onclick="document.querySelectorAll(\'.git-project-group\').forEach(function(g){g.classList.remove(\'collapsed\')})">Expand All</button>';
-  html += '</div>';
   html += '<div class="git-projects">';
   sorted.forEach(function(entry) {
     var projKey = entry[0];
-    var projName = entry[1].name;
-    var list = entry[1].list.slice().sort(function(a, b) { return b.last_ts - a.last_ts; });
+    var projInfo = entry[1];
+    var projName = projInfo.name;
+    var projPath = projInfo.path;
+    var list = projInfo.list.slice().sort(function(a, b) { return b.last_ts - a.last_ts; });
     var color = getProjectColor(projName);
     var totalMsgs = list.reduce(function(s, e) { return s + (e.messages || 0); }, 0);
     var totalCost = list.reduce(function(s, e) { return s + getEstimatedSessionCost(e); }, 0);
     var costLabel = totalCost > 0 ? ' · ~$' + totalCost.toFixed(2) : '';
+    var lastSession = list[0]; // most recent
 
-    html += '<div class="git-project-group">';
+    var sourceTag = '';
+    if (projInfo.source === 'github-clone') sourceTag = '<span class="git-project-source-tag" title="Cloned from GitHub">github</span>';
+    else if (projInfo.source === 'manual') sourceTag = '<span class="git-project-source-tag" title="Manually added">added</span>';
+
+    var statsLine = list.length === 0
+      ? 'no sessions yet'
+      : (list.length + ' sessions · ' + totalMsgs + ' msgs' + costLabel);
+
+    html += '<div class="git-project-group' + (list.length === 0 ? ' collapsed' : '') + '">';
     html += '<div class="git-project-header" onclick="this.parentElement.classList.toggle(\'collapsed\')">';
     html += '<span class="group-dot" style="background:' + color + '"></span>';
-    html += '<span class="git-project-name">' + escHtml(projName) + '</span>';
-    html += '<span class="git-project-stats">' + list.length + ' sessions · ' + totalMsgs + ' msgs' + escHtml(costLabel) + '</span>';
+    html += '<span class="git-project-name">' + escHtml(projName) + sourceTag + '</span>';
+    html += '<span class="git-project-stats">' + escHtml(statsLine) + '</span>';
+
+    // Launch buttons — fresh + resume last. Only render if we know the local path.
+    if (projPath) {
+      // Prefer the tool the user actually worked with in this project; default
+      // to claude for brand-new entries with no sessions yet.
+      var preferredTool = lastSession && lastSession.tool ? lastSession.tool : 'claude';
+      html += '<button class="git-project-launch-btn primary" data-proj-path="' + escHtml(projPath) + '" data-tool="' + escHtml(preferredTool) + '" onclick="event.stopPropagation();launchNewProjectSession(this.dataset.projPath, this.dataset.tool)" title="Start a new ' + escHtml(preferredTool) + ' session in this folder">&#9654; New</button>';
+      if (lastSession) {
+        var lastId = lastSession.id || '';
+        var lastTool = lastSession.tool || 'claude';
+        html += '<button class="git-project-launch-btn" data-sess-id="' + escHtml(lastId) + '" data-sess-tool="' + escHtml(lastTool) + '" data-proj-path="' + escHtml(projPath) + '" onclick="event.stopPropagation();resumeLastProjectSession(this.dataset.sessId,this.dataset.sessTool,this.dataset.projPath)" title="Resume last session (' + escHtml(lastId.slice(0,8)) + ')">&#x21bb; Last</button>';
+      }
+    }
+
+    if (projInfo.manualId) {
+      html += '<button class="git-project-launch-btn" data-proj-id="' + escHtml(projInfo.manualId) + '" data-proj-name="' + escHtml(projName) + '" onclick="event.stopPropagation();unregisterProject(this.dataset.projId,this.dataset.projName)" title="Remove from registry (does not delete files)">&times;</button>';
+    }
+
     html += '<button class="git-project-open-btn" data-proj-key="' + escHtml(projKey) + '" data-proj-name="' + escHtml(projName) + '" onclick="event.stopPropagation();drillIntoGitProject(this.dataset.projKey,this.dataset.projName)" title="Show only this project\'s sessions">Open &rsaquo;</button>';
     html += '<span class="group-chevron">&#9660;</span>';
     html += '</div>';
     html += '<div class="qa-list">';
-    list.forEach(function(s) { html += renderQACard(s, globalIdx++); });
+    if (list.length === 0) {
+      html += '<div class="empty-state" style="padding:16px;font-size:12px">No sessions yet. Click <strong>&#9654; New</strong> above to start one.</div>';
+    } else {
+      list.forEach(function(s) { html += renderQACard(s, globalIdx++); });
+    }
     html += '</div>';
     html += '</div>';
   });
@@ -2106,12 +2156,246 @@ function dismissUpdate() {
   if (banner) banner.style.display = 'none';
 }
 
+// ── Project launcher: manual registry, New/Last session, Add Project modal ──
+
+window.manualProjects = window.manualProjects || [];
+var _githubReposCache = { owned: null, contributing: null };
+
+async function loadManualProjects() {
+  try {
+    var resp = await fetch('/api/projects/manual');
+    var data = await resp.json();
+    window.manualProjects = Array.isArray(data) ? data : [];
+    if (currentView === 'projects') render();
+  } catch (e) {
+    console.warn('[codbash] loadManualProjects failed:', e && e.message);
+  }
+}
+
+function _currentTerminalId() {
+  return localStorage.getItem('codedash-terminal') || '';
+}
+
+async function launchNewProjectSession(projectPath, tool) {
+  if (!projectPath) { showToast('No project path'); return; }
+  var t = tool || 'claude';
+  try {
+    var resp = await fetch('/api/launch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mode: 'fresh',
+        tool: t,
+        flags: [],
+        project: projectPath,
+        terminal: _currentTerminalId(),
+      }),
+    });
+    var data = await resp.json();
+    if (data.ok) showToast('Starting new ' + t + ' session in ' + projectPath.split('/').pop());
+    else showToast('Launch failed: ' + (data.error || 'unknown'));
+  } catch (e) {
+    showToast('Launch failed: ' + e.message);
+  }
+}
+
+async function resumeLastProjectSession(sessionId, tool, projectPath) {
+  if (!sessionId) { showToast('No previous session to resume'); return; }
+  try {
+    var resp = await fetch('/api/launch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: sessionId,
+        tool: tool || 'claude',
+        flags: [],
+        project: projectPath || '',
+        terminal: _currentTerminalId(),
+      }),
+    });
+    var data = await resp.json();
+    if (data.ok) showToast('Resuming ' + sessionId.slice(0, 8) + '…');
+    else showToast('Resume failed: ' + (data.error || 'unknown'));
+  } catch (e) {
+    showToast('Resume failed: ' + e.message);
+  }
+}
+
+async function unregisterProject(id, name) {
+  if (!id) return;
+  if (!confirm('Remove “' + name + '” from project registry? Files on disk are untouched.')) return;
+  try {
+    var resp = await fetch('/api/projects/manual/' + encodeURIComponent(id), { method: 'DELETE' });
+    var data = await resp.json();
+    if (data.ok) {
+      showToast('Removed ' + name);
+      await loadManualProjects();
+    } else {
+      showToast('Remove failed');
+    }
+  } catch (e) {
+    showToast('Remove failed: ' + e.message);
+  }
+}
+
+// ── Add Project modal ─────────────────────────────────────────
+
+function openAddProject() {
+  var overlay = document.getElementById('addProjectOverlay');
+  if (!overlay) return;
+  overlay.classList.add('open');
+  addProjectSwitchTab('local');
+  var input = document.getElementById('apLocalPath');
+  if (input) { input.value = ''; setTimeout(function() { input.focus(); }, 50); }
+  var err = document.getElementById('apLocalError'); if (err) err.textContent = '';
+}
+
+function closeAddProject() {
+  var overlay = document.getElementById('addProjectOverlay');
+  if (overlay) overlay.classList.remove('open');
+}
+
+function addProjectSwitchTab(tab) {
+  ['local', 'owned', 'contributing'].forEach(function(t) {
+    var btn = document.querySelector('.ap-tab[data-tab="' + t + '"]');
+    if (btn) btn.classList.toggle('active', t === tab);
+  });
+  document.getElementById('apPaneLocal').style.display = tab === 'local' ? '' : 'none';
+  document.getElementById('apPaneOwned').style.display = tab === 'owned' ? '' : 'none';
+  document.getElementById('apPaneContrib').style.display = tab === 'contributing' ? '' : 'none';
+  var addBtn = document.getElementById('apLocalAddBtn');
+  if (addBtn) addBtn.style.display = tab === 'local' ? '' : 'none';
+
+  if (tab === 'owned' || tab === 'contributing') {
+    var apiType = tab === 'owned' ? 'owned' : 'contributing';
+    if (!_githubReposCache[apiType]) loadGithubRepos(apiType);
+    else renderRepoList(apiType);
+  }
+}
+
+async function submitAddLocalProject() {
+  var input = document.getElementById('apLocalPath');
+  var err = document.getElementById('apLocalError');
+  if (err) err.textContent = '';
+  var p = input ? input.value.trim() : '';
+  if (!p) { if (err) err.textContent = 'Path required'; return; }
+  try {
+    var resp = await fetch('/api/projects/manual', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: p, source: 'manual' }),
+    });
+    var data = await resp.json();
+    if (data.ok) {
+      showToast('Added ' + (data.project.name || p));
+      closeAddProject();
+      await loadManualProjects();
+    } else {
+      if (err) err.textContent = data.error || 'Failed to add';
+    }
+  } catch (e) {
+    if (err) err.textContent = e.message;
+  }
+}
+
+async function loadGithubRepos(apiType) {
+  var containerId = apiType === 'owned' ? 'apOwnedRepos' : 'apContribRepos';
+  var container = document.getElementById(containerId);
+  if (!container) return;
+  container.innerHTML = '<div class="ap-loading">Loading repos…</div>';
+  try {
+    var resp = await fetch('/api/github/repos?type=' + apiType);
+    if (resp.status === 401) {
+      container.innerHTML = '<div class="ap-loading">GitHub not connected. Open <strong>Cloud</strong> view → connect GitHub, then return here.</div>';
+      return;
+    }
+    var data = await resp.json();
+    if (!Array.isArray(data)) {
+      container.innerHTML = '<div class="ap-loading">' + escHtml(data.error || 'Failed to load') + '</div>';
+      return;
+    }
+    _githubReposCache[apiType] = data;
+    renderRepoList(apiType);
+  } catch (e) {
+    container.innerHTML = '<div class="ap-loading">Failed to load: ' + escHtml(e.message) + '</div>';
+  }
+}
+
+function renderRepoList(apiType) {
+  var containerId = apiType === 'owned' ? 'apOwnedRepos' : 'apContribRepos';
+  var filterId = apiType === 'owned' ? 'apOwnedFilter' : 'apContribFilter';
+  var container = document.getElementById(containerId);
+  var filter = document.getElementById(filterId);
+  if (!container) return;
+  var repos = _githubReposCache[apiType] || [];
+  var q = filter ? filter.value.trim().toLowerCase() : '';
+  var filtered = q
+    ? repos.filter(function(r) {
+        return (r.fullName || '').toLowerCase().indexOf(q) >= 0
+          || (r.description || '').toLowerCase().indexOf(q) >= 0;
+      })
+    : repos;
+
+  if (filtered.length === 0) {
+    container.innerHTML = '<div class="ap-loading">' + (q ? 'No repos match "' + escHtml(q) + '"' : 'No repos found') + '</div>';
+    return;
+  }
+  var registeredPaths = (window.manualProjects || []).map(function(p) { return p.remoteUrl; }).filter(Boolean);
+  var html = '';
+  // No client-side truncation: the backend already caps at 300 repos and the
+  // filter has narrowed the list. Truncating here would hide matching repos
+  // when the user has many.
+  filtered.forEach(function(r) {
+    var already = registeredPaths.indexOf(r.cloneUrl) >= 0;
+    var meta = (r.private ? 'private · ' : '') + (r.description ? r.description : (r.htmlUrl || ''));
+    html += '<div class="ap-repo">';
+    html += '<div class="ap-repo-info">';
+    html += '<div class="ap-repo-name">' + escHtml(r.fullName) + '</div>';
+    html += '<div class="ap-repo-meta" title="' + escHtml(meta) + '">' + escHtml(meta) + '</div>';
+    html += '</div>';
+    html += '<button class="ap-repo-clone" data-full-name="' + escHtml(r.fullName) + '" data-clone-url="' + escHtml(r.cloneUrl) + '" data-ssh-url="' + escHtml(r.sshUrl || '') + '" data-default-branch="' + escHtml(r.defaultBranch || '') + '" ' + (already ? 'disabled' : '') + ' onclick="cloneRepoAndAdd(this)">' + (already ? 'Added' : 'Clone &amp; Add') + '</button>';
+    html += '</div>';
+  });
+  container.innerHTML = html;
+}
+
+async function cloneRepoAndAdd(btn) {
+  var fullName = btn.getAttribute('data-full-name');
+  var cloneUrl = btn.getAttribute('data-clone-url');
+  var sshUrl = btn.getAttribute('data-ssh-url');
+  var defaultBranch = btn.getAttribute('data-default-branch');
+  btn.disabled = true;
+  btn.textContent = 'Cloning…';
+  try {
+    var resp = await fetch('/api/projects/clone', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fullName: fullName, cloneUrl: cloneUrl, sshUrl: sshUrl, defaultBranch: defaultBranch }),
+    });
+    var data = await resp.json();
+    if (data.ok) {
+      showToast(data.alreadyExisted ? 'Linked existing clone of ' + fullName : 'Cloned ' + fullName);
+      btn.textContent = 'Added';
+      await loadManualProjects();
+    } else {
+      btn.disabled = false;
+      btn.textContent = 'Retry';
+      showToast('Clone failed: ' + (data.error || 'unknown'));
+    }
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = 'Retry';
+    showToast('Clone failed: ' + e.message);
+  }
+}
+
 // ── Initialization ─────────────────────────────────────────────
 
 (function init() {
   // Load data
   loadSessions();
   loadTerminals();
+  loadManualProjects();
   checkForUpdates();
   setInterval(checkForUpdates, 10000); // check every 10s
   setInterval(loadSessions, 60000);    // refresh sessions + invalidate analytics cache every 60s
