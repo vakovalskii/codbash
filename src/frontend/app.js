@@ -2738,6 +2738,52 @@ function _uninstallModalFocusTrap() {
   _modalFocusReturn = null;
 }
 
+// Full agent catalogue (id + label + how it's detected) — used to render the
+// "Detected agents" list including the not-installed entries, so the user can
+// see why a given agent is missing and what install method we expected.
+const _ALL_AGENT_META = [
+  { id: 'claude',       label: 'Claude Code',  expects: 'claude on PATH' },
+  { id: 'codex',        label: 'Codex',        expects: 'codex on PATH' },
+  { id: 'cursor',       label: 'Cursor',       expects: 'cursor-agent on PATH, or Cursor.app on macOS' },
+  { id: 'qwen',         label: 'Qwen Code',    expects: 'qwen on PATH' },
+  { id: 'kilo',         label: 'Kilo',         expects: 'kilo on PATH' },
+  { id: 'kiro',         label: 'Kiro CLI',     expects: 'kiro-cli on PATH' },
+  { id: 'opencode',     label: 'OpenCode',     expects: 'opencode on PATH' },
+  { id: 'copilot',      label: 'Copilot CLI',  expects: '~/.local/share/gh/extensions/gh-copilot' },
+  { id: 'copilot-chat', label: 'Copilot Chat', expects: '~/.vscode/extensions/github.copilot-chat-*' },
+];
+
+function renderDetectedAgentsList(targetEl) {
+  if (!targetEl) return;
+  var installed = window.installedAgents || [];
+  var installedById = {};
+  installed.forEach(function(a) { installedById[a.id] = a; });
+
+  var html = '';
+  _ALL_AGENT_META.forEach(function(meta) {
+    var hit = installedById[meta.id];
+    if (hit) {
+      var viaLabel = hit.detectedVia === 'path' ? 'PATH'
+        : hit.detectedVia === 'app-bundle' ? 'macOS .app'
+        : hit.detectedVia === 'gh-extension' ? 'gh extension'
+        : hit.detectedVia === 'vscode-extension' ? 'VS Code extension'
+        : String(hit.detectedVia || 'detected');
+      html += '<div class="ps-detected-item installed">'
+        + '<span class="ps-detected-status installed" aria-label="Installed">✓ Installed</span>'
+        + '<span class="ps-detected-name">' + escHtml(meta.label) + '</span>'
+        + '<span class="ps-detected-via" title="Detected via ' + escHtml(viaLabel) + '">' + escHtml(viaLabel) + '</span>'
+        + '</div>';
+    } else {
+      html += '<div class="ps-detected-item missing">'
+        + '<span class="ps-detected-status missing" aria-label="Not installed">— Not installed</span>'
+        + '<span class="ps-detected-name">' + escHtml(meta.label) + '</span>'
+        + '<span class="ps-detected-via" title="Expected: ' + escHtml(meta.expects) + '">' + escHtml(meta.expects) + '</span>'
+        + '</div>';
+    }
+  });
+  targetEl.innerHTML = html;
+}
+
 function openProjectsSettings() {
   var overlay = document.getElementById('projectsSettingsOverlay');
   if (!overlay) return;
@@ -2752,7 +2798,8 @@ function openProjectsSettings() {
   if (select) select.innerHTML = html;
   var err = document.getElementById('psError'); if (err) err.textContent = '';
   var status = document.getElementById('psDetectStatus');
-  if (status) status.textContent = agents.length + ' agent' + (agents.length === 1 ? '' : 's') + ' detected';
+  if (status) status.textContent = agents.length + ' of ' + _ALL_AGENT_META.length + ' agents installed';
+  renderDetectedAgentsList(document.getElementById('psDetectedList'));
   overlay.classList.add('open');
   overlay.setAttribute('aria-hidden', 'false');
   _installModalFocusTrap(overlay);

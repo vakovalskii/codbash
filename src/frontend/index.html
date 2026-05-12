@@ -233,9 +233,16 @@
                 <option>Loading agents…</option>
             </select>
             <div class="ap-hint" id="psDefaultAgentHint">Used when a project has no last-used agent yet. Only agents installed on this machine are listed.</div>
-            <div style="margin-top:14px">
-                <button class="toolbar-btn" onclick="refreshAgentsDetection()" aria-label="Refresh agent detection">↻ Refresh detection</button>
-                <span id="psDetectStatus" class="ap-hint" style="margin-left:8px" role="status"></span>
+
+            <div style="margin-top:18px">
+                <div class="ps-label" style="margin-bottom:8px">Detected agents</div>
+                <div id="psDetectedList" class="ps-detected-list" aria-live="polite">
+                    <div class="ap-hint">Loading…</div>
+                </div>
+                <div style="margin-top:10px">
+                    <button class="toolbar-btn" onclick="refreshAgentsDetection()" aria-label="Refresh agent detection">↻ Refresh detection</button>
+                    <span id="psDetectStatus" class="ap-hint" style="margin-left:8px" role="status"></span>
+                </div>
             </div>
             <div class="ap-error" id="psError" role="alert"></div>
         </div>

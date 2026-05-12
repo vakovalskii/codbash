@@ -3676,3 +3676,50 @@ body {
     outline: 2px solid var(--accent-blue);
     outline-offset: 1px;
 }
+
+/* Detected-agents list inside the Projects settings modal */
+.ps-detected-list {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px;
+    max-height: 220px;
+    overflow-y: auto;
+}
+.ps-detected-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 8px;
+    font-size: 12px;
+    color: var(--text-primary);
+    border-radius: 4px;
+}
+.ps-detected-item + .ps-detected-item { margin-top: 2px; }
+.ps-detected-item.installed { /* default look */ }
+.ps-detected-item.missing { color: var(--text-muted); }
+.ps-detected-status {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    white-space: nowrap;
+}
+.ps-detected-status.installed {
+    color: var(--accent-green);
+    border-color: var(--accent-green);
+}
+.ps-detected-status.missing {
+    color: var(--text-muted);
+}
+.ps-detected-name { flex: 1; }
+.ps-detected-via {
+    font-size: 10px;
+    color: var(--text-muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}

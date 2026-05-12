@@ -17,6 +17,17 @@ const SAFE_BIN_NAME = /^[A-Za-z0-9._-]{1,64}$/;
 
 // Mapping: agent id → CLI binary name + optional macOS .app bundle name.
 // Ordering here defines the preference order returned by detect().
+//
+// Special detectors:
+// - `customCheck(ctx)` — runs an arbitrary predicate when a simple PATH or
+//   app-bundle lookup isn't enough. Used for Copilot variants because each
+//   ships as a *plugin* on top of an unrelated host:
+//     * copilot (CLI) = `gh-copilot` extension installed under `gh` —
+//       having `gh` on PATH is NOT enough.
+//     * copilot-chat = VS Code extension under `~/.vscode/extensions/` —
+//       having VS Code installed is NOT enough.
+//   This avoids false positives that confused users into thinking they had
+//   Copilot when they only had its host app.
 const AGENT_DEFS = Object.freeze([
   { id: 'claude',       label: 'Claude Code',  bin: 'claude' },
   { id: 'codex',        label: 'Codex',        bin: 'codex' },
@@ -25,10 +36,49 @@ const AGENT_DEFS = Object.freeze([
   { id: 'kilo',         label: 'Kilo',         bin: 'kilo' },
   { id: 'kiro',         label: 'Kiro CLI',     bin: 'kiro-cli' },
   { id: 'opencode',     label: 'OpenCode',     bin: 'opencode' },
-  { id: 'copilot',      label: 'Copilot CLI',  bin: 'gh' }, // requires `gh copilot`; presence of gh is the proxy
-  // copilot-chat is a VS Code extension only — detect via app bundle.
-  { id: 'copilot-chat', label: 'Copilot Chat', appBundle: 'Visual Studio Code.app' },
+  { id: 'copilot',      label: 'Copilot CLI',  customCheck: 'ghCopilotExtension' },
+  { id: 'copilot-chat', label: 'Copilot Chat', customCheck: 'vscodeCopilotChatExtension' },
 ]);
+
+// Custom detectors return { ok: true, detectedVia: <string> } or null.
+function ghCopilotExtension() {
+  // gh-copilot extension lives under the gh data dir. Locations vary by OS
+  // but the layout is stable: <data>/gh/extensions/gh-copilot/
+  var candidates = [
+    path.join(os.homedir(), '.local', 'share', 'gh', 'extensions', 'gh-copilot'),
+    // macOS sometimes uses XDG_DATA_HOME if set, otherwise still ~/.local/share
+    process.env.XDG_DATA_HOME ? path.join(process.env.XDG_DATA_HOME, 'gh', 'extensions', 'gh-copilot') : null,
+    // Windows: %LOCALAPPDATA%\GitHub CLI\extensions\gh-copilot
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'GitHub CLI', 'extensions', 'gh-copilot') : null,
+  ].filter(Boolean);
+  for (var i = 0; i < candidates.length; i++) {
+    try {
+      if (fs.statSync(candidates[i]).isDirectory()) {
+        return { ok: true, detectedVia: 'gh-extension' };
+      }
+    } catch (_) { /* not present here */ }
+  }
+  return null;
+}
+
+function vscodeCopilotChatExtension() {
+  // VS Code extensions live in ~/.vscode/extensions/<publisher>.<name>-<version>/
+  // The Copilot Chat extension publishes as `github.copilot-chat`.
+  var extDir = path.join(os.homedir(), '.vscode', 'extensions');
+  try {
+    var entries = fs.readdirSync(extDir);
+    var hit = entries.some(function(name) {
+      return /^github\.copilot-chat(-.*)?$/.test(name);
+    });
+    if (hit) return { ok: true, detectedVia: 'vscode-extension' };
+  } catch (_) { /* extensions dir missing */ }
+  return null;
+}
+
+var CUSTOM_CHECKS = {
+  ghCopilotExtension: ghCopilotExtension,
+  vscodeCopilotChatExtension: vscodeCopilotChatExtension,
+};
 
 function realWhich(bin) {
   if (!SAFE_BIN_NAME.test(bin)) return null;
@@ -73,6 +123,7 @@ async function detect(ctx) {
   const platform = ctx.platform || process.platform;
   const which = ctx.which || realWhich;
   const appBundleExists = ctx.appBundleExists || realAppBundleExists;
+  const customChecks = ctx.customChecks || CUSTOM_CHECKS;
   const out = [];
   for (const def of AGENT_DEFS) {
     let detectedVia = null;
@@ -87,6 +138,13 @@ async function detect(ctx) {
     if (!detectedVia && def.appBundle && platform === 'darwin') {
       if (appBundleExists(def.appBundle)) {
         detectedVia = 'app-bundle';
+      }
+    }
+    if (!detectedVia && def.customCheck) {
+      const fn = customChecks[def.customCheck];
+      const result = typeof fn === 'function' ? fn() : null;
+      if (result && result.ok) {
+        detectedVia = result.detectedVia || 'custom';
       }
     }
     if (detectedVia) {

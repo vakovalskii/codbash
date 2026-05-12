@@ -11,12 +11,16 @@ function loadFresh() {
   return require('../src/agents-detect');
 }
 
+// Default stub for custom detectors so tests don't probe the real filesystem.
+const NO_CUSTOM = { ghCopilotExtension: () => null, vscodeCopilotChatExtension: () => null };
+
 test('detect picks up an agent found on PATH', async () => {
   const { detect } = loadFresh();
   const got = await detect({
     platform: 'darwin',
     which: (bin) => bin === 'claude' ? '/usr/local/bin/claude' : null,
     appBundleExists: () => false,
+    customChecks: NO_CUSTOM,
   });
   const claude = got.agents.find(a => a.id === 'claude');
   assert.ok(claude, 'claude should be detected');
@@ -30,6 +34,7 @@ test('detect falls back to macOS app bundle when CLI is missing', async () => {
     platform: 'darwin',
     which: () => null,
     appBundleExists: (name) => name === 'Cursor.app',
+    customChecks: NO_CUSTOM,
   });
   const cursor = got.agents.find(a => a.id === 'cursor');
   assert.ok(cursor, 'cursor should be detected via app bundle');
@@ -42,6 +47,7 @@ test('detect ignores app-bundle lookup on non-darwin', async () => {
     platform: 'linux',
     which: () => null,
     appBundleExists: () => true, // would-be hit, must be ignored
+    customChecks: NO_CUSTOM,
   });
   assert.equal(got.agents.length, 0);
 });
@@ -52,10 +58,29 @@ test('detect prefers PATH binary over app bundle for the same agent', async () =
     platform: 'darwin',
     which: (bin) => bin === 'cursor-agent' ? '/opt/homebrew/bin/cursor-agent' : null,
     appBundleExists: () => true,
+    customChecks: NO_CUSTOM,
   });
   const cursor = got.agents.find(a => a.id === 'cursor');
   assert.ok(cursor);
   assert.equal(cursor.detectedVia, 'path', 'PATH should win over app-bundle');
+});
+
+test('detect uses customCheck only when PATH and app-bundle miss', async () => {
+  const { detect } = loadFresh();
+  const got = await detect({
+    platform: 'linux',
+    which: () => null,
+    appBundleExists: () => false,
+    customChecks: {
+      ghCopilotExtension: () => ({ ok: true, detectedVia: 'gh-extension' }),
+      vscodeCopilotChatExtension: () => null,
+    },
+  });
+  const copilot = got.agents.find(a => a.id === 'copilot');
+  assert.ok(copilot, 'copilot should be detected via gh extension');
+  assert.equal(copilot.detectedVia, 'gh-extension');
+  const chat = got.agents.find(a => a.id === 'copilot-chat');
+  assert.equal(chat, undefined, 'copilot-chat should NOT be detected when extension is missing');
 });
 
 test('detect labels each agent with a human-readable string', async () => {
@@ -64,6 +89,7 @@ test('detect labels each agent with a human-readable string', async () => {
     platform: 'darwin',
     which: (bin) => '/usr/bin/' + bin,
     appBundleExists: () => false,
+    customChecks: NO_CUSTOM,
   });
   // All 7 agents from terminals.js plus the synthetic copilot-chat alias.
   const ids = got.agents.map(a => a.id).sort();
@@ -85,6 +111,7 @@ test('detect.refreshedAt is an ISO timestamp', async () => {
     platform: 'linux',
     which: () => null,
     appBundleExists: () => false,
+    customChecks: NO_CUSTOM,
   });
   assert.match(got.refreshedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
 });
@@ -95,6 +122,7 @@ test('detect response never contains a "token" or "repoToken" field', async () =
     platform: 'darwin',
     which: () => '/usr/local/bin/claude',
     appBundleExists: () => false,
+    customChecks: NO_CUSTOM,
   });
   const json = JSON.stringify(got);
   assert.equal(json.includes('token'), false, 'response must not leak token field');
