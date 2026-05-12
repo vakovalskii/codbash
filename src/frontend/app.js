@@ -1354,11 +1354,21 @@ function switchProjectsSubtab(next) {
 // projects that have sessions but no registry entry yet (so the user can still
 // resume them with one click).
 function renderProjectsLanding(container, sessions) {
-  // Build the same merged map as History does, but only render the launcher
-  // surface. History still shows the grouped session lists with everything
-  // we had before.
+  // Projects landing shows ONLY the registry — projects you explicitly added
+  // via "+ Add Project", cloned from GitHub, or that got auto-registered on
+  // first launch. Session-derived folders (every directory that ever held a
+  // Claude/Cursor/Codex session) live exclusively in the History subtab.
+  // This keeps the launcher focused on "things I'm actively working on" and
+  // not a dump of every workspace I've ever opened.
   var byPath = mergeRegistryWithSessions(sessions);
-  var entries = sortMergedEntries(byPath);
+  // Filter to registry-only entries — `manualId` is set when the project came
+  // from projects.json (manual / github-clone / auto). Pure session-derived
+  // entries don't have it.
+  var registryOnly = {};
+  Object.keys(byPath).forEach(function(k) {
+    if (byPath[k].manualId) registryOnly[k] = byPath[k];
+  });
+  var entries = sortMergedEntries(registryOnly);
 
   // Loading guard — keep the "no agent installed" banner from flashing on
   // first paint while /api/agents/installed is still in flight.
@@ -1389,9 +1399,12 @@ function renderProjectsLanding(container, sessions) {
 
   if (entries.length === 0) {
     container.innerHTML = toolbar +
-      '<div class="projects-empty">No projects yet. ' +
-      '<button class="toolbar-btn toolbar-btn-primary" onclick="openAddProject()" style="margin:8px 0">+ Add Project</button><br>' +
-      '<span style="font-size:12px">Or start a fresh session in any folder under your home directory and it will be auto-registered.</span></div>';
+      '<div class="projects-empty">No registered projects yet.<br>' +
+      '<button class="toolbar-btn toolbar-btn-primary" onclick="openAddProject()" style="margin:12px 0">+ Add Project</button><br>' +
+      '<span style="font-size:12px">Register a local folder or clone one from GitHub. ' +
+      'You can also start a fresh session in any git repo under your home directory ' +
+      '— it will be auto-registered.<br><br>' +
+      'Previous sessions are still available in the <strong>History</strong> subtab above.</span></div>';
     return;
   }
 
