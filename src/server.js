@@ -10,6 +10,14 @@ const { generateHandoff } = require('./handoff');
 const { CHANGELOG } = require('./changelog');
 const { getHTML } = require('./html');
 const projectsApi = require('./projects');
+const settingsApi = require('./settings');
+// Element-level allowlist for launch flags. terminals.js currently only checks
+// for 'skip-permissions'; this set is the surface area we accept from clients.
+const ALLOWED_LAUNCH_FLAGS = new Set(['skip-permissions']);
+const agentsDetect = require('./agents-detect');
+const os = require('os');
+const fs = require('fs');
+const pathLib = require('path');
 
 // ── Logging ──────────────────────────────────
 const LOG_VERBOSE = process.env.CODEDASH_LOG !== '0';
@@ -70,7 +78,29 @@ function startServer(host, port, openBrowser = true) {
 
     // ── Static ──────────────────────────────
     if (req.method === 'GET' && (pathname === '/' || pathname === '/index.html')) {
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      // Defense-in-depth for the loopback-only HTML page:
+      // - script-src/style-src 'self' 'unsafe-inline' because the template
+      //   injects all JS/CSS inline (zero-deps build, see html.js)
+      // - connect-src 'self' so a malicious extension cannot fetch tokens from
+      //   our API and POST them elsewhere
+      // - frame-ancestors 'none' / X-Frame-Options DENY to block clickjacking
+      // - X-Content-Type-Options nosniff so the browser won't sniff text/html
+      //   when our endpoints return JSON.
+      res.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Content-Security-Policy': [
+          "default-src 'self'",
+          "script-src 'self' 'unsafe-inline'",
+          "style-src 'self' 'unsafe-inline'",
+          "connect-src 'self'",
+          "img-src 'self' data:",
+          "frame-ancestors 'none'",
+          "base-uri 'self'",
+        ].join('; '),
+        'X-Content-Type-Options': 'nosniff',
+        'X-Frame-Options': 'DENY',
+        'Referrer-Policy': 'no-referrer',
+      });
       res.end(getHTML());
     }
 
@@ -122,32 +152,125 @@ function startServer(host, port, openBrowser = true) {
     // ── Launch ──────────────────────────────
     else if (req.method === 'POST' && pathname === '/api/launch') {
       readBody(req, body => {
-        try {
-          const { sessionId, tool, flags, project, terminal, mode } = JSON.parse(body);
-          const fresh = mode === 'fresh';
-          if (!fresh && !/^[A-Za-z0-9._-]{1,128}$/.test(String(sessionId || ''))) {
-            throw new Error('invalid sessionId');
+        (async () => {
+          try {
+            const parsed = JSON.parse(body);
+            const { sessionId, tool, flags, project, terminal, mode, autoRegister } = parsed;
+            const fresh = mode === 'fresh';
+            if (!fresh && !/^[A-Za-z0-9._-]{1,128}$/.test(String(sessionId || ''))) {
+              throw new Error('invalid sessionId');
+            }
+            if (fresh && !project) {
+              throw new Error('project path required for fresh session');
+            }
+            // The project path flows into a shell command string in terminals.js
+            // (`cd "..." && claude ...`). Even though JSON.stringify wraps the
+            // value in double quotes, bash still expands $() and backticks
+            // inside double-quoted strings. We refuse anything other than a
+            // plain on-disk directory path.
+            if (project && !projectsApi.isSafeLaunchPath(project)) {
+              throw new Error('invalid or unsafe project path');
+            }
+            const resolvedTool = settingsApi.isKnownAgent(tool) ? tool : 'claude';
+            // Explicit allowlist for flags — element-level. Defense-in-depth in
+            // case a future code path interpolates a flag string into a shell
+            // command. Today only --dangerously-skip-permissions is allowed.
+            const safeFlags = Array.isArray(flags)
+              ? flags.filter(f => typeof f === 'string' && ALLOWED_LAUNCH_FLAGS.has(f))
+              : [];
+            log('LAUNCH', `mode=${fresh ? 'fresh' : 'resume'} session=${sessionId || '(none)'} tool=${resolvedTool} terminal=${terminal || 'default'} project=${project || '(none)'} flags=${safeFlags.join(',') || '(none)'}`);
+            openInTerminal(fresh ? '' : sessionId, resolvedTool, safeFlags, project || '', terminal || '', fresh ? 'fresh' : 'resume');
+
+            // Auto-register: when a fresh launch fires for a path under $HOME
+            // that is either a git repo or has been launched ≥2 times, add it
+            // to the manual registry so it surfaces as a launcher card. Failures
+            // here are non-fatal — the launch already succeeded.
+            let registered;
+            if (fresh && project && autoRegister !== false) {
+              try {
+                const maybe = await maybeAutoRegister(project);
+                if (maybe && maybe.added) registered = maybe.project;
+              } catch (e) {
+                log('WARN', `auto-register failed: ${e.message}`);
+              }
+            }
+
+            // Remember the tool the user picked for this project so the next
+            // ▶ New click defaults to the same agent.
+            if (project) {
+              try { await settingsApi.rememberLastUsed(project, resolvedTool); } catch (_) {}
+            }
+
+            log('LAUNCH', 'ok');
+            json(res, registered ? { ok: true, registered } : { ok: true });
+          } catch (e) {
+            log('ERROR', `launch failed: ${e.message}`);
+            json(res, { ok: false, error: e.message }, 400);
           }
-          if (fresh && !project) {
-            throw new Error('project path required for fresh session');
-          }
-          // The project path flows into a shell command string in terminals.js
-          // (`cd "..." && claude ...`). Even though JSON.stringify wraps the
-          // value in double quotes, bash still expands $() and backticks
-          // inside double-quoted strings. We refuse anything other than a
-          // plain on-disk directory path.
-          if (project && !projectsApi.isSafeLaunchPath(project)) {
-            throw new Error('invalid or unsafe project path');
-          }
-          log('LAUNCH', `mode=${fresh ? 'fresh' : 'resume'} session=${sessionId || '(none)'} tool=${tool || 'claude'} terminal=${terminal || 'default'} project=${project || '(none)'} flags=${(flags || []).join(',') || '(none)'}`);
-          openInTerminal(fresh ? '' : sessionId, tool || 'claude', flags || [], project || '', terminal || '', fresh ? 'fresh' : 'resume');
-          log('LAUNCH', 'ok');
-          json(res, { ok: true });
-        } catch (e) {
-          log('ERROR', `launch failed: ${e.message}`);
-          json(res, { ok: false, error: e.message }, 400);
-        }
+        })();
       });
+    }
+
+    // ── Settings (UI-level) ─────────────────
+    else if (req.method === 'GET' && pathname === '/api/settings') {
+      // Filter defaultAgent against the current installed list so the client
+      // never sees a stale value pointing at an uninstalled agent.
+      agentsDetect.detectRealOS().then(det => {
+        const settings = settingsApi.loadSettings();
+        const installedIds = new Set(det.agents.map(a => a.id));
+        const safeDefault = settings.defaultAgent && installedIds.has(settings.defaultAgent)
+          ? settings.defaultAgent
+          : null;
+        json(res, {
+          defaultAgent: safeDefault,
+          lastUsedByPath: settings.lastUsedByPath,
+        });
+      }).catch(e => json(res, { error: e.message }, 500));
+    }
+    else if (req.method === 'PUT' && pathname === '/api/settings') {
+      readBody(req, body => {
+        agentsDetect.detectRealOS().then(det => {
+          let parsed;
+          try { parsed = JSON.parse(body || '{}'); }
+          catch { return json(res, { error: 'invalid json' }, 400); }
+
+          const next = {};
+          if (Object.prototype.hasOwnProperty.call(parsed, 'defaultAgent')) {
+            const da = parsed.defaultAgent;
+            if (da === null) {
+              next.defaultAgent = null;
+            } else if (!settingsApi.isKnownAgent(da)) {
+              return json(res, { error: 'unknown agent id' }, 400);
+            } else if (!det.agents.some(a => a.id === da)) {
+              return json(res, { error: 'agent not installed: ' + da }, 400);
+            } else {
+              next.defaultAgent = da;
+            }
+          }
+          settingsApi.updateSettings(next)
+            .then(saved => json(res, {
+              defaultAgent: saved.defaultAgent,
+              lastUsedByPath: saved.lastUsedByPath,
+            }))
+            .catch(e => json(res, { error: e.message }, 500));
+        }).catch(e => json(res, { error: e.message }, 500));
+      });
+    }
+
+    // ── Installed agents detection ──────────
+    // We expose detection metadata to the browser but strip `binPath` — the
+    // browser has no business knowing the user's filesystem layout, and a
+    // future code path could otherwise pass an attacker-controlled value back
+    // to the server expecting it to be the same internal path.
+    else if (req.method === 'GET' && pathname === '/api/agents/installed') {
+      agentsDetect.detectRealOS()
+        .then(d => json(res, stripBinPaths(d)))
+        .catch(e => json(res, { error: e.message }, 500));
+    }
+    else if (req.method === 'POST' && pathname === '/api/agents/refresh-detect') {
+      agentsDetect.detectRealOS({ force: true })
+        .then(d => json(res, stripBinPaths(d)))
+        .catch(e => json(res, { error: e.message }, 500));
     }
 
     // ── Delete ──────────────────────────────
@@ -684,6 +807,59 @@ function startServer(host, port, openBrowser = true) {
   });
 }
 
+// Auto-register helper for /api/launch. Adds a fresh-launch project to the
+// manual registry when it looks like a real workspace the user will revisit:
+//   * the path must be under $HOME (no /tmp, no /Applications)
+//   * AND either:
+//      - the path contains a .git directory or file (real repo or worktree), OR
+//      - the user has already fresh-launched the same path before (tracked
+//        via settings.lastUsedByPath — second hit means it survived the
+//        one-shot threshold).
+// Returns { added: boolean, project } so the caller can surface a toast.
+// Async: awaits the projects.js mutex-serialized write so we never report
+// success before the registry has actually persisted the new entry.
+async function maybeAutoRegister(projectPath) {
+  if (!projectPath || typeof projectPath !== 'string') return { added: false };
+  const abs = pathLib.resolve(projectPath);
+  const home = os.homedir();
+  if (!abs.startsWith(home + pathLib.sep) && abs !== home) return { added: false };
+
+  const existing = projectsApi.loadProjects().find(p => p.path === abs);
+  if (existing) return { added: false, project: existing };
+
+  // Single stat — both directory and file forms of .git count as a repo.
+  const isGitRepo = (() => {
+    try {
+      const st = fs.statSync(pathLib.join(abs, '.git'));
+      return st.isDirectory() || st.isFile();
+    } catch { return false; }
+  })();
+
+  const previouslyLaunched = !!(settingsApi.loadSettings().lastUsedByPath || {})[abs];
+
+  if (!isGitRepo && !previouslyLaunched) return { added: false };
+
+  // Await the registry write so the response to the client reflects reality.
+  const project = await projectsApi.addProject({
+    name: pathLib.basename(abs),
+    path: abs,
+    source: 'auto',
+  });
+  return { added: true, project };
+}
+
+// Remove binPath from each agent entry before serialising to the browser.
+function stripBinPaths(detection) {
+  if (!detection || !Array.isArray(detection.agents)) return detection;
+  return {
+    refreshedAt: detection.refreshedAt,
+    agents: detection.agents.map(a => {
+      const { binPath, ...rest } = a;
+      return rest;
+    }),
+  };
+}
+
 function openIDE(ide, target) {
   const bin = ide === 'cursor' ? 'cursor' : 'code';
   const winBin = bin + '.exe';
@@ -1000,10 +1176,26 @@ function json(res, data, status = 200) {
   res.end(JSON.stringify(data));
 }
 
+// Cap request bodies at 2 MB. Without a limit a local process (or a page
+// opened by the user that hits the loopback API) can stream arbitrary bytes
+// and exhaust heap memory. 2 MB is generous — every legitimate POST body in
+// this codebase is well under 100 KB.
+const MAX_REQUEST_BODY = 2 * 1024 * 1024;
 function readBody(req, cb) {
   let body = '';
-  req.on('data', chunk => body += chunk);
-  req.on('end', () => cb(body));
+  let size = 0;
+  let aborted = false;
+  req.on('data', chunk => {
+    if (aborted) return;
+    size += chunk.length;
+    if (size > MAX_REQUEST_BODY) {
+      aborted = true;
+      req.destroy();
+      return;
+    }
+    body += chunk;
+  });
+  req.on('end', () => { if (!aborted) cb(body); });
 }
 
 function getBrowserUrl(host, port) {
@@ -1052,9 +1244,9 @@ function isNewer(latest, current) {
 }
 
 // ── GitHub Auth (Device Flow) ──────────────
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
+// fs, os, pathLib are already required at the top of the file. Aliasing path
+// here so the legacy block below keeps reading naturally without renames.
+const path = pathLib;
 
 const GITHUB_CLIENT_ID = 'Ov23liBD3XGfBBIZiyK6';
 const GITHUB_PROFILE_FILE = path.join(os.homedir(), '.codedash', 'github-profile.json');
@@ -1223,9 +1415,18 @@ function saveGitHubProfile(profile) {
   if (profile) {
     // Atomic write + restrictive perms (owner read/write only). The token file
     // would otherwise be world-readable on shared boxes/CI runners.
+    // Double-chmod pattern: set mode on the .tmp, then re-chmod the final
+    // path after rename — on some Linux filesystems renameSync preserves the
+    // *destination's* mode if the file already existed, leaving a 0644 hole.
     const tmp = GITHUB_PROFILE_FILE + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(profile, null, 2), { mode: 0o600 });
+    if (process.platform !== 'win32') {
+      try { fs.chmodSync(tmp, 0o600); } catch {}
+    }
     fs.renameSync(tmp, GITHUB_PROFILE_FILE);
+    if (process.platform !== 'win32') {
+      try { fs.chmodSync(GITHUB_PROFILE_FILE, 0o600); } catch {}
+    }
   } else {
     try { fs.unlinkSync(GITHUB_PROFILE_FILE); } catch {}
   }

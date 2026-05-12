@@ -192,36 +192,62 @@
 </div>
 
 <!-- Add Project modal: open from Projects view to register a local path or clone from GitHub. -->
-<div class="confirm-overlay" id="addProjectOverlay">
+<div class="confirm-overlay" id="addProjectOverlay" role="dialog" aria-modal="true" aria-labelledby="apTitle" aria-hidden="true">
     <div class="confirm-box add-project-box">
-        <h3>Add project</h3>
-        <div class="ap-tabs">
-            <button class="ap-tab active" data-tab="local" onclick="addProjectSwitchTab('local')">Local path</button>
-            <button class="ap-tab" data-tab="owned" onclick="addProjectSwitchTab('owned')">My GitHub repos</button>
-            <button class="ap-tab" data-tab="contributing" onclick="addProjectSwitchTab('contributing')">Contributing</button>
+        <h3 id="apTitle">Add project</h3>
+        <div class="ap-tabs" role="tablist" aria-label="Add project source">
+            <button class="ap-tab active" data-tab="local" role="tab" aria-selected="true" tabindex="0" onclick="addProjectSwitchTab('local')">Local path</button>
+            <button class="ap-tab" data-tab="owned" role="tab" aria-selected="false" tabindex="-1" onclick="addProjectSwitchTab('owned')">My GitHub repos</button>
+            <button class="ap-tab" data-tab="contributing" role="tab" aria-selected="false" tabindex="-1" onclick="addProjectSwitchTab('contributing')">Contributing</button>
         </div>
         <div class="ap-body">
-            <div class="ap-pane" id="apPaneLocal">
-                <label>Folder path on this machine</label>
-                <input type="text" id="apLocalPath" placeholder="/Users/me/code/my-project" autocomplete="off" />
-                <div class="ap-hint">Must be an existing directory. <code>~</code> is expanded.</div>
-                <div class="ap-error" id="apLocalError"></div>
+            <div class="ap-pane" id="apPaneLocal" role="tabpanel">
+                <label for="apLocalPath">Folder path on this machine</label>
+                <input type="text" id="apLocalPath" placeholder="/Users/me/code/my-project" autocomplete="off" aria-describedby="apLocalHint" />
+                <div class="ap-hint" id="apLocalHint">Must be an existing directory. <code>~</code> is expanded.</div>
+                <div class="ap-error" id="apLocalError" role="alert"></div>
             </div>
-            <div class="ap-pane" id="apPaneOwned" style="display:none">
-                <input type="text" class="ap-filter" id="apOwnedFilter" placeholder="Filter repos…" oninput="renderRepoList('owned')" />
+            <div class="ap-pane" id="apPaneOwned" style="display:none" role="tabpanel">
+                <input type="text" class="ap-filter" id="apOwnedFilter" placeholder="Filter repos…" aria-label="Filter your repos" oninput="renderRepoList('owned')" />
                 <div class="ap-repos" id="apOwnedRepos"><div class="ap-loading">Loading…</div></div>
             </div>
-            <div class="ap-pane" id="apPaneContrib" style="display:none">
-                <input type="text" class="ap-filter" id="apContribFilter" placeholder="Filter repos…" oninput="renderRepoList('contributing')" />
+            <div class="ap-pane" id="apPaneContrib" style="display:none" role="tabpanel">
+                <input type="text" class="ap-filter" id="apContribFilter" placeholder="Filter repos…" aria-label="Filter repos you contribute to" oninput="renderRepoList('contributing')" />
                 <div class="ap-repos" id="apContribRepos"><div class="ap-loading">Click load to fetch repos you collaborate on…</div></div>
             </div>
         </div>
         <div class="confirm-btns">
             <button class="btn-cancel" onclick="closeAddProject()">Close</button>
-            <button class="btn-delete" id="apLocalAddBtn" style="background:#3b82f6" onclick="submitAddLocalProject()">Add</button>
+            <button class="btn-primary" id="apLocalAddBtn" onclick="submitAddLocalProject()">Add</button>
         </div>
     </div>
 </div>
+
+<!-- Projects settings modal: default agent + refresh detection. -->
+<div class="confirm-overlay" id="projectsSettingsOverlay" role="dialog" aria-modal="true" aria-labelledby="psTitle" aria-hidden="true">
+    <div class="confirm-box projects-settings-box">
+        <h3 id="psTitle">Projects settings</h3>
+        <div class="ap-body">
+            <label class="ps-label" for="psDefaultAgent">Default agent for ▶ New</label>
+            <select id="psDefaultAgent" class="ps-select" aria-describedby="psDefaultAgentHint">
+                <option>Loading agents…</option>
+            </select>
+            <div class="ap-hint" id="psDefaultAgentHint">Used when a project has no last-used agent yet. Only agents installed on this machine are listed.</div>
+            <div style="margin-top:14px">
+                <button class="toolbar-btn" onclick="refreshAgentsDetection()" aria-label="Refresh agent detection">↻ Refresh detection</button>
+                <span id="psDetectStatus" class="ap-hint" style="margin-left:8px" role="status"></span>
+            </div>
+            <div class="ap-error" id="psError" role="alert"></div>
+        </div>
+        <div class="confirm-btns">
+            <button class="btn-cancel" onclick="closeProjectsSettings()">Cancel</button>
+            <button id="psSaveBtn" class="btn-primary" onclick="saveProjectsSettings()">Save</button>
+        </div>
+    </div>
+</div>
+
+<!-- Per-launch agent picker popover. Anchored next to a project card's ⏷ button. -->
+<div class="agent-picker" id="agentPicker"></div>
 
 <div class="bulk-bar" id="bulkBar" style="display:none">
     <span id="bulkCount">0 selected</span>

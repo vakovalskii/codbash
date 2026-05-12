@@ -3355,3 +3355,318 @@ body {
     flex-direction: column;
     gap: 2px;
 }
+
+
+/* ── Projects tab restructure ──────────────────────────────
+ * Theme-aware throughout: uses --border / --text-primary / --text-muted /
+ * --accent-blue / --card-bg from the base theme file, with fallbacks for
+ * environments that haven't loaded the variable block.
+ */
+
+/* Subtab strip above Projects content */
+.projects-subtabs {
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid var(--border, #2a2a2a);
+    margin-bottom: 14px;
+    padding-bottom: 0;
+}
+.projects-subtab {
+    padding: 8px 16px;
+    background: transparent;
+    border: none;
+    color: var(--text-muted, #888);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    transition: color .12s, border-color .12s;
+}
+.projects-subtab:hover { color: var(--text-primary, #ddd); }
+.projects-subtab.active {
+    color: var(--text-primary, #fff);
+    border-bottom-color: var(--accent-blue, #3b82f6);
+}
+.projects-subtab:focus-visible {
+    outline: 2px solid var(--accent-blue, #3b82f6);
+    outline-offset: -2px;
+    border-radius: 4px;
+}
+
+/* History filter bar (shown when "View N sessions →" deeplinked from a card) */
+.history-filter-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    margin-bottom: 12px;
+    background: rgba(59, 130, 246, 0.08);
+    border: 1px solid var(--border, #2a2a2a);
+    border-left: 3px solid var(--accent-blue, #3b82f6);
+    border-radius: 4px;
+    font-size: 12px;
+    color: var(--text-primary, #ddd);
+}
+.history-filter-bar .toolbar-btn { margin-left: auto; padding: 4px 10px; font-size: 11px; }
+
+/* Launcher landing — clean cards distinct from session groups */
+.projects-launcher-grid {
+    display: grid;
+    /* min(320px, 100%) keeps very narrow viewports from horizontal-scrolling */
+    grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr));
+    gap: 14px;
+    /* Subtle fade so subtab switches feel intentional instead of a hard swap */
+    animation: subtab-fade-in 120ms ease-out;
+}
+@keyframes subtab-fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .projects-launcher-grid, .launcher-card-skel { animation: none !important; }
+}
+.launcher-card {
+    background: var(--card-bg, #1a1a1a);
+    border: 1px solid var(--border, #2a2a2a);
+    border-radius: 8px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    transition: border-color .12s, transform .12s;
+}
+.launcher-card:hover { border-color: var(--accent-blue, #3b82f6); }
+.launcher-card-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+.launcher-card-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.launcher-card-name {
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--text-primary, #fff);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+}
+.launcher-card-tag {
+    /* De-emphasized provenance hint — does NOT compete with the project name */
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 2px 6px;
+    color: var(--text-muted, #888);
+    background: transparent;
+    border: 1px solid var(--border, #2a2a2a);
+    border-radius: 3px;
+    flex-shrink: 0;
+}
+.launcher-card-path {
+    font-size: 11px;
+    color: var(--text-muted, #888);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.launcher-card-meta {
+    font-size: 11px;
+    color: var(--text-muted, #888);
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+.launcher-card-meta > *:not(:first-child)::before {
+    content: '· ';
+    margin-right: 2px;
+}
+.launcher-card-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 6px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+.launcher-card-actions .split-btn {
+    display: inline-flex;
+    /* Group role for accessibility — both halves announce together */
+}
+.launcher-card-actions .split-btn .new-btn {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+    border-right: 1px solid var(--split-btn-divider, rgba(255, 255, 255, 0.2));
+    padding: 6px 10px;
+}
+.launcher-card-actions .split-btn .picker-btn {
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+    padding: 6px 8px;
+    font-size: 11px;
+    line-height: 1;
+}
+[data-theme="light"] .launcher-card-actions .split-btn .new-btn {
+    --split-btn-divider: rgba(0, 0, 0, 0.2);
+}
+.launcher-card-actions button.git-project-launch-btn { margin: 0; padding: 6px 12px; font-size: 12px; }
+.launcher-card-actions button.git-project-launch-btn:focus-visible {
+    outline: 2px solid var(--accent-blue, #3b82f6);
+    outline-offset: 2px;
+}
+.launcher-card-link {
+    margin-top: auto;
+    font-size: 11px;
+    color: var(--accent-blue, #3b82f6);
+    cursor: pointer;
+    background: none;
+    border: none;
+    text-align: left;
+    padding: 0;
+    font-family: inherit;
+}
+.launcher-card-link:hover { text-decoration: underline; }
+.launcher-card-link:focus-visible {
+    outline: 2px solid var(--accent-blue, #3b82f6);
+    outline-offset: 2px;
+    border-radius: 2px;
+}
+
+/* Pre-detection skeleton placeholder cards */
+.launcher-card-skel {
+    background: var(--card-bg, #1a1a1a);
+    border: 1px solid var(--border, #2a2a2a);
+    border-radius: 8px;
+    height: 140px;
+    opacity: 0.5;
+    animation: launcher-skel-pulse 1.4s ease-in-out infinite;
+}
+@keyframes launcher-skel-pulse {
+    0%, 100% { opacity: 0.35; }
+    50% { opacity: 0.55; }
+}
+
+/* Top toolbar inside the landing view */
+.projects-toolbar {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-bottom: 14px;
+}
+.projects-toolbar-warning {
+    color: #d97706;
+    font-size: 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+[data-theme="dark"] .projects-toolbar-warning { color: #f59e0b; }
+.projects-toolbar-warning a {
+    color: var(--accent-blue, #3b82f6);
+    text-decoration: underline;
+}
+.projects-empty {
+    padding: 40px 20px;
+    text-align: center;
+    color: var(--text-muted, #888);
+    border: 1px dashed var(--border, #2a2a2a);
+    border-radius: 8px;
+}
+
+/* Reusable primary toolbar/dialog button (replaces inline blue overrides) */
+.toolbar-btn-primary,
+.btn-primary {
+    background: var(--accent-blue, #3b82f6) !important;
+    color: #fff !important;
+    border: 1px solid var(--accent-blue, #3b82f6) !important;
+    padding: 8px 18px;
+    border-radius: 4px;
+    cursor: pointer;
+    font: inherit;
+    font-weight: 500;
+}
+.toolbar-btn-primary:hover,
+.btn-primary:hover {
+    filter: brightness(1.08);
+}
+.toolbar-btn-primary:focus-visible,
+.btn-primary:focus-visible {
+    outline: 2px solid var(--accent-blue, #3b82f6);
+    outline-offset: 2px;
+}
+.btn-primary[disabled] {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+/* Per-launch agent picker popover (position: fixed, viewport-clamped in JS) */
+.agent-picker {
+    position: fixed;
+    background: var(--card-bg, #1a1a1a);
+    border: 1px solid var(--border, #3a3a3a);
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    padding: 4px;
+    min-width: 180px;
+    /* Below modal overlays (z-index ~300) but above page chrome. */
+    z-index: 250;
+    display: none;
+}
+.agent-picker.open { display: block; }
+.agent-picker-item {
+    padding: 8px 12px;
+    cursor: pointer;
+    border-radius: 4px;
+    font-size: 13px;
+    color: var(--text-primary, #ddd);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.agent-picker-item:hover {
+    background: rgba(59, 130, 246, 0.15);
+    color: var(--accent-blue, #3b82f6);
+}
+.agent-picker-item:focus-visible {
+    outline: 2px solid var(--accent-blue, #3b82f6);
+    outline-offset: -2px;
+    background: rgba(59, 130, 246, 0.25);
+    color: var(--accent-blue, #3b82f6);
+}
+.agent-picker-empty {
+    padding: 10px 12px;
+    font-size: 12px;
+    color: var(--text-muted, #888);
+}
+
+/* Projects settings modal */
+.projects-settings-box {
+    max-width: 440px !important;
+}
+.ps-label {
+    display: block;
+    font-size: 12px;
+    color: var(--text-muted, #888);
+    margin-bottom: 6px;
+}
+.ps-select {
+    width: 100%;
+    background: var(--input-bg, #0d0d0d);
+    color: var(--text-primary, #fff);
+    border: 1px solid var(--border, #2a2a2a);
+    border-radius: 4px;
+    padding: 8px;
+    font: inherit;
+}
+.ps-select:focus-visible {
+    outline: 2px solid var(--accent-blue, #3b82f6);
+    outline-offset: 1px;
+}

@@ -24,6 +24,24 @@ let activeSessions = {}; // sessionId -> {status, cpu, memoryMB, pid}
 let renderLimit = 60; // pagination — render at most this many cards
 const RENDER_PAGE_SIZE = 60;
 
+// Projects tab subtab state — persisted across reloads via localStorage and
+// reflected in location.hash so back/forward navigates between subtabs.
+// Resolution: URL hash wins (so a shared link always opens the right subtab),
+// localStorage second (user's last choice), default 'projects'.
+let currentProjectsSubtab = (function() {
+  var fromHash = (location.hash || '').replace(/^#/, '');
+  if (fromHash === 'history') return 'history';
+  if (fromHash === 'projects') return 'projects';
+  try {
+    return localStorage.getItem('codedash-projects-subtab') === 'history' ? 'history' : 'projects';
+  } catch (e) { return 'projects'; }
+})();
+
+// Agent detection + UI settings — populated on boot from /api/agents/installed
+// and /api/settings. Kept on window so deep helpers can read without prop drilling.
+window.installedAgents = window.installedAgents || [];
+window.codbashSettings = window.codbashSettings || { defaultAgent: null, lastUsedByPath: {} };
+
 // Persisted in localStorage
 let stars = JSON.parse(localStorage.getItem('codedash-stars') || '[]');
 let tags = JSON.parse(localStorage.getItem('codedash-tags') || '{}');
@@ -154,8 +172,16 @@ function timeAgo(dateStr) {
 }
 
 function escHtml(s) {
-  if (!s) return '';
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  if (s === null || s === undefined) return '';
+  // Cover both quote characters so a future onclick string interpolation
+  // using single-quoted attributes is still safe. The cost is two extra
+  // string replacements; the win is consistent defense-in-depth.
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function showToast(msg) {
@@ -1245,41 +1271,339 @@ function renderQACard(s, idx) {
   return html;
 }
 
+// Dispatcher: routes Projects view to either the launcher landing or the
+// History sub-page based on currentProjectsSubtab. Keeps backwards-compat
+// callers (renderProjects(container, sessions)) working.
 function renderProjects(container, sessions) {
-  var byGit = {};   // key → { name, list, path, source, manualId }
+  var subtab = currentProjectsSubtab || 'projects';
+  // Keep URL hash in sync with the rendered subtab so copying the URL produces
+  // a link to what the user actually sees. replaceState avoids creating an
+  // extra history entry on each render.
+  var expectedHash = '#' + subtab;
+  if (location.hash !== expectedHash) {
+    try { history.replaceState(null, '', expectedHash); }
+    catch (e) { /* ignore — non-browser test envs */ }
+  }
+  var stripHtml = renderProjectsSubtabStrip(subtab);
+  if (subtab === 'history') {
+    container.innerHTML = stripHtml + '<div id="projectsHistoryContent" role="tabpanel" aria-labelledby="projectsSubtabHistory"></div>';
+    var historyEl = container.querySelector('#projectsHistoryContent');
+    renderProjectsHistory(historyEl, sessions);
+  } else {
+    container.innerHTML = stripHtml + '<div id="projectsLandingContent" role="tabpanel" aria-labelledby="projectsSubtabProjects"></div>';
+    var landingEl = container.querySelector('#projectsLandingContent');
+    renderProjectsLanding(landingEl, sessions);
+  }
+}
+
+function renderProjectsSubtabStrip(active) {
+  var safe = active === 'history' ? 'history' : 'projects';
+  // WAI-ARIA tab pattern: tablist + tab + tabpanel. The strip is keyboard-
+  // reachable via Tab, and left/right arrows are wired in onProjectsKeydown.
+  return '<div class="projects-subtabs" role="tablist" aria-label="Projects subtabs" onkeydown="onProjectsSubtabKey(event)">' +
+    '<button id="projectsSubtabProjects" class="projects-subtab' + (safe === 'projects' ? ' active' : '') + '" ' +
+      'role="tab" aria-selected="' + (safe === 'projects' ? 'true' : 'false') + '" ' +
+      'aria-controls="projectsLandingContent" tabindex="' + (safe === 'projects' ? '0' : '-1') + '" ' +
+      'onclick="switchProjectsSubtab(\'projects\')">Projects</button>' +
+    '<button id="projectsSubtabHistory" class="projects-subtab' + (safe === 'history' ? ' active' : '') + '" ' +
+      'role="tab" aria-selected="' + (safe === 'history' ? 'true' : 'false') + '" ' +
+      'aria-controls="projectsHistoryContent" tabindex="' + (safe === 'history' ? '0' : '-1') + '" ' +
+      'onclick="switchProjectsSubtab(\'history\')">History</button>' +
+    '</div>';
+}
+
+// Left/Right cycle between the two subtabs, Home/End jump to ends — standard
+// WAI-ARIA tablist behavior.
+function onProjectsSubtabKey(e) {
+  var k = e.key;
+  if (k === 'ArrowLeft' || k === 'ArrowRight' || k === 'Home' || k === 'End') {
+    e.preventDefault();
+    var next = (k === 'ArrowRight' || k === 'End') ? 'history' : 'projects';
+    setProjectsSubtab(next);
+    var focusId = next === 'projects' ? 'projectsSubtabProjects' : 'projectsSubtabHistory';
+    var el = document.getElementById(focusId);
+    if (el) el.focus();
+  }
+}
+
+// Single mutator for the subtab — every caller goes through here so the
+// localStorage value, the hash, and the variable can never drift apart.
+function setProjectsSubtab(next) {
+  if (next !== 'projects' && next !== 'history') return;
+  if (currentProjectsSubtab === next) {
+    // Even when value is unchanged we may need to re-render (e.g. filter
+    // changed). Caller is responsible for invoking render() if so.
+    return;
+  }
+  currentProjectsSubtab = next;
+  try { localStorage.setItem('codedash-projects-subtab', next); } catch (e) { /* private-mode safe */ }
+  // replaceState keeps the URL in sync without creating a fresh history
+  // entry on every click — back-button still works between subtabs because
+  // hashchange listens for explicit user navigation.
+  try { history.replaceState(null, '', '#' + next); }
+  catch (e) { location.hash = next; }
+  render();
+}
+
+function switchProjectsSubtab(next) {
+  // Backward-compat name kept for the inline onclick handlers in the strip.
+  setProjectsSubtab(next);
+}
+
+// Landing page — launcher cards. One per registered project plus, optionally,
+// projects that have sessions but no registry entry yet (so the user can still
+// resume them with one click).
+function renderProjectsLanding(container, sessions) {
+  // Build the same merged map as History does, but only render the launcher
+  // surface. History still shows the grouped session lists with everything
+  // we had before.
+  var byPath = mergeRegistryWithSessions(sessions);
+  var entries = sortMergedEntries(byPath);
+
+  // Loading guard — keep the "no agent installed" banner from flashing on
+  // first paint while /api/agents/installed is still in flight.
+  var agentsLoaded = window._agentsDetectionLoaded === true;
+  var installed = (window.installedAgents || []).map(function(a) { return a.id; });
+  var canLaunch = installed.length > 0;
+
+  var toolbar = '<div class="projects-toolbar" role="toolbar" aria-label="Projects actions">' +
+    '<button class="toolbar-btn toolbar-btn-primary" onclick="openAddProject()" title="Register a local folder or clone from GitHub" aria-label="Add a new project">+ Add Project</button>' +
+    '<button class="toolbar-btn" onclick="openProjectsSettings()" aria-label="Open projects settings">⚙ Settings</button>' +
+    // Warning is only emitted once detection has actually completed — otherwise
+    // a first-paint user sees the warning flash, then disappear half a second
+    // later when the fetch resolves.
+    (agentsLoaded && !canLaunch
+      ? '<span class="projects-toolbar-warning" role="status">⚠ <span>Warning: no agent CLI detected on this machine — </span><a href="#install-agents" onclick="scrollToInstallAgents();return false;">install one</a> to launch sessions.</span>'
+      : '') +
+    '</div>';
+
+  // Pre-detection skeleton — keeps the layout stable while the agents list
+  // is loading and prevents disabled-button flicker.
+  if (!agentsLoaded) {
+    container.innerHTML = toolbar +
+      '<div class="projects-launcher-grid" aria-busy="true">' +
+      '<div class="launcher-card-skel"></div><div class="launcher-card-skel"></div><div class="launcher-card-skel"></div>' +
+      '</div>';
+    return;
+  }
+
+  if (entries.length === 0) {
+    container.innerHTML = toolbar +
+      '<div class="projects-empty">No projects yet. ' +
+      '<button class="toolbar-btn toolbar-btn-primary" onclick="openAddProject()" style="margin:8px 0">+ Add Project</button><br>' +
+      '<span style="font-size:12px">Or start a fresh session in any folder under your home directory and it will be auto-registered.</span></div>';
+    return;
+  }
+
+  var cardsHtml = '<div class="projects-launcher-grid">';
+  entries.forEach(function(entry) {
+    cardsHtml += renderLauncherCard(entry[0], entry[1]);
+  });
+  cardsHtml += '</div>';
+  container.innerHTML = toolbar + cardsHtml;
+}
+
+function scrollToInstallAgents() {
+  // Best-effort — there's no dedicated view, but the sidebar has an "Install
+  // Agents" section the user can scroll the sidebar to.
+  var section = Array.from(document.querySelectorAll('.sidebar-section'))
+    .find(function(el) { return el.textContent && el.textContent.indexOf('Install Agents') >= 0; });
+  if (section && section.scrollIntoView) section.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+function renderLauncherCard(projKey, projInfo) {
+  var projName = projInfo.name;
+  var projPath = projInfo.path;
+  var color = getProjectColor(projName);
+  var list = projInfo.list || [];
+  var lastSession = list[0];
+  var totalSessions = list.length;
+
+  var sourceTag = '';
+  if (projInfo.source === 'github-clone') sourceTag = '<span class="launcher-card-tag" title="Cloned from GitHub">github</span>';
+  else if (projInfo.source === 'manual') sourceTag = '<span class="launcher-card-tag" title="Manually added">added</span>';
+  else if (projInfo.source === 'auto') sourceTag = '<span class="launcher-card-tag" title="Auto-registered on first launch">auto</span>';
+
+  var preferredTool = pickPreferredTool(projPath, lastSession);
+  var installed = window.installedAgents || [];
+  var canLaunch = installed.length > 0 && !!projPath;
+
+  var html = '<div class="launcher-card">';
+  html += '<div class="launcher-card-header">';
+  html += '<span class="launcher-card-dot" style="background:' + color + '"></span>';
+  html += '<span class="launcher-card-name" title="' + escHtml(projName) + '">' + escHtml(projName) + '</span>';
+  html += sourceTag;
+  html += '</div>';
+  if (projPath) html += '<div class="launcher-card-path" title="' + escHtml(projPath) + '">' + escHtml(projPath) + '</div>';
+  html += '<div class="launcher-card-meta">';
+  html += '<span>' + (totalSessions === 0 ? 'no sessions yet' : (totalSessions + ' session' + (totalSessions === 1 ? '' : 's'))) + '</span>';
+  if (preferredTool) html += '<span>· next: ' + escHtml(agentLabel(preferredTool)) + '</span>';
+  html += '</div>';
+
+  html += '<div class="launcher-card-actions">';
+  if (canLaunch && preferredTool) {
+    var newAria = 'Start new ' + agentLabel(preferredTool) + ' session in ' + projName;
+    var pickerAria = 'Pick a different agent for ' + projName;
+    html += '<span class="split-btn" role="group" aria-label="Launch ' + escHtml(projName) + '">';
+    html += '<button class="git-project-launch-btn primary new-btn" ' +
+      'data-proj-path="' + escHtml(projPath) + '" data-tool="' + escHtml(preferredTool) + '" ' +
+      'onclick="launchNewProjectSession(this.dataset.projPath, this.dataset.tool)" ' +
+      'title="' + escHtml(newAria) + '" aria-label="' + escHtml(newAria) + '">&#9654; New</button>';
+    html += '<button class="git-project-launch-btn primary picker-btn" ' +
+      'data-proj-path="' + escHtml(projPath) + '" ' +
+      'onclick="openAgentPicker(event, this.dataset.projPath)" ' +
+      'aria-label="' + escHtml(pickerAria) + '" aria-haspopup="menu" aria-expanded="false" ' +
+      'title="' + escHtml(pickerAria) + '">&#9662;</button>';
+    html += '</span>';
+  } else if (projPath && !canLaunch) {
+    // Make the disabled button actionable for keyboard/touch users — click
+    // routes to the Install Agents sidebar section.
+    html += '<button class="git-project-launch-btn" onclick="scrollToInstallAgents()" ' +
+      'aria-label="Install an agent first" ' +
+      'title="No agent installed — click to scroll to Install Agents">&#9654; Install an agent →</button>';
+  }
+  if (lastSession && canLaunch) {
+    var lastId = lastSession.id || '';
+    var sessTool = lastSession.tool || '';
+    // If the session's original tool is no longer installed we still let the
+    // user resume — but warn them; the server will surface the failure if
+    // the tool can't actually be invoked.
+    var installedSet = new Set(installed);
+    var toolMissing = sessTool && !installedSet.has(sessTool);
+    var lastTool = sessTool && installedSet.has(sessTool) ? sessTool : (preferredTool || 'claude');
+    var lastTitle = toolMissing
+      ? 'Resume last session (' + lastId.slice(0,8) + ') — original tool "' + sessTool + '" not detected, falling back to ' + agentLabel(lastTool)
+      : 'Resume last session (' + lastId.slice(0,8) + ')';
+    html += '<button class="git-project-launch-btn"' + (toolMissing ? ' aria-describedby="toolMissingHint"' : '') + ' data-sess-id="' + escHtml(lastId) + '" data-sess-tool="' + escHtml(lastTool) + '" data-proj-path="' + escHtml(projPath) + '" onclick="resumeLastProjectSession(this.dataset.sessId,this.dataset.sessTool,this.dataset.projPath)" title="' + escHtml(lastTitle) + '" aria-label="' + escHtml(lastTitle) + '">&#x21bb; Last</button>';
+  }
+  if (projInfo.manualId) {
+    html += '<button class="git-project-launch-btn" data-proj-id="' + escHtml(projInfo.manualId) + '" data-proj-name="' + escHtml(projName) + '" onclick="unregisterProject(this.dataset.projId,this.dataset.projName)" title="Remove from registry (does not delete files)">&times;</button>';
+  }
+  html += '</div>';
+
+  if (totalSessions > 0) {
+    html += '<button class="launcher-card-link" data-proj-key="' + escHtml(projKey) + '" data-proj-name="' + escHtml(projName) + '" onclick="viewProjectInHistory(this.dataset.projKey,this.dataset.projName)">View ' + totalSessions + ' session' + (totalSessions === 1 ? '' : 's') + ' →</button>';
+  }
+  html += '</div>';
+  return html;
+}
+
+function mergeRegistryWithSessions(sessions) {
+  var byGit = {};
   sessions.forEach(function(s) {
     var info = getRepoInfo(s.project, s.git_root);
     if (!byGit[info.key]) byGit[info.key] = { name: info.name, list: [], path: info.key !== 'unknown' ? info.key : '', source: 'session', manualId: '' };
     byGit[info.key].list.push(s);
   });
-
-  // Merge manually-registered projects (local-only or cloned from GitHub) so
-  // they appear as project cards even before any session exists for them.
   (window.manualProjects || []).forEach(function(p) {
     if (!byGit[p.path]) {
       byGit[p.path] = { name: p.name, list: [], path: p.path, source: p.source || 'manual', manualId: p.id, _git: p.git, _lastAdded: p.addedAt };
     } else {
-      // Existing key from sessions — annotate with manual id so the launcher
-      // buttons can still show source and offer "remove from registry".
-      byGit[p.path].manualId = p.id;
-      if (!byGit[p.path].source || byGit[p.path].source === 'session') byGit[p.path].source = p.source || 'manual';
+      // When a registry entry overlaps a session-derived entry, the registry's
+      // `source` (manual / github-clone / auto) is the authoritative one — only
+      // `session` is a placeholder we replace. This prevents auto-registered
+      // projects from being silently relabeled as `manual` after their first
+      // session appears.
+      var existing = byGit[p.path];
+      var keepRegistrySource = p.source && p.source !== 'session';
+      var resolvedSource = keepRegistrySource
+        ? p.source
+        : ((!existing.source || existing.source === 'session') ? 'manual' : existing.source);
+      byGit[p.path] = { ...existing, manualId: p.id, source: resolvedSource };
     }
   });
+  return byGit;
+}
 
-  var sorted = Object.entries(byGit).sort(function(a, b) {
+// Shared sort: most-recent session timestamp first; falls back to the
+// registry add date when no session exists yet.
+function sortMergedEntries(byPath) {
+  return Object.entries(byPath).sort(function(a, b) {
     var aTs = a[1].list[0] ? a[1].list[0].last_ts : (a[1]._lastAdded ? Date.parse(a[1]._lastAdded) : 0);
     var bTs = b[1].list[0] ? b[1].list[0].last_ts : (b[1]._lastAdded ? Date.parse(b[1]._lastAdded) : 0);
     return bTs - aTs;
   });
+}
 
-  var html = '<div style="display:flex;gap:8px;margin-bottom:12px;align-items:center">';
-  html += '<button class="toolbar-btn" onclick="openAddProject()" title="Register a local folder or clone from GitHub" style="background:#3b82f6;color:#fff;border-color:#3b82f6">+ Add Project</button>';
+function pickPreferredTool(projectPath, lastSession) {
+  var settings = window.codbashSettings || {};
+  var installed = (window.installedAgents || []).map(function(a) { return a.id; });
+  var installedSet = new Set(installed);
+  // 1. Server-tracked last-used (survives across machines if settings sync)
+  var fromSettings = settings.lastUsedByPath ? settings.lastUsedByPath[projectPath] : null;
+  if (fromSettings && installedSet.has(fromSettings)) return fromSettings;
+  // 2. Most recent session in this project (local observation)
+  if (lastSession && lastSession.tool && installedSet.has(lastSession.tool)) return lastSession.tool;
+  // 3. Configured default
+  if (settings.defaultAgent && installedSet.has(settings.defaultAgent)) return settings.defaultAgent;
+  // 4. First installed
+  return installed.length > 0 ? installed[0] : null;
+}
+
+// Hard-coded labels so we can render a friendly name even when /api/agents/installed
+// has not returned yet (or when the tool is no longer detected on this box).
+const _AGENT_LABEL_FALLBACK = {
+  claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor', qwen: 'Qwen Code',
+  kilo: 'Kilo', kiro: 'Kiro CLI', opencode: 'OpenCode',
+  copilot: 'Copilot CLI', 'copilot-chat': 'Copilot Chat',
+};
+function agentLabel(id) {
+  var found = (window.installedAgents || []).find(function(a) { return a.id === id; });
+  return found ? found.label : (_AGENT_LABEL_FALLBACK[id] || id);
+}
+
+// History-scoped filter — kept separate from the global gitProjectFilter so
+// that clicking "View N sessions →" on a launcher card never leaves the
+// Projects view. The legacy drillIntoGitProject() filter pushes the user to
+// the Sessions sidebar item and clobbers the subtab context.
+let historyProjectFilter = null;
+
+function viewProjectInHistory(projKey, projName) {
+  historyProjectFilter = { key: projKey, name: projName };
+  setProjectsSubtab('history');
+}
+
+function clearHistoryProjectFilter() {
+  if (!historyProjectFilter) return;
+  historyProjectFilter = null;
+  if (currentView === 'projects') render();
+}
+
+// History subtab — preserves the exact behavior of the old Projects view.
+// Only addition: if `historyProjectFilter` is set (via "View N sessions →"
+// from a launcher card), the merged map is filtered to just that project so
+// the user lands on a focused list instead of the full registry.
+function renderProjectsHistory(container, sessions) {
+  var byGit = mergeRegistryWithSessions(sessions);
+
+  // Apply the History-scoped filter if a card pushed us here.
+  if (historyProjectFilter && historyProjectFilter.key) {
+    var filtered = {};
+    if (Object.prototype.hasOwnProperty.call(byGit, historyProjectFilter.key)) {
+      filtered[historyProjectFilter.key] = byGit[historyProjectFilter.key];
+    }
+    byGit = filtered;
+  }
+
+  var sorted = sortMergedEntries(byGit);
+
+  var html = '';
+  if (historyProjectFilter) {
+    html += '<div class="history-filter-bar" role="status">' +
+      'Filtered to <strong>' + escHtml(historyProjectFilter.name) + '</strong> ' +
+      '<button class="toolbar-btn" onclick="clearHistoryProjectFilter()" aria-label="Clear project filter">&times; Clear filter</button>' +
+      '</div>';
+  }
+  html += '<div style="display:flex;gap:8px;margin-bottom:12px;align-items:center">';
   html += '<button class="toolbar-btn" onclick="document.querySelectorAll(\'.git-project-group\').forEach(function(g){g.classList.add(\'collapsed\')})">Collapse All</button>';
   html += '<button class="toolbar-btn" onclick="document.querySelectorAll(\'.git-project-group\').forEach(function(g){g.classList.remove(\'collapsed\')})">Expand All</button>';
   html += '</div>';
 
   if (sorted.length === 0) {
-    container.innerHTML = html + '<div class="empty-state">No projects yet. Click <strong>+ Add Project</strong> to register a local folder or clone one from GitHub.</div>';
+    var msg = historyProjectFilter
+      ? 'No sessions for <strong>' + escHtml(historyProjectFilter.name) + '</strong>.'
+      : 'No sessions yet. Launch a session from the <strong>Projects</strong> subtab and it will appear here.';
+    container.innerHTML = html + '<div class="empty-state">' + msg + '</div>';
     return;
   }
 
@@ -2128,7 +2452,14 @@ async function checkForUpdates() {
       var banner = document.getElementById('updateBanner');
       var text = document.getElementById('updateText');
       if (banner && text) {
-        text.innerHTML = '<strong>v' + data.latest + '</strong> available';
+        // Build via textContent/DOM nodes — never interpolate the npm-supplied
+        // version string into innerHTML, otherwise a tampered registry response
+        // can inject arbitrary HTML into our update banner.
+        text.textContent = '';
+        var strong = document.createElement('strong');
+        strong.textContent = 'v' + String(data.latest || '');
+        text.appendChild(strong);
+        text.appendChild(document.createTextNode(' available'));
         banner.style.display = 'flex';
       }
     }
@@ -2168,7 +2499,8 @@ async function loadManualProjects() {
     window.manualProjects = Array.isArray(data) ? data : [];
     if (currentView === 'projects') render();
   } catch (e) {
-    console.warn('[codbash] loadManualProjects failed:', e && e.message);
+    // Silent failure — bootstrap continues with an empty registry. Errors
+    // surface through subsequent user actions if they ever matter.
   }
 }
 
@@ -2178,7 +2510,17 @@ function _currentTerminalId() {
 
 async function launchNewProjectSession(projectPath, tool) {
   if (!projectPath) { showToast('No project path'); return; }
-  var t = tool || 'claude';
+  var installed = (window.installedAgents || []).map(function(a) { return a.id; });
+  if (installed.length === 0) {
+    showToast('No agent installed — see Install Agents in the sidebar');
+    return;
+  }
+  // Tool resolution: caller hint → settings.lastUsedByPath → settings.defaultAgent
+  // → first installed. Caller hint may be stale; we still validate against the
+  // installed list so we never try to spawn a non-existent binary.
+  var t = tool && installed.indexOf(tool) >= 0 ? tool : null;
+  if (!t) t = pickPreferredTool(projectPath, null);
+  if (!t) { showToast('No agent installed'); return; }
   try {
     var resp = await fetch('/api/launch', {
       method: 'POST',
@@ -2192,10 +2534,263 @@ async function launchNewProjectSession(projectPath, tool) {
       }),
     });
     var data = await resp.json();
-    if (data.ok) showToast('Starting new ' + t + ' session in ' + projectPath.split('/').pop());
-    else showToast('Launch failed: ' + (data.error || 'unknown'));
+    if (data.ok) {
+      // Single toast — calling showToast twice in a row replaces the message
+      // before the user can read the first one. Merge auto-register info into
+      // the same line when present.
+      var name = projectPath.split('/').pop();
+      var msg = 'Started ' + agentLabel(t) + ' in ' + name;
+      if (data.registered) msg += ' — added to Projects';
+      showToast(msg);
+      if (data.registered) await loadManualProjects();
+      // Optimistically remember the chosen tool client-side so the next ▶ New
+      // defaults to it before the next fetch of /api/settings.
+      if (window.codbashSettings) {
+        window.codbashSettings.lastUsedByPath = window.codbashSettings.lastUsedByPath || {};
+        window.codbashSettings.lastUsedByPath[projectPath] = t;
+      }
+    } else {
+      showToast('Launch failed: ' + (data.error || 'unknown'));
+    }
   } catch (e) {
     showToast('Launch failed: ' + e.message);
+  }
+}
+
+// ── Per-launch agent picker popover ───────────────────────────
+
+// Picker width must agree with the CSS min-width so the viewport clamp can
+// keep the popover on-screen.
+const _PICKER_WIDTH = 180;
+let _pickerAnchor = null;
+
+function openAgentPicker(event, projectPath) {
+  if (event) { event.preventDefault(); event.stopPropagation(); }
+  var anchor = event && event.currentTarget ? event.currentTarget : null;
+  var picker = document.getElementById('agentPicker');
+  if (!picker || !anchor) return;
+  _pickerAnchor = anchor;
+  var agents = window.installedAgents || [];
+  if (agents.length === 0) {
+    picker.innerHTML = '<div class="agent-picker-empty">No agents installed</div>';
+  } else {
+    picker.setAttribute('role', 'menu');
+    picker.setAttribute('aria-label', 'Pick an agent for this launch');
+    picker.innerHTML = agents.map(function(a, i) {
+      return '<div class="agent-picker-item" role="menuitem" tabindex="' + (i === 0 ? '0' : '-1') + '" ' +
+        'data-tool="' + escHtml(a.id) + '" data-proj-path="' + escHtml(projectPath) + '" ' +
+        'onclick="pickerLaunch(this.dataset.projPath, this.dataset.tool)" ' +
+        'onkeydown="onPickerKey(event, this.dataset.projPath, this.dataset.tool)">' +
+        escHtml(a.label) + '</div>';
+    }).join('');
+  }
+  // position: fixed against the viewport — works regardless of what ancestor
+  // is positioned and survives page scroll. We re-clamp on resize via the
+  // scroll handler that just closes the picker, which is the common pattern.
+  picker.classList.add('open');
+  var rect = anchor.getBoundingClientRect();
+  var viewportW = document.documentElement.clientWidth;
+  var clampedLeft = Math.max(8, Math.min(viewportW - _PICKER_WIDTH - 8, rect.right - _PICKER_WIDTH));
+  picker.style.top = (rect.bottom + 4) + 'px';
+  picker.style.left = clampedLeft + 'px';
+  if (anchor.setAttribute) anchor.setAttribute('aria-expanded', 'true');
+  // Focus first item so keyboard users can act.
+  setTimeout(function() {
+    var first = picker.querySelector('.agent-picker-item');
+    if (first && first.focus) first.focus();
+    document.addEventListener('click', _closeAgentPickerOnOutsideClick, true);
+    document.addEventListener('keydown', _closeAgentPickerOnEscape, true);
+    window.addEventListener('scroll', _closeAgentPickerOnScroll, { capture: true, passive: true });
+  }, 0);
+}
+
+function _closePicker() {
+  var picker = document.getElementById('agentPicker');
+  if (!picker) return;
+  picker.classList.remove('open');
+  if (_pickerAnchor && _pickerAnchor.setAttribute) _pickerAnchor.setAttribute('aria-expanded', 'false');
+  document.removeEventListener('click', _closeAgentPickerOnOutsideClick, true);
+  document.removeEventListener('keydown', _closeAgentPickerOnEscape, true);
+  window.removeEventListener('scroll', _closeAgentPickerOnScroll, true);
+  // Return focus to the chevron that opened the picker so keyboard users
+  // don't get dropped on body.
+  if (_pickerAnchor && _pickerAnchor.focus) {
+    try { _pickerAnchor.focus(); } catch (e) {}
+  }
+  _pickerAnchor = null;
+}
+
+function _closeAgentPickerOnOutsideClick(e) {
+  var picker = document.getElementById('agentPicker');
+  if (!picker) return;
+  if (picker.contains(e.target)) return;
+  _closePicker();
+}
+
+function _closeAgentPickerOnEscape(e) {
+  if (e.key === 'Escape') { e.stopPropagation(); _closePicker(); }
+}
+
+function _closeAgentPickerOnScroll() {
+  // Re-positioning the popover during scroll is jittery — closing is the
+  // commonly accepted UX and matches the picker's transient nature.
+  _closePicker();
+}
+
+function onPickerKey(e, projectPath, tool) {
+  if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault();
+    pickerLaunch(projectPath, tool);
+    return;
+  }
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    var items = Array.from(document.querySelectorAll('.agent-picker-item'));
+    var idx = items.indexOf(e.currentTarget);
+    var nextIdx = e.key === 'ArrowDown'
+      ? Math.min(items.length - 1, idx + 1)
+      : Math.max(0, idx - 1);
+    if (items[nextIdx]) items[nextIdx].focus();
+  }
+}
+
+function pickerLaunch(projectPath, tool) {
+  _closePicker();
+  // Per-launch override — does mutate lastUsedByPath (this project's
+  // preference legitimately shifts to the explicit choice) but never touches
+  // settings.defaultAgent.
+  launchNewProjectSession(projectPath, tool);
+}
+
+// ── Projects settings modal ───────────────────────────────────
+
+let _modalFocusReturn = null;
+let _modalTrapFn = null;
+
+// Focus-trap helper — keeps Tab/Shift+Tab cycling inside the modal so
+// keyboard users can't accidentally tab onto the page behind the overlay.
+function _installModalFocusTrap(overlay) {
+  if (!overlay) return;
+  _modalFocusReturn = document.activeElement;
+  var focusableSel = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+  var nodes = Array.from(overlay.querySelectorAll(focusableSel))
+    .filter(function(el) { return !el.disabled && el.offsetParent !== null; });
+  if (nodes.length === 0) return;
+  var first = nodes[0];
+  var last = nodes[nodes.length - 1];
+  _modalTrapFn = function(e) {
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      // Both modals route close through the same callback chain.
+      if (overlay.id === 'projectsSettingsOverlay') closeProjectsSettings();
+      else if (overlay.id === 'addProjectOverlay' && typeof closeAddProject === 'function') closeAddProject();
+      return;
+    }
+    if (e.key !== 'Tab') return;
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
+  document.addEventListener('keydown', _modalTrapFn, true);
+  setTimeout(function() { try { first.focus(); } catch (e) {} }, 0);
+}
+
+function _uninstallModalFocusTrap() {
+  if (_modalTrapFn) {
+    document.removeEventListener('keydown', _modalTrapFn, true);
+    _modalTrapFn = null;
+  }
+  if (_modalFocusReturn && _modalFocusReturn.focus) {
+    try { _modalFocusReturn.focus(); } catch (e) {}
+  }
+  _modalFocusReturn = null;
+}
+
+function openProjectsSettings() {
+  var overlay = document.getElementById('projectsSettingsOverlay');
+  if (!overlay) return;
+  var select = document.getElementById('psDefaultAgent');
+  var agents = window.installedAgents || [];
+  var current = (window.codbashSettings && window.codbashSettings.defaultAgent) || '';
+  var html = '<option value="">(none — fall back to first installed)</option>';
+  agents.forEach(function(a) {
+    var sel = a.id === current ? ' selected' : '';
+    html += '<option value="' + escHtml(a.id) + '"' + sel + '>' + escHtml(a.label) + '</option>';
+  });
+  if (select) select.innerHTML = html;
+  var err = document.getElementById('psError'); if (err) err.textContent = '';
+  var status = document.getElementById('psDetectStatus');
+  if (status) status.textContent = agents.length + ' agent' + (agents.length === 1 ? '' : 's') + ' detected';
+  overlay.classList.add('open');
+  overlay.setAttribute('aria-hidden', 'false');
+  _installModalFocusTrap(overlay);
+}
+
+function closeProjectsSettings() {
+  var overlay = document.getElementById('projectsSettingsOverlay');
+  if (overlay) {
+    overlay.classList.remove('open');
+    overlay.setAttribute('aria-hidden', 'true');
+  }
+  _uninstallModalFocusTrap();
+}
+
+async function saveProjectsSettings() {
+  var select = document.getElementById('psDefaultAgent');
+  var err = document.getElementById('psError');
+  var saveBtn = document.getElementById('psSaveBtn');
+  var pick = select ? select.value : '';
+  var body = { defaultAgent: pick || null };
+  if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving…'; }
+  try {
+    var resp = await fetch('/api/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    var data = await resp.json().catch(function() { return {}; });
+    if (!resp.ok) {
+      var detail = data && data.error
+        ? data.error
+        : 'Save failed — server returned HTTP ' + resp.status;
+      if (err) err.textContent = detail;
+      return;
+    }
+    // Re-fetch authoritative settings instead of trusting the PUT response
+    // body. If the server ever returns a partial shape (e.g. {ok:true}) we'd
+    // otherwise clobber lastUsedByPath in memory and lose per-project state.
+    try {
+      var sResp = await fetch('/api/settings');
+      var sData = await sResp.json();
+      if (sData && typeof sData === 'object' && 'defaultAgent' in sData) {
+        window.codbashSettings = sData;
+      }
+    } catch (_) { /* keep the optimistic in-memory state */ }
+    showToast('Settings saved');
+    closeProjectsSettings();
+    if (currentView === 'projects') render();
+  } catch (e) {
+    if (err) err.textContent = 'Save failed: ' + (e && e.message);
+  } finally {
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Save'; }
+  }
+}
+
+async function refreshAgentsDetection() {
+  var status = document.getElementById('psDetectStatus');
+  if (status) status.textContent = 'detecting…';
+  try {
+    var resp = await fetch('/api/agents/refresh-detect', { method: 'POST' });
+    var data = await resp.json();
+    window.installedAgents = (data && data.agents) || [];
+    openProjectsSettings(); // re-render select with fresh list
+    if (currentView === 'projects') render();
+  } catch (e) {
+    if (status) status.textContent = 'refresh failed';
   }
 }
 
@@ -2223,19 +2818,36 @@ async function resumeLastProjectSession(sessionId, tool, projectPath) {
 
 async function unregisterProject(id, name) {
   if (!id) return;
-  if (!confirm('Remove “' + name + '” from project registry? Files on disk are untouched.')) return;
-  try {
-    var resp = await fetch('/api/projects/manual/' + encodeURIComponent(id), { method: 'DELETE' });
-    var data = await resp.json();
-    if (data.ok) {
-      showToast('Removed ' + name);
-      await loadManualProjects();
-    } else {
-      showToast('Remove failed');
+  // Use the same confirm-overlay pattern that showDeleteConfirm uses for
+  // sessions, instead of the native confirm() dialog — keeps the look
+  // consistent and avoids confusing the user with two different prompt styles.
+  // Project name is trimmed of control characters before display so a
+  // crafted name can't produce a misleading multi-line dialog.
+  var safeName = String(name || '').replace(/[\r\n\t\x00-\x1f]/g, ' ').slice(0, 200);
+  var overlay = document.getElementById('confirmOverlay');
+  if (!overlay) return;
+  document.getElementById('confirmTitle').textContent = 'Remove from project registry?';
+  document.getElementById('confirmText').textContent = 'Removes "' + safeName + '" from your project list. Files on disk are not touched.';
+  document.getElementById('confirmId').textContent = '';
+  var btn = document.getElementById('confirmAction');
+  btn.textContent = 'Remove';
+  btn.className = 'btn-delete';
+  btn.onclick = async function() {
+    overlay.style.display = 'none';
+    try {
+      var resp = await fetch('/api/projects/manual/' + encodeURIComponent(id), { method: 'DELETE' });
+      var data = await resp.json();
+      if (data.ok) {
+        showToast('Removed ' + safeName);
+        await loadManualProjects();
+      } else {
+        showToast('Remove failed');
+      }
+    } catch (e) {
+      showToast('Remove failed: ' + (e && e.message));
     }
-  } catch (e) {
-    showToast('Remove failed: ' + e.message);
-  }
+  };
+  overlay.style.display = 'flex';
 }
 
 // ── Add Project modal ─────────────────────────────────────────
@@ -2244,15 +2856,21 @@ function openAddProject() {
   var overlay = document.getElementById('addProjectOverlay');
   if (!overlay) return;
   overlay.classList.add('open');
+  overlay.setAttribute('aria-hidden', 'false');
   addProjectSwitchTab('local');
   var input = document.getElementById('apLocalPath');
   if (input) { input.value = ''; setTimeout(function() { input.focus(); }, 50); }
   var err = document.getElementById('apLocalError'); if (err) err.textContent = '';
+  _installModalFocusTrap(overlay);
 }
 
 function closeAddProject() {
   var overlay = document.getElementById('addProjectOverlay');
-  if (overlay) overlay.classList.remove('open');
+  if (overlay) {
+    overlay.classList.remove('open');
+    overlay.setAttribute('aria-hidden', 'true');
+  }
+  _uninstallModalFocusTrap();
   // Stop any in-flight device-code polling when the user dismisses the modal.
   _stopRepoScopePolling();
   _repoScopeDeviceCode = '';
@@ -2279,9 +2897,11 @@ function addProjectSwitchTab(tab) {
 async function submitAddLocalProject() {
   var input = document.getElementById('apLocalPath');
   var err = document.getElementById('apLocalError');
+  var addBtn = document.getElementById('apLocalAddBtn');
   if (err) err.textContent = '';
   var p = input ? input.value.trim() : '';
   if (!p) { if (err) err.textContent = 'Path required'; return; }
+  if (addBtn) { addBtn.disabled = true; addBtn.textContent = 'Adding…'; }
   try {
     var resp = await fetch('/api/projects/manual', {
       method: 'POST',
@@ -2298,6 +2918,8 @@ async function submitAddLocalProject() {
     }
   } catch (e) {
     if (err) err.textContent = e.message;
+  } finally {
+    if (addBtn) { addBtn.disabled = false; addBtn.textContent = 'Add'; }
   }
 }
 
@@ -2403,9 +3025,13 @@ function showDeviceCodePanel(deviceData, apiType) {
   // Copy button — the click handler reads from `dataset.code` instead of the
   // attribute being interpolated into an inline JS string, so any quote
   // characters in a future user_code value cannot break out of the handler.
+  // verification_uri is hard-bounded to https:// so a tampered upstream
+  // response can't smuggle a javascript: scheme into the `href`.
+  var rawUri = String(deviceData.verification_uri || '');
+  var safeUri = /^https:\/\//i.test(rawUri) ? rawUri : '#';
   status.innerHTML = ''
     + '<div class="ap-device-code">'
-    + '  <div>1. Open <a href="' + escHtml(deviceData.verification_uri) + '" target="_blank" rel="noopener">' + escHtml(deviceData.verification_uri) + '</a></div>'
+    + '  <div>1. Open <a href="' + escHtml(safeUri) + '" target="_blank" rel="noopener noreferrer">' + escHtml(safeUri) + '</a></div>'
     + '  <div>2. Enter code: <code class="ap-code">' + escHtml(deviceData.user_code) + '</code> '
     + '<button class="ap-copy" data-code="' + escHtml(deviceData.user_code) + '" onclick="copyText(this.dataset.code, &quot;Copied code&quot;)">Copy</button></div>'
     + '  <div class="ap-poll-status" id="apPollStatus">Waiting for authorization…</div>'
@@ -2583,11 +3209,53 @@ async function cloneRepoAndAdd(btn) {
 
 // ── Initialization ─────────────────────────────────────────────
 
+async function loadAgentsAndSettings() {
+  // allSettled so a partial failure (e.g. /api/agents/installed errors while
+  // /api/settings succeeds) doesn't wipe both pieces of state.
+  var results = await Promise.allSettled([
+    fetch('/api/agents/installed').then(function(r) { return r.json(); }),
+    fetch('/api/settings').then(function(r) { return r.json(); }),
+  ]);
+  var aData = results[0].status === 'fulfilled' ? results[0].value : null;
+  var sData = results[1].status === 'fulfilled' ? results[1].value : null;
+  if (aData && Array.isArray(aData.agents)) {
+    window.installedAgents = aData.agents;
+    window._agentsDetectionLoaded = true;
+  }
+  if (sData && typeof sData === 'object' && 'defaultAgent' in sData) {
+    window.codbashSettings = sData;
+  }
+  // Re-render any Projects subtab — both History (button selection depends
+  // on installed agents) and Projects landing need agent info.
+  if (currentView === 'projects') render();
+}
+
+function _onProjectsHashChange() {
+  if (currentView !== 'projects') return;
+  var h = (location.hash || '').replace(/^#/, '');
+  // Empty hash → fall back to user's persisted preference rather than keeping
+  // whatever we last rendered. If neither is set we land on 'projects'.
+  var next;
+  if (h === 'history' || h === 'projects') {
+    next = h;
+  } else {
+    try { next = localStorage.getItem('codedash-projects-subtab') === 'history' ? 'history' : 'projects'; }
+    catch (e) { next = 'projects'; }
+  }
+  if (next !== currentProjectsSubtab) {
+    currentProjectsSubtab = next;
+    try { localStorage.setItem('codedash-projects-subtab', next); } catch (e) {}
+    render();
+  }
+}
+
 (function init() {
   // Load data
   loadSessions();
   loadTerminals();
   loadManualProjects();
+  loadAgentsAndSettings();
+  window.addEventListener('hashchange', _onProjectsHashChange);
   checkForUpdates();
   setInterval(checkForUpdates, 10000); // check every 10s
   setInterval(loadSessions, 60000);    // refresh sessions + invalidate analytics cache every 60s
