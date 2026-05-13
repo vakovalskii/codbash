@@ -105,8 +105,11 @@ function detectHomes() {
   const homes = [];
   const seen = new Set();
   const addHome = (home) => {
-    const normalized = normalizeProjectPath(home);
+    let normalized = normalizeProjectPath(home);
     if (!normalized) return;
+    // Resolve symlinks so the HOME-as-gitRoot guard later compares apples to
+    // apples — on macOS /var → /private/var, on Docker $HOME is often a symlink.
+    try { normalized = fs.realpathSync(normalized); } catch {}
     const key = process.platform === 'win32' ? normalized.toLowerCase() : normalized;
     if (seen.has(key)) return;
     seen.add(key);
@@ -2404,13 +2407,19 @@ function _saveGitRootDiskCache() {
 
 // Parse first `worktree <path>` entry from `git worktree list --porcelain`.
 // The first record is always the main worktree, so a session living inside any
-// linked worktree collapses to the main repo's identity.
+// linked worktree collapses to the main repo's identity. Returns '' for bare
+// repos (a `bare` line inside the first record) since they have no working tree.
 function _parseMainWorktree(porcelain) {
   if (!porcelain) return '';
+  let candidate = '';
   for (const line of porcelain.split('\n')) {
-    if (line.startsWith('worktree ')) return line.slice('worktree '.length).trim();
+    if (candidate && line === 'bare') return '';
+    if (candidate && line === '') return candidate;
+    if (!candidate && line.startsWith('worktree ')) {
+      candidate = line.slice('worktree '.length).trim();
+    }
   }
-  return '';
+  return candidate;
 }
 
 function resolveGitRoot(projectPath) {
@@ -2443,7 +2452,12 @@ function resolveGitRoot(projectPath) {
   }
   // An accidental .git at $HOME (e.g. a dotfiles repo) would otherwise leak its
   // remote onto every session whose only crime was being launched from home.
-  if (root && ALL_HOMES.some(h => h === root)) root = '';
+  // On Windows, normalize separators + case so C:\Users\foo == C:/users/FOO.
+  if (root) {
+    const norm = (p) => process.platform === 'win32' ? p.replace(/\\/g, '/').toLowerCase() : p;
+    const rootKey = norm(root);
+    if (ALL_HOMES.some(h => norm(h) === rootKey)) root = '';
+  }
   _gitRootCache[projectPath] = root;
   return root;
 }
