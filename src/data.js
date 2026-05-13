@@ -105,8 +105,11 @@ function detectHomes() {
   const homes = [];
   const seen = new Set();
   const addHome = (home) => {
-    const normalized = normalizeProjectPath(home);
+    let normalized = normalizeProjectPath(home);
     if (!normalized) return;
+    // Resolve symlinks so the HOME-as-gitRoot guard later compares apples to
+    // apples — on macOS /var → /private/var, on Docker $HOME is often a symlink.
+    try { normalized = fs.realpathSync(normalized); } catch {}
     const key = process.platform === 'win32' ? normalized.toLowerCase() : normalized;
     if (seen.has(key)) return;
     seen.add(key);
@@ -2380,7 +2383,8 @@ function scanCodexSessions() {
 //      from the session cwd string. Works without git for standard worktree layouts.
 
 const _gitRootCache = {};
-const GIT_ROOT_CACHE_FILE = path.join(os.tmpdir(), 'codedash-gitroot-cache.json');
+// v2: collapses worktrees to main repo + ignores $HOME-as-git-root.
+const GIT_ROOT_CACHE_FILE = path.join(os.tmpdir(), 'codedash-gitroot-cache-v2.json');
 let _gitRootDiskCache = null;
 
 function _loadGitRootDiskCache() {
@@ -2401,6 +2405,23 @@ function _saveGitRootDiskCache() {
   } catch {}
 }
 
+// Parse first `worktree <path>` entry from `git worktree list --porcelain`.
+// The first record is always the main worktree, so a session living inside any
+// linked worktree collapses to the main repo's identity. Returns '' for bare
+// repos (a `bare` line inside the first record) since they have no working tree.
+function _parseMainWorktree(porcelain) {
+  if (!porcelain) return '';
+  let candidate = '';
+  for (const line of porcelain.split('\n')) {
+    if (candidate && line === 'bare') return '';
+    if (candidate && line === '') return candidate;
+    if (!candidate && line.startsWith('worktree ')) {
+      candidate = line.slice('worktree '.length).trim();
+    }
+  }
+  return candidate;
+}
+
 function resolveGitRoot(projectPath) {
   if (!projectPath) return '';
   _loadGitRootDiskCache();
@@ -2410,16 +2431,35 @@ function resolveGitRoot(projectPath) {
     _gitRootCache[projectPath] = '';
     return '';
   }
+  const opts = { encoding: 'utf8', timeout: 2000, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] };
+  let root = '';
   try {
-    const root = execFileSync('git', ['-C', projectPath, 'rev-parse', '--show-toplevel'], {
-      encoding: 'utf8', timeout: 2000, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe']
-    }).trim();
-    _gitRootCache[projectPath] = root;
-    return root;
-  } catch {
-    _gitRootCache[projectPath] = '';
-    return '';
+    const porcelain = execFileSync('git', ['-C', projectPath, 'worktree', 'list', '--porcelain'], opts);
+    root = _parseMainWorktree(porcelain);
+  } catch {}
+  if (!root) {
+    try {
+      root = execFileSync('git', ['-C', projectPath, 'rev-parse', '--show-toplevel'], opts).trim();
+    } catch {}
   }
+  // Bare repos report the .git dir itself; treat them as "no working tree" so
+  // downstream code doesn't try to read files from a bare path.
+  if (root && /\.git\/?$/.test(root)) root = '';
+  // Normalize symlinks so /var and /private/var on macOS produce one cache key
+  // for the same physical directory — otherwise the same project shows twice.
+  if (root) {
+    try { root = fs.realpathSync(root); } catch {}
+  }
+  // An accidental .git at $HOME (e.g. a dotfiles repo) would otherwise leak its
+  // remote onto every session whose only crime was being launched from home.
+  // On Windows, normalize separators + case so C:\Users\foo == C:/users/FOO.
+  if (root) {
+    const norm = (p) => process.platform === 'win32' ? p.replace(/\\/g, '/').toLowerCase() : p;
+    const rootKey = norm(root);
+    if (ALL_HOMES.some(h => norm(h) === rootKey)) root = '';
+  }
+  _gitRootCache[projectPath] = root;
+  return root;
 }
 
 const _gitInfoCache = {};
@@ -5386,5 +5426,8 @@ module.exports = {
     parseClaudeStructuredMessage,
     parseStructuredMessage,
     isFilteredClaudeStructuredMessage,
+    _parseMainWorktree,
+    resolveGitRoot,
+    ALL_HOMES,
   },
 };
