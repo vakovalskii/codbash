@@ -360,6 +360,113 @@ GET  /api/changelog             Changelog entries
 GET  /api/terminals             Available terminal apps
 ```
 
+### Repo Auto-Refresh
+```
+GET  /api/repo-refresh/state              Per-repo state + current settings
+POST /api/repo-refresh/trigger            Start `git fetch --all --prune` for one repo
+POST /api/repo-refresh/wait               Long-poll until a fetch finishes (or timeoutMs, default 2000, max 10000)
+GET  /api/repo-refresh/settings           Read settings
+POST /api/repo-refresh/settings           Update settings (partial; merged + atomically persisted)
+```
+
+---
+
+## Repo Auto-Refresh
+
+Keeps local clones of connected repositories in sync with their remote so the
+LLM in a fresh session sees current `origin/<branch>` and doesn't drift into
+branch divergence. The work runs in the background, never touches the working
+tree, and never blocks the HTTP server.
+
+### Triggers (v1)
+
+1. **Manual** — click the `↻` button on a project card.
+2. **New chat** — when a project has its "Auto-refresh on new chat" toggle on,
+   `launchNewProjectSession` / `resumeLastProjectSession` issue a fetch and
+   wait up to 2 s before opening the terminal session.
+3. **Service start** — when the global "Refresh on startup" toggle is on,
+   `bin/cli.js` calls `repoRefreshManager.initOnStartup()` after the HTTP
+   server has bound.
+
+Deferred to a future PR: periodic scheduler (5/10/15/30/60 min), page-refresh
+trigger, and "behind by N commits" indicators.
+
+### Per-repo state machine
+
+```
+       ┌───────────┐
+       │   idle    │  (lastSuccessAt: null | epoch)
+       └─────┬─────┘
+             │ trigger()
+             ▼
+       ┌───────────┐
+       │ fetching  │  (startedAt: epoch; single-flight per gitRoot)
+       └─┬───────┬─┘
+   ok    │       │   error / 60 s timeout
+         ▼       ▼
+       ┌───────┐ ┌────────┐
+       │ idle  │ │ error  │ (lastError truncated to ≤200 chars)
+       └───────┘ └────────┘
+```
+
+### Backend (`src/repo-refresh.js`)
+
+- Singleton manager built via `createRepoRefreshManager(opts)` — opts allow
+  test-time DI of `execFile`, timers, `atomicWriteJson`, `resolveGitRoot`,
+  `existsSync`, and `logger`.
+- **Single-flight** per `gitRoot` through an `inflight` Map — concurrent
+  triggers return the existing promise; no second child process is spawned.
+- **Concurrency cap** = 4 parallel `git fetch` processes; the 5th waits in a
+  FIFO queue. Sync fast path when capacity is available so the child process
+  starts before `triggerRefresh()` returns.
+- **Timeout** = 60 s. On expiry the manager sends `SIGTERM`, waits a 2 s
+  grace, then sends `SIGKILL`. State transitions to `error` with
+  `lastError = "timeout after 60000ms"`.
+- **Settings** live at `~/.codedash/refresh-settings.json`. Loaded on
+  construction; saved through `atomicWriteJson` with a 500 ms debounce so
+  rapid toggle clicks coalesce into one disk write.
+- **Orphan GC** — on every `initOnStartup`, perProject keys with
+  `!existsSync(gitRoot) || resolveGitRoot(gitRoot) === ''` are dropped and the
+  cleaned settings are persisted.
+
+### HTTP routes (`src/repo-refresh-routes.js`)
+
+Pure dispatcher function `handleRepoRefreshRoute(req, res, deps)` that returns
+`true` if it handled the request — mounted in `src/server.js` before the
+Sessions API. Validation rejects:
+
+- `POST /trigger` / `POST /settings` referencing a `gitRoot` not in the known
+  set (`loadProjects()` ∪ `loadSessions().git_root`, cached 5 s) → 404 / 400.
+- `POST /settings` body with the wrong shape → 400 `invalid_payload`.
+- `POST /trigger` body > 1 MiB → 400 `invalid_payload`.
+- `POST /wait timeoutMs` clamped to `[0, 10000]`.
+
+### Frontend (`src/frontend/app.js`)
+
+- Module-level `repoRefreshState` mirrors what the backend serves.
+- `loadRepoRefreshState()` runs once at init and after manual triggers; a
+  `setInterval(2000)` polls only while at least one visible repo is in
+  `fetching` and the user is on the Projects view.
+- Project card markup uses `data-rr-badge="<gitRoot>"` and
+  `data-rr-toggle="<gitRoot>"` attributes so `refreshRepoRefreshUI()` can
+  update badges and toggles in place without re-rendering the whole view
+  (preserves scroll position and group collapse state).
+- Toggle clicks are **optimistic**: the visual flips immediately, the POST
+  fires, and a failure rolls the visual back with a toast.
+- `maybeRefreshBeforeLaunch(gitRoot)` issues `/trigger` + `/wait` (timeoutMs:
+  2000) before invoking `/api/launch`. If the wait times out the session
+  opens with whatever refs are currently on disk; if the fetch errors the
+  user sees a toast but the launch proceeds.
+
+### Atomic JSON writes (`src/atomic.js`)
+
+`atomicWriteJson(filePath, obj)` is the canonical write helper for every
+codbash JSON cache. Steps: ensure parent dir, write to `<path>.tmp`, fsync,
+rename. On rename failure the temp file is unlinked and the original target
+is left untouched. The legacy disk caches (`_saveParsedDiskCache`,
+`_saveGitRootDiskCache`, `_saveCostDiskCache`, `_saveDailyStatsDiskCache` in
+`src/data.js`) all flow through this helper.
+
 ---
 
 ## Contributing

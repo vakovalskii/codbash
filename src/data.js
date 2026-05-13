@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { execSync, execFileSync } = require('child_process');
+const { atomicWriteJson } = require('./atomic');
 
 // ── Constants ──────────────────────────────────────────────
 
@@ -326,7 +327,7 @@ function _loadParsedDiskCache() {
 function _saveParsedDiskCache() {
   if (!_parsedDiskCacheDirty || !_parsedDiskCache) return;
   try {
-    fs.writeFileSync(PARSED_CACHE_FILE, JSON.stringify(_parsedDiskCache));
+    atomicWriteJson(PARSED_CACHE_FILE, _parsedDiskCache);
     _parsedDiskCacheDirty = false;
   } catch {}
 }
@@ -2401,7 +2402,7 @@ function _loadGitRootDiskCache() {
 
 function _saveGitRootDiskCache() {
   try {
-    fs.writeFileSync(GIT_ROOT_CACHE_FILE, JSON.stringify(_gitRootCache));
+    atomicWriteJson(GIT_ROOT_CACHE_FILE, _gitRootCache);
   } catch {}
 }
 
@@ -4275,7 +4276,7 @@ function _loadCostDiskCache() {
 function _saveCostDiskCache() {
   if (!_costDiskCache) return;
   try {
-    fs.writeFileSync(COST_CACHE_FILE, JSON.stringify(_costDiskCache));
+    atomicWriteJson(COST_CACHE_FILE, _costDiskCache);
   } catch {}
 }
 
@@ -5136,7 +5137,7 @@ function _loadDailyStatsDiskCache() {
 function _saveDailyStatsDiskCache() {
   if (!_dailyStatsDiskCache) return;
   try {
-    fs.writeFileSync(DAILY_STATS_CACHE_FILE, JSON.stringify(_dailyStatsDiskCache));
+    atomicWriteJson(DAILY_STATS_CACHE_FILE, _dailyStatsDiskCache);
   } catch {}
 }
 

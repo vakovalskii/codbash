@@ -18,6 +18,8 @@ const agentsDetect = require('./agents-detect');
 const os = require('os');
 const fs = require('fs');
 const pathLib = require('path');
+const { repoRefreshManager } = require('./repo-refresh');
+const { handleRepoRefreshRoute } = require('./repo-refresh-routes');
 
 // ── Logging ──────────────────────────────────
 const LOG_VERBOSE = process.env.CODEDASH_LOG !== '0';
@@ -109,6 +111,14 @@ function startServer(host, port, openBrowser = true) {
       const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="6" fill="#60a5fa"/><path d="M8 8l8 4 8-4v16l-8 4-8-4z" fill="none" stroke="#fff" stroke-width="2"/></svg>';
       res.writeHead(200, { 'Content-Type': 'image/svg+xml' });
       res.end(svg);
+    }
+
+    // ── Repo Auto-Refresh API ───────────────
+    else if (pathname.startsWith('/api/repo-refresh/') && handleRepoRefreshRoute(req, res, {
+      manager: repoRefreshManager,
+      getKnownGitRoots: getKnownGitRoots,
+    })) {
+      // handled
     }
 
     // ── Sessions API ────────────────────────
@@ -1198,6 +1208,34 @@ function readBody(req, cb) {
   req.on('end', () => { if (!aborted) cb(body); });
 }
 
+// Cache so the repo-refresh routes don't pay the loadSessions cost on every hit.
+let _knownGitRootsCache = null;
+let _knownGitRootsCacheAt = 0;
+const KNOWN_GIT_ROOTS_TTL_MS = 5_000;
+
+function getKnownGitRoots() {
+  const now = Date.now();
+  if (_knownGitRootsCache && (now - _knownGitRootsCacheAt) < KNOWN_GIT_ROOTS_TTL_MS) {
+    return _knownGitRootsCache;
+  }
+  const set = new Set();
+  try {
+    for (const p of projectsApi.loadProjects()) {
+      if (p && p.path) set.add(p.path);
+    }
+  } catch {}
+  try {
+    const sessions = loadSessions();
+    const list = Array.isArray(sessions) ? sessions : (sessions && sessions.sessions) || [];
+    for (const s of list) {
+      if (s && s.git_root) set.add(s.git_root);
+    }
+  } catch {}
+  _knownGitRootsCache = set;
+  _knownGitRootsCacheAt = now;
+  return set;
+}
+
 function getBrowserUrl(host, port) {
   const browserHost = getBrowserHost(host);
   const wrappedHost = browserHost.includes(':') && !browserHost.startsWith('[')
@@ -1655,4 +1693,4 @@ ${conversation}`;
   });
 }
 
-module.exports = { startServer };
+module.exports = { startServer, getKnownGitRoots };

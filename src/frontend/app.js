@@ -49,6 +49,352 @@ let sessionTitles = JSON.parse(localStorage.getItem('codedash-titles') || '{}');
 let showAITitles = localStorage.getItem('codedash-ai-titles') !== 'false';
 let showAllSessionsListBadges = localStorage.getItem('codedash-all-sessions-list-badges') !== 'false';
 
+// ── Repo Auto-Refresh state ────────────────────────────────────
+
+let repoRefreshState = {
+  repos: {},
+  settings: { version: 1, refreshOnStartup: false, perProject: {} },
+};
+let repoRefreshLoaded = false;
+let repoRefreshPollTimer = null;
+let repoRefreshTimeTimer = null;          // re-renders relative timestamps every 30s
+const REPO_REFRESH_POLL_MS = 2000;
+const REPO_REFRESH_TIME_TICK_MS = 30000;
+const _recentToasts = {};                 // de-dupe toast spam: msg → ts
+
+function repoRefreshToast(msg) {
+  const now = Date.now();
+  if (_recentToasts[msg] && (now - _recentToasts[msg]) < 3000) return;
+  _recentToasts[msg] = now;
+  // Evict the dedup key after the window so long sessions don't accumulate
+  // every distinct error message ever seen.
+  setTimeout(function() { delete _recentToasts[msg]; }, 3100);
+  showToast(msg);
+}
+
+// Shallow-immutable updaters — per ~/.claude/rules/common/coding-style.md
+// (Immutability CRITICAL) we never mutate the state object in place.
+function setRepoState(gitRoot, partial) {
+  const prev = repoRefreshState.repos[gitRoot] || null;
+  repoRefreshState = {
+    ...repoRefreshState,
+    repos: { ...repoRefreshState.repos, [gitRoot]: prev ? { ...prev, ...partial } : { ...partial } },
+  };
+}
+function setPerProjectSetting(gitRoot, value) {
+  // Spread the previous per-project config so future fields (e.g. lastUserAcked)
+  // survive an optimistic toggle of a single field.
+  const prev = repoRefreshState.settings.perProject[gitRoot] || {};
+  repoRefreshState = {
+    ...repoRefreshState,
+    settings: {
+      ...repoRefreshState.settings,
+      perProject: { ...repoRefreshState.settings.perProject, [gitRoot]: { ...prev, ...value } },
+    },
+  };
+}
+function setGlobalRefreshOnStartup(value) {
+  repoRefreshState = {
+    ...repoRefreshState,
+    settings: { ...repoRefreshState.settings, refreshOnStartup: !!value },
+  };
+}
+
+async function loadRepoRefreshState() {
+  try {
+    const res = await fetch('/api/repo-refresh/state');
+    if (!res.ok) return;
+    const data = await res.json();
+    repoRefreshState = data;
+    repoRefreshLoaded = true;
+    refreshRepoRefreshUI();
+  } catch (e) {
+    // Network errors during polling are silent — would otherwise spam the console.
+  }
+}
+
+function refreshRepoRefreshUI() {
+  document.querySelectorAll('[data-rr-badge]').forEach(function(el) {
+    // Skip the innerHTML swap if focus is inside this slot — replacing the
+    // DOM would steal keyboard focus and silently send the user to <body>.
+    // The next un-focused tick will pick it up.
+    if (el.contains(document.activeElement)) return;
+    const root = el.getAttribute('data-rr-badge');
+    el.innerHTML = renderRepoRefreshBadgeInner(root);
+  });
+  document.querySelectorAll('[data-rr-toggle]').forEach(function(el) {
+    const root = el.getAttribute('data-rr-toggle');
+    const enabled = !!(repoRefreshState.settings.perProject[root] && repoRefreshState.settings.perProject[root].autoRefreshOnNewChat);
+    el.checked = enabled;
+    el.setAttribute('aria-checked', enabled ? 'true' : 'false');
+    if (!repoRefreshLoaded) el.disabled = true;
+    else if (!el.dataset.rrInflight) el.disabled = false;
+  });
+  const globalToggle = document.getElementById('repoRefreshGlobalToggle');
+  if (globalToggle) {
+    const v = !!repoRefreshState.settings.refreshOnStartup;
+    globalToggle.checked = v;
+    globalToggle.setAttribute('aria-checked', v ? 'true' : 'false');
+    if (!repoRefreshLoaded) globalToggle.disabled = true;
+    else if (!globalToggle.dataset.rrInflight) globalToggle.disabled = false;
+  }
+  startRepoRefreshPollingIfNeeded();
+  startRepoRefreshTimeTickerIfNeeded();
+}
+
+function startRepoRefreshPollingIfNeeded() {
+  const anyFetching = Object.values(repoRefreshState.repos).some(function(r) { return r && r.status === 'fetching'; });
+  if (!anyFetching || currentView !== 'projects') {
+    if (repoRefreshPollTimer) { clearInterval(repoRefreshPollTimer); repoRefreshPollTimer = null; }
+    return;
+  }
+  if (repoRefreshPollTimer) return;
+  repoRefreshPollTimer = setInterval(loadRepoRefreshState, REPO_REFRESH_POLL_MS);
+}
+
+// Re-render badges every 30s so "Updated 2 min ago" doesn't get stuck.
+function startRepoRefreshTimeTickerIfNeeded() {
+  const anyOk = Object.values(repoRefreshState.repos).some(function(r) { return r && r.lastSuccessAt; });
+  if (!anyOk || currentView !== 'projects') {
+    if (repoRefreshTimeTimer) { clearInterval(repoRefreshTimeTimer); repoRefreshTimeTimer = null; }
+    return;
+  }
+  if (repoRefreshTimeTimer) return;
+  repoRefreshTimeTimer = setInterval(function() {
+    document.querySelectorAll('[data-rr-badge]').forEach(function(el) {
+      if (el.contains(document.activeElement)) return; // same focus guard as above
+      const root = el.getAttribute('data-rr-badge');
+      el.innerHTML = renderRepoRefreshBadgeInner(root);
+    });
+  }, REPO_REFRESH_TIME_TICK_MS);
+}
+
+function repoRelativeTime(ts) {
+  if (!ts) return '';
+  const secs = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+  if (secs < 5) return 'just now';
+  if (secs < 60) return secs + 's ago';
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return mins + ' min ago';
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return hours + 'h ago';
+  return Math.floor(hours / 24) + 'd ago';
+}
+
+function _fmtTime(ts) {
+  if (!ts) return '';
+  try { return new Date(ts).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }); }
+  catch { return new Date(ts).toString(); }
+}
+
+// Renders the badge inner HTML. The outer <span data-rr-badge> wrapper carries
+// role="status" + aria-live="polite" so transitions are announced without
+// destroying the live region on innerHTML replacement.
+function renderRepoRefreshBadgeInner(gitRoot) {
+  const st = repoRefreshState.repos[gitRoot];
+  if (!st) return '';
+  if (st.status === 'fetching') {
+    return '<span class="repo-refresh-badge fetching" title="Running git fetch for origin">'
+      + '<span class="repo-refresh-spinner" aria-hidden="true"></span>'
+      + '<span class="repo-refresh-badge-text">Fetching…</span></span>';
+  }
+  if (st.status === 'error') {
+    const err = st.lastError || 'fetch failed';
+    const at = st.lastErrorAt ? ' (at ' + _fmtTime(st.lastErrorAt) + ')' : '';
+    // Trim at the nearest word boundary so visible truncation doesn't slice
+    // mid-word. Reserve "…" for truncation; ASCII ellipsis is fine here.
+    let visible = err.slice(0, 60);
+    if (err.length > 60) {
+      const cut = visible.replace(/\s\S*$/, '');
+      visible = (cut.length > 20 ? cut : visible) + '…';
+    }
+    // aria-describedby points at a visually-hidden full message so SR and
+    // keyboard users get the complete error, not just the title tooltip.
+    const descId = 'rr-err-desc-' + Math.random().toString(36).slice(2, 9);
+    return '<span class="repo-refresh-badge error" tabindex="0" '
+      + 'aria-describedby="' + descId + '" title="' + escHtml(err + at) + '">'
+      + '<span class="repo-refresh-dot" aria-hidden="true"></span>'
+      + '<span class="repo-refresh-badge-text">Refresh failed: ' + escHtml(visible) + '</span>'
+      + '<span id="' + descId + '" class="visually-hidden">' + escHtml(err + at) + '</span></span>';
+  }
+  if (st.lastSuccessAt) {
+    return '<span class="repo-refresh-badge ok" title="Last fetched ' + escHtml(_fmtTime(st.lastSuccessAt)) + '">'
+      + '<span aria-hidden="true">✓</span>'
+      + '<span class="repo-refresh-badge-text">Updated ' + escHtml(repoRelativeTime(st.lastSuccessAt)) + '</span></span>';
+  }
+  return '';
+}
+
+function renderRepoRefreshControls(gitRoot, projName) {
+  if (!gitRoot || gitRoot === 'unknown') {
+    // Surface the reason controls are missing so users aren't confused.
+    return '<span class="repo-refresh-controls disabled" onclick="event.stopPropagation()" title="Not a git repository — no remote to fetch from">'
+      + '<span class="repo-refresh-toggle-label">Not a git repo</span></span>';
+  }
+  const escRoot = escHtml(gitRoot);
+  const escName = escHtml(projName);
+  const enabled = !!(repoRefreshState.settings.perProject[gitRoot] && repoRefreshState.settings.perProject[gitRoot].autoRefreshOnNewChat);
+  // Group the controls so SR users hear them as one cluster, scoped to the project.
+  // stopPropagation: this span is nested under .git-project-header whose onclick
+  // toggles "collapsed". Clicks on refresh/toggle must NOT bubble there.
+  let html = '<span class="repo-refresh-controls" role="group" aria-label="Auto-refresh controls for ' + escName + '" onclick="event.stopPropagation()">';
+  // Outer wrapper carries the live region so badge innerHTML replacements
+  // don't tear down the announcer on each update.
+  html += '<span data-rr-badge="' + escRoot + '" role="status" aria-live="polite" class="repo-refresh-badge-slot">'
+    + renderRepoRefreshBadgeInner(gitRoot) + '</span>';
+  const isFetching = !!(repoRefreshState.repos[gitRoot] && repoRefreshState.repos[gitRoot].status === 'fetching');
+  html += '<button type="button" class="repo-refresh-btn" data-rr-root="' + escRoot + '" '
+    + 'aria-label="Fetch ' + escName + ' from origin" title="git fetch ' + escName + '" '
+    + (isFetching ? 'aria-busy="true" ' : '')
+    + 'onclick="onClickRepoRefresh(this.dataset.rrRoot)"><span aria-hidden="true">↻</span></button>';
+  // Native checkbox (no role="switch") keeps reliable aria-checked semantics
+  // across screen readers — see ARIA APG `switch` caveats.
+  html += '<label class="repo-refresh-toggle" title="Run git fetch automatically before opening a new chat in this project">';
+  html += '<input type="checkbox" data-rr-toggle="' + escRoot + '" '
+    + 'aria-checked="' + (enabled ? 'true' : 'false') + '" '
+    + (enabled ? 'checked ' : '') + (repoRefreshLoaded ? '' : 'disabled ')
+    + 'aria-label="Auto-fetch on new chat for ' + escName + '" '
+    + 'onchange="onToggleRepoRefreshProject(this.dataset.rrToggle, this.checked)">';
+  html += '<span class="repo-refresh-toggle-label">Auto-fetch</span></label>';
+  html += '</span>';
+  return html;
+}
+
+function renderRepoRefreshGlobalToggle() {
+  return '<label class="repo-refresh-global-toggle" title="When codbash starts, run git fetch for every repo whose Auto-fetch toggle is on">'
+    + '<input type="checkbox" id="repoRefreshGlobalToggle" '
+    + 'aria-checked="' + (repoRefreshState.settings.refreshOnStartup ? 'true' : 'false') + '" '
+    + (repoRefreshState.settings.refreshOnStartup ? 'checked ' : '')
+    + (repoRefreshLoaded ? '' : 'disabled ')
+    + 'aria-label="Fetch all enabled repos on codbash start" '
+    + 'onchange="onToggleRepoRefreshGlobal(this.checked)">'
+    + '<span>Fetch all on codbash start</span></label>';
+}
+
+async function onClickRepoRefresh(gitRoot) {
+  if (!gitRoot) return;
+  try {
+    const res = await fetch('/api/repo-refresh/trigger', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ gitRoot: gitRoot }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      repoRefreshToast('Refresh failed: ' + (data && data.error || res.status));
+      return;
+    }
+    setRepoState(gitRoot, data.state || { status: 'fetching', startedAt: Date.now() });
+    refreshRepoRefreshUI();
+    setTimeout(loadRepoRefreshState, 500);
+  } catch (e) {
+    repoRefreshToast('Refresh failed: ' + e.message);
+  }
+}
+
+async function onToggleRepoRefreshProject(gitRoot, checked) {
+  if (!gitRoot) return;
+  const inputEl = document.querySelector('[data-rr-toggle="' + (window.CSS && CSS.escape ? CSS.escape(gitRoot) : gitRoot) + '"]');
+  // Disable input for the duration of the POST so a rapid second click can't
+  // race the rollback (plan risk I5).
+  if (inputEl) { inputEl.disabled = true; inputEl.dataset.rrInflight = '1'; }
+  const prev = !!(repoRefreshState.settings.perProject[gitRoot] && repoRefreshState.settings.perProject[gitRoot].autoRefreshOnNewChat);
+  setPerProjectSetting(gitRoot, { autoRefreshOnNewChat: !!checked });
+  refreshRepoRefreshUI();
+  try {
+    const body = { perProject: {} };
+    body.perProject[gitRoot] = { autoRefreshOnNewChat: !!checked };
+    const res = await fetch('/api/repo-refresh/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error((await res.json()).error || 'save failed');
+  } catch (e) {
+    setPerProjectSetting(gitRoot, { autoRefreshOnNewChat: prev });
+    refreshRepoRefreshUI();
+    repoRefreshToast('Failed to save Auto-fetch setting');
+  } finally {
+    if (inputEl) { delete inputEl.dataset.rrInflight; inputEl.disabled = !repoRefreshLoaded; }
+  }
+}
+
+async function onToggleRepoRefreshGlobal(checked) {
+  const inputEl = document.getElementById('repoRefreshGlobalToggle');
+  if (inputEl) { inputEl.disabled = true; inputEl.dataset.rrInflight = '1'; }
+  const prev = !!repoRefreshState.settings.refreshOnStartup;
+  setGlobalRefreshOnStartup(!!checked);
+  refreshRepoRefreshUI();
+  try {
+    const res = await fetch('/api/repo-refresh/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshOnStartup: !!checked }),
+    });
+    if (!res.ok) throw new Error((await res.json()).error || 'save failed');
+  } catch (e) {
+    setGlobalRefreshOnStartup(prev);
+    refreshRepoRefreshUI();
+    repoRefreshToast('Failed to save startup setting');
+  } finally {
+    if (inputEl) { delete inputEl.dataset.rrInflight; inputEl.disabled = !repoRefreshLoaded; }
+  }
+}
+
+async function maybeRefreshBeforeLaunch(projectPath, launchBtn) {
+  if (!projectPath) return;
+  const cfg = repoRefreshState.settings.perProject[projectPath];
+  if (!cfg || !cfg.autoRefreshOnNewChat) return;
+  // Visible feedback on the actual button — silent 2s wait is a UX foot-gun.
+  // Re-entrancy guard: a second click while we're mid-fetch would capture our
+  // own "Fetching…" markup as the "previous" text and the button would end up
+  // permanently stuck. dataset.rrLaunchInflight short-circuits the duplicate.
+  let restoreBtn = null;
+  if (launchBtn) {
+    if (launchBtn.dataset.rrLaunchInflight) return;
+    launchBtn.dataset.rrLaunchInflight = '1';
+    const prevDisabled = launchBtn.disabled;
+    const prevText = launchBtn.innerHTML;
+    launchBtn.disabled = true;
+    launchBtn.setAttribute('aria-busy', 'true');
+    launchBtn.innerHTML = '<span class="repo-refresh-spinner" aria-hidden="true"></span>&nbsp;Fetching…';
+    restoreBtn = function() {
+      launchBtn.disabled = prevDisabled;
+      launchBtn.removeAttribute('aria-busy');
+      launchBtn.innerHTML = prevText;
+      delete launchBtn.dataset.rrLaunchInflight;
+    };
+  }
+  try {
+    await fetch('/api/repo-refresh/trigger', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ gitRoot: projectPath }),
+    });
+    setRepoState(projectPath, { status: 'fetching', startedAt: Date.now() });
+    refreshRepoRefreshUI();
+    const waitRes = await fetch('/api/repo-refresh/wait', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ gitRoot: projectPath, timeoutMs: 2000 }),
+    });
+    if (waitRes.ok) {
+      const data = await waitRes.json();
+      if (data && data.state) {
+        setRepoState(projectPath, data.state);
+        refreshRepoRefreshUI();
+        if (data.state.status === 'error') {
+          repoRefreshToast('Fetch failed (session opens anyway): ' + (data.state.lastError || 'unknown'));
+        }
+      }
+    }
+  } catch (e) {
+    repoRefreshToast('Pre-launch fetch failed: ' + e.message);
+  } finally {
+    if (restoreBtn) restoreBtn();
+  }
+}
+
 // ── Color palette for projects ─────────────────────────────────
 
 const PROJECT_COLORS = [
@@ -1622,9 +1968,11 @@ function renderProjectsHistory(container, sessions) {
       '<button class="toolbar-btn" onclick="clearHistoryProjectFilter()" aria-label="Clear project filter">&times; Clear filter</button>' +
       '</div>';
   }
-  html += '<div style="display:flex;gap:8px;margin-bottom:12px;align-items:center">';
+  html += '<div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap">';
+  html += '<button class="toolbar-btn" onclick="openAddProject()" title="Register a local folder or clone from GitHub" style="background:#3b82f6;color:#fff;border-color:#3b82f6">+ Add Project</button>';
   html += '<button class="toolbar-btn" onclick="document.querySelectorAll(\'.git-project-group\').forEach(function(g){g.classList.add(\'collapsed\')})">Collapse All</button>';
   html += '<button class="toolbar-btn" onclick="document.querySelectorAll(\'.git-project-group\').forEach(function(g){g.classList.remove(\'collapsed\')})">Expand All</button>';
+  if (sorted.length > 0) html += renderRepoRefreshGlobalToggle();
   html += '</div>';
 
   if (sorted.length === 0) {
@@ -1668,11 +2016,11 @@ function renderProjectsHistory(container, sessions) {
       // Prefer the tool the user actually worked with in this project; default
       // to claude for brand-new entries with no sessions yet.
       var preferredTool = lastSession && lastSession.tool ? lastSession.tool : 'claude';
-      html += '<button class="git-project-launch-btn primary" data-proj-path="' + escHtml(projPath) + '" data-tool="' + escHtml(preferredTool) + '" onclick="event.stopPropagation();launchNewProjectSession(this.dataset.projPath, this.dataset.tool)" title="Start a new ' + escHtml(preferredTool) + ' session in this folder">&#9654; New</button>';
+      html += '<button class="git-project-launch-btn primary" data-proj-path="' + escHtml(projPath) + '" data-tool="' + escHtml(preferredTool) + '" onclick="event.stopPropagation();launchNewProjectSession(this.dataset.projPath, this.dataset.tool, this)" title="Start a new ' + escHtml(preferredTool) + ' session in this folder">&#9654; New</button>';
       if (lastSession) {
         var lastId = lastSession.id || '';
         var lastTool = lastSession.tool || 'claude';
-        html += '<button class="git-project-launch-btn" data-sess-id="' + escHtml(lastId) + '" data-sess-tool="' + escHtml(lastTool) + '" data-proj-path="' + escHtml(projPath) + '" onclick="event.stopPropagation();resumeLastProjectSession(this.dataset.sessId,this.dataset.sessTool,this.dataset.projPath)" title="Resume last session (' + escHtml(lastId.slice(0,8)) + ')">&#x21bb; Last</button>';
+        html += '<button class="git-project-launch-btn" data-sess-id="' + escHtml(lastId) + '" data-sess-tool="' + escHtml(lastTool) + '" data-proj-path="' + escHtml(projPath) + '" onclick="event.stopPropagation();resumeLastProjectSession(this.dataset.sessId,this.dataset.sessTool,this.dataset.projPath, this)" title="Resume last session (' + escHtml(lastId.slice(0,8)) + ')">&#x21bb; Last</button>';
       }
     }
 
@@ -1681,6 +2029,7 @@ function renderProjectsHistory(container, sessions) {
     }
 
     html += '<button class="git-project-open-btn" data-proj-key="' + escHtml(projKey) + '" data-proj-name="' + escHtml(projName) + '" onclick="event.stopPropagation();drillIntoGitProject(this.dataset.projKey,this.dataset.projName)" title="Show only this project\'s sessions">Open &rsaquo;</button>';
+    html += renderRepoRefreshControls(projPath, projName);
     html += '<span class="group-chevron">&#9660;</span>';
     html += '</div>';
     html += '<div class="qa-list">';
@@ -2536,7 +2885,7 @@ function _currentTerminalId() {
   return localStorage.getItem('codedash-terminal') || '';
 }
 
-async function launchNewProjectSession(projectPath, tool) {
+async function launchNewProjectSession(projectPath, tool, btn) {
   if (!projectPath) { showToast('No project path'); return; }
   var installed = (window.installedAgents || []).map(function(a) { return a.id; });
   if (installed.length === 0) {
@@ -2549,6 +2898,7 @@ async function launchNewProjectSession(projectPath, tool) {
   var t = tool && installed.indexOf(tool) >= 0 ? tool : null;
   if (!t) t = pickPreferredTool(projectPath, null);
   if (!t) { showToast('No agent installed'); return; }
+  await maybeRefreshBeforeLaunch(projectPath, btn);
   try {
     var resp = await fetch('/api/launch', {
       method: 'POST',
@@ -2869,8 +3219,9 @@ async function refreshAgentsDetection() {
   }
 }
 
-async function resumeLastProjectSession(sessionId, tool, projectPath) {
+async function resumeLastProjectSession(sessionId, tool, projectPath, btn) {
   if (!sessionId) { showToast('No previous session to resume'); return; }
+  await maybeRefreshBeforeLaunch(projectPath, btn);
   try {
     var resp = await fetch('/api/launch', {
       method: 'POST',
@@ -3331,6 +3682,7 @@ function _onProjectsHashChange() {
   loadManualProjects();
   loadAgentsAndSettings();
   window.addEventListener('hashchange', _onProjectsHashChange);
+  loadRepoRefreshState();
   checkForUpdates();
   setInterval(checkForUpdates, 10000); // check every 10s
   setInterval(loadSessions, 60000);    // refresh sessions + invalidate analytics cache every 60s
