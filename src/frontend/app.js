@@ -579,10 +579,17 @@ async function pollActiveSessions() {
     var resp = await fetch('/api/active');
     var data = await resp.json();
 
-    // Build new state
+    // Build new state. Entries with an empty sessionId (backend's
+    // 'unmatched' source — known cwd but no Codex session matched it yet)
+    // are still surfaced under a synthetic 'pid:<pid>' key so the Agent
+    // Board can show them honestly instead of dropping them.
     var newActive = {};
     data.forEach(function(a) {
-      if (a.sessionId) newActive[a.sessionId] = a;
+      if (a.sessionId) {
+        newActive[a.sessionId] = a;
+      } else if (a.pid) {
+        newActive['pid:' + a.pid] = a;
+      }
     });
 
     // Check if anything changed — skip DOM work if not
@@ -2023,7 +2030,9 @@ function renderRunningCard(a, s) {
   var projColor = getProjectColor(projName);
   var statusClass = a.status === 'waiting' ? 'running-waiting' : 'running-active';
   var uptime = a.startedAt ? formatDuration(Date.now() - a.startedAt) : '';
-  var sid = a.sessionId;
+  // Use the same synthetic 'pid:<pid>' key the activeSessions map uses for
+  // unmatched entries so Focus lookup keeps working.
+  var sid = a.sessionId || ('pid:' + a.pid);
 
   var html = '<div class="running-card ' + statusClass + '">';
   html += '<div class="running-card-header">';
