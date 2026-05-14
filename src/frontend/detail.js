@@ -20,11 +20,13 @@ async function openDetail(s) {
   var aiTitle = sessionTitles[s.id];
   var sessionName = s.session_name || '';
   var displayName = aiTitle || (sessionName ? sessionName.slice(0, 55) : '');
-  var escProject = escHtml(s.project || '').replace(/'/g, "\\'");
+  var jsId = escJsString(s.id);
+  var jsTool = escJsString(s.tool);
+  var jsProject = escJsString(s.project || '');
   if (displayName) {
-    infoHtml += '<div class="detail-row"><span class="detail-label">Name</span><span style="font-weight:600;flex:1">' + escHtml(displayName) + '</span><button class="toolbar-btn" style="font-size:10px;padding:1px 6px" onclick="generateTitle(\'' + s.id + '\',\'' + escProject + '\')" title="Regenerate by AI">&#8635;</button></div>';
+    infoHtml += '<div class="detail-row"><span class="detail-label">Name</span><span style="font-weight:600;flex:1">' + escHtml(displayName) + '</span><button class="toolbar-btn" style="font-size:10px;padding:1px 6px" onclick="generateTitle(\'' + jsId + '\',\'' + jsProject + '\')" title="Regenerate by AI">&#8635;</button></div>';
   } else if (s.has_detail) {
-    infoHtml += '<div class="detail-row"><span class="detail-label">Name</span><button class="toolbar-btn" style="font-size:11px;padding:2px 8px" onclick="generateTitle(\'' + s.id + '\',\'' + escProject + '\')">Generate AI Name</button></div>';
+    infoHtml += '<div class="detail-row"><span class="detail-label">Name</span><button class="toolbar-btn" style="font-size:11px;padding:2px 8px" onclick="generateTitle(\'' + jsId + '\',\'' + jsProject + '\')">Generate AI Name</button></div>';
   }
   var detailToolLabel = getToolLabel(s.tool);
   infoHtml += '<div class="detail-row"><span class="detail-label">Tool</span><span class="tool-badge tool-' + s.tool + '">' + escHtml(detailToolLabel) + '</span></div>';
@@ -68,28 +70,28 @@ async function openDetail(s) {
   infoHtml += '<div class="detail-actions">';
   // Tool-specific launch buttons
   if (s.tool === 'cursor') {
-    infoHtml += '<button class="launch-btn" style="background:#4a9eff" onclick="openInCursor(\'' + escHtml(s.project || '') + '\')">Open in Cursor</button>';
+    infoHtml += '<button class="launch-btn" style="background:#4a9eff" onclick="openInCursor(\'' + jsProject + '\')">Open in Cursor</button>';
   } else if (s.tool === 'copilot-chat') {
-    infoHtml += '<button class="launch-btn" style="background:#1f6feb" onclick="openInVSCode(\'' + escHtml(s.project || '') + '\')">Open in VS Code</button>';
+    infoHtml += '<button class="launch-btn" style="background:#1f6feb" onclick="openInVSCode(\'' + jsProject + '\')">Open in VS Code</button>';
   } else if (activeSessions[s.id]) {
-    infoHtml += '<button class="launch-btn" style="background:var(--accent-green);color:#000" onclick="focusSession(\'' + s.id + '\')">Focus Terminal</button>';
+    infoHtml += '<button class="launch-btn" style="background:var(--accent-green);color:#000" onclick="focusSession(\'' + jsId + '\')">Focus Terminal</button>';
   } else {
-    infoHtml += '<button class="launch-btn" onclick="launchSession(\'' + s.id + '\',\'' + escHtml(s.tool) + '\',\'' + escHtml(s.project || '') + '\')">Resume</button>';
+    infoHtml += '<button class="launch-btn" onclick="launchSession(\'' + jsId + '\',\'' + jsTool + '\',\'' + jsProject + '\')">Resume</button>';
     if (s.tool === 'claude') {
-      infoHtml += '<button class="launch-btn" style="background:var(--accent-orange);color:#000" onclick="launchDangerous(\'' + s.id + '\',\'' + escHtml(s.project || '') + '\')" title="--dangerously-skip-permissions">Resume (skip perms)</button>';
+      infoHtml += '<button class="launch-btn" style="background:var(--accent-orange);color:#000" onclick="launchDangerous(\'' + jsId + '\',\'' + jsProject + '\')" title="--dangerously-skip-permissions">Resume (skip perms)</button>';
     }
   }
-  infoHtml += '<button class="launch-btn btn-secondary" onclick="copyResume(\'' + s.id + '\',\'' + escHtml(s.tool) + '\')">Copy Command</button>';
+  infoHtml += '<button class="launch-btn btn-secondary" onclick="copyResume(\'' + jsId + '\',\'' + jsTool + '\')">Copy Command</button>';
   if (s.has_detail) {
-    infoHtml += '<button class="launch-btn btn-secondary" onclick="closeDetail();openReplay(\'' + s.id + '\',\'' + escHtml(s.project || '') + '\')">Replay</button>';
-    infoHtml += '<button class="launch-btn btn-secondary" onclick="exportMd(\'' + s.id + '\',\'' + escHtml(s.project || '') + '\')">Export MD</button>';
+    infoHtml += '<button class="launch-btn btn-secondary" onclick="closeDetail();openReplay(\'' + jsId + '\',\'' + jsProject + '\')">Replay</button>';
+    infoHtml += '<button class="launch-btn btn-secondary" onclick="exportMd(\'' + jsId + '\',\'' + jsProject + '\')">Export MD</button>';
     getConvertTargets(s.tool).forEach(function(target) {
-      infoHtml += '<button class="launch-btn btn-secondary" onclick="convertTo(\'' + s.id + '\',\'' + escHtml(s.project || '') + '\',\'' + target + '\')">Convert to ' + getToolLabel(target) + '</button>';
+      infoHtml += '<button class="launch-btn btn-secondary" onclick="convertTo(\'' + jsId + '\',\'' + jsProject + '\',\'' + escJsString(target) + '\')">Convert to ' + getToolLabel(target) + '</button>';
     });
-    infoHtml += '<button class="launch-btn btn-secondary" onclick="downloadHandoff(\'' + s.id + '\',\'' + escHtml(s.project || '') + '\')">Handoff</button>';
+    infoHtml += '<button class="launch-btn btn-secondary" onclick="downloadHandoff(\'' + jsId + '\',\'' + jsProject + '\')">Handoff</button>';
   }
-  infoHtml += '<button class="star-btn detail-star' + (isStarred ? ' active' : '') + '" onclick="toggleStar(\'' + s.id + '\')">&#9733; ' + (isStarred ? 'Starred' : 'Star') + '</button>';
-  infoHtml += '<button class="launch-btn btn-delete" onclick="showDeleteConfirm(\'' + s.id + '\',\'' + escHtml(s.project || '') + '\')">Delete</button>';
+  infoHtml += '<button class="star-btn detail-star' + (isStarred ? ' active' : '') + '" onclick="toggleStar(\'' + jsId + '\')">&#9733; ' + (isStarred ? 'Starred' : 'Star') + '</button>';
+  infoHtml += '<button class="launch-btn btn-delete" onclick="showDeleteConfirm(\'' + jsId + '\',\'' + jsProject + '\')">Delete</button>';
   infoHtml += '</div>';
 
   body.innerHTML = infoHtml + '<div class="detail-messages"><div class="loading">Loading messages...</div></div><div class="detail-commits"></div>';
