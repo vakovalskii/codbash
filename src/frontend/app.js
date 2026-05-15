@@ -604,93 +604,214 @@ function getEstimatedSessionCost(session) {
   return estimateCost(session.file_size);
 }
 
-// ── Subscription service plans (pricing as of 2025) ─────────────
+// ── Subscription service plans ─────────────────────────────────
+// Pricing verified 2026-05-15 against vendor pages.
+// Sources: claude.com/pricing, openai.com/chatgpt/pricing, cursor.com/pricing,
+//          github.com/features/copilot/plans + docs.github.com, kiro.dev/pricing,
+//          opencode.ai/go + opencode.ai/zen
 var SERVICE_PLANS = {
-  'Claude': { label: 'Claude (Anthropic)', plans: [
+  'Claude Code':   { label: 'Claude Code (Anthropic)', kind: 'subscription', plans: [
     { name: 'Pro', price: 20 },
     { name: 'Max 5×', price: 100 },
     { name: 'Max 20×', price: 200 }
   ]},
-  'OpenAI': { label: 'OpenAI (ChatGPT)', plans: [
+  'ChatGPT/Codex': { label: 'ChatGPT / Codex (OpenAI)', kind: 'subscription', plans: [
+    { name: 'Go', price: 8 },
     { name: 'Plus', price: 20 },
     { name: 'Pro', price: 200 }
   ]},
-  'Cursor': { label: 'Cursor', plans: [
+  'Cursor':        { label: 'Cursor', kind: 'subscription', plans: [
     { name: 'Pro', price: 20 },
     { name: 'Pro+', price: 60 },
     { name: 'Ultra', price: 200 }
   ]},
-  'Kiro': { label: 'Kiro', plans: [
+  'Copilot':       { label: 'GitHub Copilot', kind: 'subscription', plans: [
+    { name: 'Pro', price: 10 },
+    { name: 'Pro+', price: 39 },
+    { name: 'Business', price: 19 },
+    { name: 'Enterprise', price: 39 }
+  ]},
+  'Kiro':          { label: 'Kiro', kind: 'subscription', plans: [
     { name: 'Pro', price: 20 },
     { name: 'Pro+', price: 40 },
     { name: 'Power', price: 200 }
   ]},
-  'OpenCode': { label: 'OpenCode', plans: [
-    { name: 'Go', price: 10 }
-  ]}
+  'OpenCode':      { label: 'OpenCode', kind: 'subscription', plans: [
+    { name: 'Go', price: 10 },
+    { name: 'Zen', price: 20 }
+  ]},
+  'Qwen Code':     { label: 'Qwen Code', kind: 'api-only', plans: [],
+                     note: 'Free / API-only — use "API (custom)" to track deposits' },
+  'Kilo':          { label: 'Kilo', kind: 'api-only', plans: [],
+                     note: 'Free / API-only — use "API (custom)" to track deposits' },
+  'API (custom)':  { label: 'API (custom)', kind: 'api', plans: [],
+                     note: 'Enter provider/balance label and deposit amount manually' }
 };
 
-function onSubServiceChange() {
-  var serviceEl = document.getElementById('sub-new-service');
-  var planOpts = document.getElementById('sub-plan-opts');
-  var service = serviceEl ? serviceEl.value.trim() : '';
-  if (!planOpts) return;
-  planOpts.innerHTML = '';
-  var paidEl = document.getElementById('sub-new-paid');
-  if (paidEl) paidEl.value = '';
-  if (service && SERVICE_PLANS[service]) {
-    SERVICE_PLANS[service].plans.forEach(function(p) {
-      var opt = document.createElement('option');
-      opt.value = p.name;
-      planOpts.appendChild(opt);
-    });
+// Rebuild the Plan slot in-place: <select> for normal services, <input> for API (custom).
+// Service+plan values come from SERVICE_PLANS constants, but escape on principle (defence in depth).
+function renderPlanSlot(cfg) {
+  var slot = document.getElementById('sub-plan-slot');
+  if (!slot) return;
+  if (cfg && cfg.kind === 'api') {
+    slot.innerHTML =
+      '<label for="sub-new-plan" class="sr-only">Provider / balance label</label>' +
+      '<input id="sub-new-plan" type="text" placeholder="Provider / balance label" ' +
+      'maxlength="200" aria-describedby="sub-new-hint" ' +
+      'oninput="updateAddButtonState()" autocomplete="off" />';
+  } else if (cfg && cfg.plans && cfg.plans.length > 0) {
+    var opts = '<option value="" disabled selected hidden>Select plan…</option>' + cfg.plans.map(function(p) {
+      var nm = escHtml(String(p.name));
+      var pr = escHtml(String(parseFloat(p.price) || 0));
+      return '<option value="' + nm + '">' + nm + ' — $' + pr + '</option>';
+    }).join('');
+    slot.innerHTML =
+      '<label for="sub-new-plan" class="sr-only">Plan</label>' +
+      '<select id="sub-new-plan" aria-describedby="sub-new-hint" onchange="onSubPlanChange()">' + opts + '</select>';
+  } else {
+    // No service selected, or api-only with no plans → disabled placeholder select
+    slot.innerHTML =
+      '<label for="sub-new-plan" class="sr-only">Plan</label>' +
+      '<select id="sub-new-plan" aria-describedby="sub-new-hint" disabled>' +
+      '<option value="" disabled selected hidden>Select plan…</option></select>';
   }
 }
 
+function onSubServiceChange() {
+  var serviceEl = document.getElementById('sub-new-service');
+  var paidEl = document.getElementById('sub-new-paid');
+  var service = serviceEl ? serviceEl.value.trim() : '';
+  var cfg = SERVICE_PLANS[service];
+  if (paidEl) {
+    paidEl.value = '';
+    paidEl.placeholder = cfg && cfg.kind === 'api' ? '$ deposit' : '$/mo';
+  }
+  renderPlanSlot(cfg);
+  // hint text is fully driven by updateAddButtonState (priority: cfg.note > validation reason)
+  updateAddButtonState();
+}
+
 function onSubPlanChange() {
+  // Plan <select> emits the canonical plan name from SERVICE_PLANS, so a direct lookup is exact.
   var serviceEl = document.getElementById('sub-new-service');
   var planEl = document.getElementById('sub-new-plan');
   var paidEl = document.getElementById('sub-new-paid');
-  var service = serviceEl ? serviceEl.value.trim() : '';
-  var planName = planEl ? planEl.value.trim() : '';
-  if (service && planName && SERVICE_PLANS[service]) {
-    var planLower = planName.toLowerCase();
-    var found = SERVICE_PLANS[service].plans.find(function(p) { return p.name.toLowerCase() === planLower; });
+  var service = serviceEl ? serviceEl.value : '';
+  var planName = planEl ? planEl.value : '';
+  var cfg = SERVICE_PLANS[service];
+  if (cfg && planName) {
+    var found = cfg.plans.find(function(p) { return p.name === planName; });
     if (found && paidEl) paidEl.value = found.price;
   }
+  updateAddButtonState();
+}
+
+// Computes the validation gate for the Add button AND surfaces the reason
+// to #sub-new-hint so SR/keyboard users learn why submission is blocked.
+// All kinds (subscription + api) require a non-empty plan/provider field —
+// user-confirmed decision (api deposits need a label like "Anthropic API balance").
+function updateAddButtonState() {
+  var btn = document.getElementById('sub-add-btn');
+  if (!btn) return;
+  var serviceEl = document.getElementById('sub-new-service');
+  var planEl = document.getElementById('sub-new-plan');
+  var paidEl = document.getElementById('sub-new-paid');
+  var hintEl = document.getElementById('sub-new-hint');
+  var service = serviceEl ? serviceEl.value.trim() : '';
+  var paid = parseFloat(paidEl && paidEl.value) || 0;
+  var cfg = SERVICE_PLANS[service];
+  var apiOnly = cfg && cfg.kind === 'api-only';
+  var planFilled = !!(planEl && planEl.value && planEl.value.trim().length > 0);
+  btn.disabled = apiOnly || !service || paid <= 0 || !planFilled;
+  if (!hintEl) return;
+  // Priority: service-level note (free/api-only guidance) > validation reason > empty.
+  // cfg.note already covers the api-only case, so we don't repeat it as a reason.
+  var msg = '';
+  if (cfg && cfg.note) msg = cfg.note;
+  else if (!service) msg = '';
+  else if (!planFilled) msg = cfg && cfg.kind === 'api' ? 'Enter provider / balance label' : 'Select a plan';
+  else if (paid <= 0) msg = 'Enter amount greater than 0';
+  hintEl.textContent = msg;
 }
 
 // ── Subscription config helpers ──────────────────────────────────
 function getSubscriptionConfig() {
-  var raw = JSON.parse(localStorage.getItem('codedash-subscription') || 'null');
+  var raw;
+  try { raw = JSON.parse(localStorage.getItem('codedash-subscription') || 'null'); }
+  catch (e) { raw = null; }
   if (!raw) return { entries: [] };
-  // Migrate old single-entry format {plan, paid} → new multi-period {entries: [...]}
-  if (!raw.entries) return { entries: [{ plan: raw.plan || 'Subscription', paid: raw.paid || 0, from: '' }] };
-  return raw;
+  // Migrate old single-entry format {plan, paid} → new multi-period {entries: [...]}.
+  // Legacy entries are tagged with a "(legacy) " prefix so users see which rows
+  // pre-date the service/kind fields (BDD: specs/analytics-subscriptions.feature scenario "Migration from old single-entry format").
+  if (!raw.entries) {
+    return { entries: [{
+      kind: 'subscription',
+      service: '',
+      plan: '(legacy) ' + (raw.plan || 'Subscription'),
+      paid: raw.paid || 0,
+      from: ''
+    }] };
+  }
+  // Ensure every entry has a kind (default: subscription). Build immutable copies
+  // to avoid sharing mutated references with callers (defence in depth).
+  var migrated = [];
+  for (var i = 0; i < raw.entries.length; i++) {
+    var e = raw.entries[i];
+    if (!e || typeof e !== 'object') continue;
+    migrated.push({
+      kind: e.kind || 'subscription',
+      service: e.service || '',
+      plan: e.plan || 'Subscription',
+      paid: parseFloat(e.paid) || 0,
+      from: e.from || ''
+    });
+  }
+  return { entries: migrated };
 }
 function saveSubscriptionConfig(cfg) { localStorage.setItem('codedash-subscription', JSON.stringify(cfg)); }
 function subTotalPaid(entries) { return entries.reduce(function(s,e){return s+(parseFloat(e.paid)||0);},0); }
 function addSubEntry() {
-  var service = (document.getElementById('sub-new-service').value || '').trim();
+  var serviceEl = document.getElementById('sub-new-service');
   var planEl = document.getElementById('sub-new-plan');
+  var paidEl = document.getElementById('sub-new-paid');
+  var fromEl = document.getElementById('sub-new-from');
+  if (!serviceEl || !paidEl) return;
+  var service = (serviceEl.value || '').trim();
   var plan = planEl ? planEl.value.trim() : '';
-  var paid = parseFloat(document.getElementById('sub-new-paid').value) || 0;
-  var from = (document.getElementById('sub-new-from').value || '').trim();
-  if (!paid) return;
+  var paid = parseFloat(paidEl.value) || 0;
+  var from = fromEl ? (fromEl.value || '').trim() : '';
+  if (!service || paid <= 0 || !plan) return;
+  var cfg = SERVICE_PLANS[service];
+  if (cfg && cfg.kind === 'api-only') return;
+  var kind = cfg && cfg.kind === 'api' ? 'api' : 'subscription';
   _analyticsHtmlCache = null;
   _analyticsCacheUrl = null;
-  var cfg = getSubscriptionConfig();
-  cfg.entries.push({ service: service || '', plan: plan || 'Subscription', paid: paid, from: from });
-  cfg.entries.sort(function(a,b){return (a.from||'').localeCompare(b.from||'');});
-  saveSubscriptionConfig(cfg);
+  var sub = getSubscriptionConfig();
+  sub.entries.push({ kind: kind, service: service, plan: plan, paid: paid, from: from });
+  sub.entries.sort(function(a,b){return (a.from||'').localeCompare(b.from||'');});
+  saveSubscriptionConfig(sub);
+  // Announce BEFORE render() to keep the live region in DOM when SR reads it.
+  // Includes service+plan for context (UX: NN/g status visibility).
+  var live = document.getElementById('sub-aria-live');
+  if (live) {
+    live.textContent = kind === 'api'
+      ? service + ' ' + plan + ' deposit added: $' + paid.toFixed(2)
+      : service + ' ' + plan + ' subscription added: $' + paid.toFixed(2) + ' per month';
+  }
   render();
 }
 function removeSubEntry(idx) {
   _analyticsHtmlCache = null;
   _analyticsCacheUrl = null;
-  var cfg = getSubscriptionConfig();
-  cfg.entries.splice(idx, 1);
-  saveSubscriptionConfig(cfg);
+  var sub = getSubscriptionConfig();
+  var removed = sub.entries[idx];
+  sub.entries.splice(idx, 1);
+  saveSubscriptionConfig(sub);
+  // Announce BEFORE render() rebuilds the DOM (BDD: aria-live announces "removed").
+  var live = document.getElementById('sub-aria-live');
+  if (live && removed) {
+    live.textContent = (removed.kind === 'api' ? 'API deposit' : 'Subscription') + ' removed';
+  }
   render();
 }
 
