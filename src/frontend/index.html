@@ -8,135 +8,205 @@
 </head>
 <body>
 
+<script>
+// Pre-paint sidebar state restore: applies collapsed sections from
+// localStorage before the sidebar markup paints, so a user who collapsed
+// "Agents" doesn't see it flash open on reload. The full applySidebarConfig()
+// runs later from init() and reconciles everything (including hidden items
+// and the chevron rotation), but the .collapsed class needs to land before
+// first paint to prevent the flash. This script runs synchronously before
+// the <div class="sidebar"> below.
+(function () {
+  try {
+    var raw = window.localStorage && window.localStorage.getItem('codedash-sidebar-config');
+    if (!raw || typeof raw !== 'string' || raw.length > 65536) return;
+    var cfg = JSON.parse(raw);
+    if (!cfg || typeof cfg !== 'object' || cfg.v !== 1 || !cfg.collapsed) return;
+    var collapsed = cfg.collapsed;
+    // Defer to DOM-ready so .sidebar-group nodes exist. Script is placed
+    // before <div class="sidebar">, so we use a microtask via setTimeout(0).
+    document.addEventListener('DOMContentLoaded', function () {
+      Object.keys(collapsed).forEach(function (id) {
+        if (collapsed[id] !== true) return;
+        var group = document.querySelector('.sidebar-group[data-section="' + id.replace(/"/g, '') + '"]');
+        if (group) {
+          group.classList.add('collapsed');
+          var hdr = group.querySelector(':scope > .sidebar-section-header');
+          if (hdr) hdr.setAttribute('aria-expanded', 'false');
+        }
+      });
+    });
+  } catch (_e) { /* private mode or malformed — applySidebarConfig will recover */ }
+})();
+</script>
+
 <div class="sidebar">
     <div class="sidebar-brand">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
         codbash
         <span class="version-badge" id="versionBadge"></span>
     </div>
-    <div class="sidebar-item active" data-view="sessions">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
-        All Sessions
+
+    <!-- Workspace section -->
+    <div class="sidebar-group" data-section="workspace">
+        <button type="button" class="sidebar-section-header" data-role="section-header" data-section-target="workspace" aria-expanded="true" aria-controls="sidebarSectionWorkspace">
+            <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+            <span>Workspace</span>
+        </button>
+        <div class="sidebar-section-body" id="sidebarSectionWorkspace">
+            <div class="sidebar-item active" data-view="sessions">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+                All Sessions
+            </div>
+            <div class="sidebar-item" data-view="projects">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
+                Projects
+            </div>
+            <div class="sidebar-item" data-view="timeline">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                Timeline
+            </div>
+            <div class="sidebar-item" data-view="activity">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><rect x="7" y="7" width="3" height="3"/><rect x="14" y="7" width="3" height="3"/><rect x="7" y="14" width="3" height="3"/><rect x="14" y="14" width="3" height="3"/></svg>
+                Activity
+            </div>
+            <div class="sidebar-item" data-view="running">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg>
+                Running
+            </div>
+            <div class="sidebar-item" data-view="analytics">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+                Analytics
+            </div>
+            <div class="sidebar-item" data-view="starred">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+                Starred
+            </div>
+            <div class="sidebar-item" data-view="leaderboard">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9H4.5a2.5 2.5 0 010-5C7 4 7 7 7 7"/><path d="M18 9h1.5a2.5 2.5 0 000-5C17 4 17 7 17 7"/><rect x="5" y="9" width="14" height="11" rx="2"/><path d="M12 4v5"/><path d="M8 16h8"/></svg>
+                Leaderboard
+            </div>
+            <div class="sidebar-item" data-view="cloud">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 10h-1.26A8 8 0 109 20h9a5 5 0 000-10z"/></svg>
+                Cloud Sync
+            </div>
+        </div>
     </div>
-    <div class="sidebar-item" data-view="projects">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
-        Projects
+
+    <!-- Agents section -->
+    <div class="sidebar-group" data-section="agents">
+        <button type="button" class="sidebar-section-header" data-role="section-header" data-section-target="agents" aria-expanded="true" aria-controls="sidebarSectionAgents">
+            <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+            <span>Agents</span>
+        </button>
+        <div class="sidebar-section-body" id="sidebarSectionAgents">
+            <div class="sidebar-item" data-view="claude-only">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+                Claude Code
+            </div>
+            <div class="sidebar-item" data-view="codex-only">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+                Codex
+            </div>
+            <div class="sidebar-item" data-view="qwen-only">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l7 4v8l-7 8-7-8V6l7-4z"/><path d="M9 10h6"/><path d="M9 14h6"/></svg>
+                Qwen Code
+            </div>
+            <div class="sidebar-item" data-view="kiro-only">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+                Kiro
+            </div>
+            <div class="sidebar-item" data-view="cursor-only">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 14a1 1 0 01-.78-1.63l9.9-10.2a.5.5 0 01.86.46l-1.92 6.02A1 1 0 0013 10h7a1 1 0 01.78 1.63l-9.9 10.2a.5.5 0 01-.86-.46l1.92-6.02A1 1 0 0011 14H4z"/></svg>
+                Cursor
+            </div>
+            <div class="sidebar-item" data-view="copilot-chat-only">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2C6.48 2 2 6.48 2 12c0 2.04.61 3.93 1.66 5.51L2 22l4.49-1.66A9.96 9.96 0 0012 22c5.52 0 10-4.48 10-10S17.52 2 12 2z"/><circle cx="8.5" cy="12" r="1.5"/><circle cx="15.5" cy="12" r="1.5"/></svg>
+                Copilot Chat
+            </div>
+            <div class="sidebar-item" data-view="copilot-only">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2C6.48 2 2 6.48 2 12c0 2.04.61 3.93 1.66 5.51L2 22l4.49-1.66A9.96 9.96 0 0012 22c5.52 0 10-4.48 10-10S17.52 2 12 2z"/></svg>
+                Copilot CLI
+            </div>
+            <div class="sidebar-item" data-view="opencode-only">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+                OpenCode
+            </div>
+            <div class="sidebar-item" data-view="kilo-only">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+                  <path d="M2 17l10 5 10-5"/>
+                  <path d="M2 12l10 5 10-5"/>
+                </svg>
+                Kilo
+            </div>
+        </div>
     </div>
-    <div class="sidebar-item" data-view="timeline">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-        Timeline
+
+    <!-- Tools section -->
+    <div class="sidebar-group" data-section="tools">
+        <button type="button" class="sidebar-section-header" data-role="section-header" data-section-target="tools" aria-expanded="true" aria-controls="sidebarSectionTools">
+            <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+            <span>Tools</span>
+        </button>
+        <div class="sidebar-section-body" id="sidebarSectionTools">
+
+            <!-- Install agents sub-section (default collapsed) -->
+            <div class="sidebar-group sidebar-subgroup" data-section="install-agents">
+                <button type="button" class="sidebar-section-header sidebar-subsection-header" data-role="section-header" data-section-target="install-agents" aria-expanded="false" aria-controls="sidebarSectionInstallAgents">
+                    <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+                    <span>Install agents</span>
+                </button>
+                <div class="sidebar-section-body" id="sidebarSectionInstallAgents">
+                    <div class="sidebar-item" data-key="install:claude" onclick="installAgent('claude')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg>
+                        Claude Code
+                    </div>
+                    <div class="sidebar-item" data-key="install:codex" onclick="installAgent('codex')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg>
+                        Codex CLI
+                    </div>
+                    <div class="sidebar-item" data-key="install:qwen" onclick="installAgent('qwen')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg>
+                        Qwen Code
+                    </div>
+                    <div class="sidebar-item" data-key="install:kiro" onclick="installAgent('kiro')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg>
+                        Kiro CLI
+                    </div>
+                    <div class="sidebar-item" data-key="install:opencode" onclick="installAgent('opencode')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg>
+                        OpenCode
+                    </div>
+                    <div class="sidebar-item" data-key="install:kilo" onclick="installAgent('kilo')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+                        Kilo CLI
+                    </div>
+                    <div class="sidebar-item" data-key="install:copilot" onclick="installAgent('copilot')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2C6.48 2 2 6.48 2 12c0 2.04.61 3.93 1.66 5.51L2 22l4.49-1.66A9.96 9.96 0 0012 22c5.52 0 10-4.48 10-10S17.52 2 12 2z"/></svg>
+                        Copilot CLI
+                    </div>
+                </div>
+            </div>
+
+            <div class="sidebar-item" data-key="export-import" onclick="showExportDialog()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                Export / Import
+            </div>
+            <div class="sidebar-item" data-view="changelog" data-key="changelog">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                Changelog
+            </div>
+            <div class="sidebar-item" data-view="settings">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+                Settings
+            </div>
+        </div>
     </div>
-    <div class="sidebar-item" data-view="activity">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><rect x="7" y="7" width="3" height="3"/><rect x="14" y="7" width="3" height="3"/><rect x="7" y="14" width="3" height="3"/><rect x="14" y="14" width="3" height="3"/></svg>
-        Activity
-    </div>
-    <div class="sidebar-item" data-view="running">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg>
-        Running
-    </div>
-    <div class="sidebar-item" data-view="analytics">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
-        Analytics
-    </div>
-    <div class="sidebar-item" data-view="starred">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
-        Starred
-    </div>
-    <div class="sidebar-item" data-view="leaderboard">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9H4.5a2.5 2.5 0 010-5C7 4 7 7 7 7"/><path d="M18 9h1.5a2.5 2.5 0 000-5C17 4 17 7 17 7"/><rect x="5" y="9" width="14" height="11" rx="2"/><path d="M12 4v5"/><path d="M8 16h8"/></svg>
-        Leaderboard
-    </div>
-    <div class="sidebar-item" data-view="cloud">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 10h-1.26A8 8 0 109 20h9a5 5 0 000-10z"/></svg>
-        Cloud Sync
-    </div>
-    <div class="sidebar-divider"></div>
-    <div class="sidebar-section">Agents</div>
-    <div class="sidebar-item" data-view="claude-only">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
-        Claude Code
-    </div>
-    <div class="sidebar-item" data-view="codex-only">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
-        Codex
-    </div>
-    <div class="sidebar-item" data-view="qwen-only">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l7 4v8l-7 8-7-8V6l7-4z"/><path d="M9 10h6"/><path d="M9 14h6"/></svg>
-        Qwen Code
-    </div>
-    <div class="sidebar-item" data-view="kiro-only">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
-        Kiro
-    </div>
-    <div class="sidebar-item" data-view="cursor-only">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 14a1 1 0 01-.78-1.63l9.9-10.2a.5.5 0 01.86.46l-1.92 6.02A1 1 0 0013 10h7a1 1 0 01.78 1.63l-9.9 10.2a.5.5 0 01-.86-.46l1.92-6.02A1 1 0 0011 14H4z"/></svg>
-        Cursor
-    </div>
-    <div class="sidebar-item" data-view="copilot-chat-only">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2C6.48 2 2 6.48 2 12c0 2.04.61 3.93 1.66 5.51L2 22l4.49-1.66A9.96 9.96 0 0012 22c5.52 0 10-4.48 10-10S17.52 2 12 2z"/><circle cx="8.5" cy="12" r="1.5"/><circle cx="15.5" cy="12" r="1.5"/></svg>
-        Copilot Chat
-    </div>
-    <div class="sidebar-item" data-view="copilot-only">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2C6.48 2 2 6.48 2 12c0 2.04.61 3.93 1.66 5.51L2 22l4.49-1.66A9.96 9.96 0 0012 22c5.52 0 10-4.48 10-10S17.52 2 12 2z"/></svg>
-        Copilot CLI
-    </div>
-    <div class="sidebar-item" data-view="opencode-only">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
-        OpenCode
-    </div>
-    <div class="sidebar-item" data-view="kilo-only">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M12 2L2 7l10 5 10-5-10-5z"/>
-          <path d="M2 17l10 5 10-5"/>
-          <path d="M2 12l10 5 10-5"/>
-        </svg>
-        Kilo
-    </div>
-    <div class="sidebar-divider"></div>
-    <div class="sidebar-section">Install Agents</div>
-    <div class="sidebar-item" onclick="installAgent('claude')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg>
-        Claude Code
-    </div>
-    <div class="sidebar-item" onclick="installAgent('codex')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg>
-        Codex CLI
-    </div>
-    <div class="sidebar-item" onclick="installAgent('qwen')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg>
-        Qwen Code
-    </div>
-    <div class="sidebar-item" onclick="installAgent('kiro')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg>
-        Kiro CLI
-    </div>
-    <div class="sidebar-item" onclick="installAgent('opencode')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg>
-        OpenCode
-    </div>
-<div class="sidebar-item" onclick="installAgent('kilo')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
-        Kilo CLI
-    </div>
-    <div class="sidebar-item" onclick="installAgent('copilot')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2C6.48 2 2 6.48 2 12c0 2.04.61 3.93 1.66 5.51L2 22l4.49-1.66A9.96 9.96 0 0012 22c5.52 0 10-4.48 10-10S17.52 2 12 2z"/></svg>
-        Copilot CLI
-    </div>
-    <div class="sidebar-divider"></div>
-    <div class="sidebar-item" onclick="showExportDialog()">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-        Export / Import
-    </div>
-    <div class="sidebar-item" data-view="changelog">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
-        Changelog
-    </div>
-    <div class="sidebar-item" data-view="settings">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
-        Settings
-    </div>
+
+    <span id="sidebarStatus" role="status" aria-live="polite" class="sr-only"></span>
     <div class="sidebar-author">
-        Made by <a href="https://t.me/neuraldeep" target="_blank">Valerii Kovalskii</a>
+        Made by <a href="https://t.me/neuraldeep" target="_blank" rel="noopener noreferrer" aria-label="Valerii Kovalskii on Telegram (opens in new tab)">Valerii Kovalskii</a>
     </div>
 </div>
 

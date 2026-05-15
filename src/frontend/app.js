@@ -2276,6 +2276,255 @@ function saveThemePref(val) {
   setTheme(val);
 }
 
+// ── Sidebar customization ─────────────────────────────────────
+// Persisted via SidebarConfig helpers (sidebar-config.js).
+// Runtime state mirrors localStorage; mutations go through setItemHidden /
+// setSectionCollapsed (immutable) and then a single applySidebarConfig() pass
+// reconciles the DOM. See specs/sidebar-customization.feature.
+
+var _sidebarConfig = null;
+
+function _storage() {
+  try { return window.localStorage; } catch (e) { return null; }
+}
+
+function _initSidebarConfig() {
+  if (_sidebarConfig) return _sidebarConfig;
+  _sidebarConfig = SidebarConfig.loadFromStorage(_storage());
+  return _sidebarConfig;
+}
+
+function applySidebarConfig() {
+  var cfg = _initSidebarConfig();
+
+  // Sections (including nested install-agents): toggle .collapsed + aria-expanded.
+  document.querySelectorAll('.sidebar-group[data-section]').forEach(function(group) {
+    var id = group.getAttribute('data-section');
+    var collapsed = SidebarConfig.isSectionCollapsed(cfg, id);
+    group.classList.toggle('collapsed', collapsed);
+    var header = group.querySelector(':scope > .sidebar-section-header');
+    if (header) header.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+  });
+
+  // Items: hide based on data-key (preferred) or data-view (legacy fallback).
+  // Settings is force-visible by isItemHidden.
+  document.querySelectorAll('.sidebar-item').forEach(function(el) {
+    var key = el.getAttribute('data-key') || el.getAttribute('data-view');
+    if (!key) return;
+    el.hidden = SidebarConfig.isItemHidden(cfg, key);
+  });
+
+  _updateSidebarEmptySectionHints();
+}
+
+// When a user hides every togglable item inside a section the body becomes
+// visually empty. Inject a small inline hint so the section doesn't look
+// broken. The hint is removed automatically when any item becomes visible
+// again. Sub-sections (install-agents) get their own hint independently.
+function _updateSidebarEmptySectionHints() {
+  document.querySelectorAll('.sidebar-section-body').forEach(function(body) {
+    var hasVisibleItem = false;
+    var items = body.querySelectorAll(':scope > .sidebar-item, :scope > .sidebar-subgroup .sidebar-item');
+    for (var i = 0; i < items.length; i++) {
+      if (!items[i].hidden) { hasVisibleItem = true; break; }
+    }
+    var existingHint = body.querySelector(':scope > .sidebar-empty-section-hint');
+    if (hasVisibleItem) {
+      if (existingHint) existingHint.parentNode.removeChild(existingHint);
+    } else if (!existingHint) {
+      var hint = document.createElement('div');
+      hint.className = 'sidebar-empty-section-hint';
+      hint.textContent = 'All items hidden — manage in Settings.';
+      body.appendChild(hint);
+    }
+  });
+}
+
+function _onSidebarSectionHeaderClick(event) {
+  var target = event.target.closest('[data-role="section-header"]');
+  if (!target) return;
+  event.stopPropagation();
+  var sectionId = target.getAttribute('data-section-target');
+  if (!sectionId) return;
+  var cfg = _initSidebarConfig();
+  var next = !SidebarConfig.isSectionCollapsed(cfg, sectionId);
+  _sidebarConfig = SidebarConfig.setSectionCollapsed(cfg, sectionId, next);
+  SidebarConfig.saveToStorage(_storage(), _sidebarConfig);
+  applySidebarConfig();
+}
+
+function _bindSidebarHeaders() {
+  document.querySelectorAll('[data-role="section-header"]').forEach(function(btn) {
+    btn.addEventListener('click', _onSidebarSectionHeaderClick);
+  });
+}
+
+// Called from Settings → Sidebar checkboxes.
+function toggleSidebarItem(key, visible) {
+  if (key === SidebarConfig.SETTINGS_KEY) return; // refuse on UI side as well
+  var cfg = _initSidebarConfig();
+  _sidebarConfig = SidebarConfig.setItemHidden(cfg, key, !visible);
+  SidebarConfig.saveToStorage(_storage(), _sidebarConfig);
+  applySidebarConfig();
+}
+
+function resetSidebarConfig() {
+  _sidebarConfig = SidebarConfig.resetConfig();
+  SidebarConfig.clearStorage(_storage());
+  applySidebarConfig();
+  // Re-render Settings so checkboxes reflect the cleared state.
+  var content = document.getElementById('content');
+  if (content && currentView === 'settings') renderSettings(content);
+}
+
+// Labels shown in Settings → Sidebar checklist. The map mirrors the visible
+// text in the sidebar so the user matches what they see. Group label drives
+// the visual section break in the Settings pane.
+var SIDEBAR_ITEM_META = [
+  { group: 'Workspace', items: [
+    ['sessions', 'All Sessions'], ['projects', 'Projects'], ['timeline', 'Timeline'],
+    ['activity', 'Activity'], ['running', 'Running'], ['analytics', 'Analytics'],
+    ['starred', 'Starred'], ['leaderboard', 'Leaderboard'], ['cloud', 'Cloud Sync']
+  ]},
+  { group: 'Agents', items: [
+    ['claude-only', 'Claude Code'], ['codex-only', 'Codex'], ['qwen-only', 'Qwen Code'],
+    ['kiro-only', 'Kiro'], ['cursor-only', 'Cursor'], ['copilot-chat-only', 'Copilot Chat'],
+    ['copilot-only', 'Copilot CLI'], ['opencode-only', 'OpenCode'], ['kilo-only', 'Kilo']
+  ]},
+  { group: 'Tools', items: [
+    ['export-import', 'Export / Import'], ['changelog', 'Changelog'],
+    ['settings', 'Settings']   // rendered as disabled
+  ]},
+  { group: 'Install agents', items: [
+    ['install:claude', 'Claude Code'], ['install:codex', 'Codex CLI'], ['install:qwen', 'Qwen Code'],
+    ['install:kiro', 'Kiro CLI'], ['install:opencode', 'OpenCode'], ['install:kilo', 'Kilo CLI'],
+    ['install:copilot', 'Copilot CLI']
+  ]}
+];
+
+function renderSidebarSettingsGroup() {
+  var cfg = _initSidebarConfig();
+  var html = '<div class="settings-group" id="settingsSidebarGroup">';
+  html += '<label class="settings-label">Sidebar</label>';
+  html += '<p class="settings-sidebar-description">Choose which entries appear in the left rail. Settings is always visible.</p>';
+
+  SIDEBAR_ITEM_META.forEach(function(group) {
+    html += '<div class="settings-sidebar-group-label">' + escHtml(group.group) + '</div>';
+    html += '<div class="settings-sidebar-list">';
+    group.items.forEach(function(pair) {
+      var key = pair[0];
+      var label = pair[1];
+      var isSettings = key === SidebarConfig.SETTINGS_KEY;
+      var visible = !SidebarConfig.isItemHidden(cfg, key);
+      var rowClass = 'settings-sidebar-row' + (isSettings ? ' is-locked' : '');
+      var title = isSettings ? ' title="Settings is always visible"' : '';
+      var lockedLabel = isSettings ? ' aria-disabled="true"' : '';
+      var disabledAttr = isSettings ? ' disabled aria-disabled="true"' : '';
+      var checkedAttr = (visible || isSettings) ? ' checked' : '';
+      // No inline onchange — single delegated listener is wired by
+      // _bindSidebarSettingsDelegate() right after innerHTML is set. This
+      // avoids attribute-context escaping concerns with string keys.
+      var dataAttr = isSettings ? '' : ' data-sidebar-key="' + escHtml(key) + '"';
+      html += '<label class="' + rowClass + '"' + title + lockedLabel + '>';
+      html += '<input type="checkbox"' + disabledAttr + checkedAttr + dataAttr + '>';
+      html += '<span>' + escHtml(label) + '</span>';
+      html += '</label>';
+    });
+    html += '</div>';
+  });
+
+  html += '<div class="settings-sidebar-hint">';
+  html += 'Click a section header in the sidebar to collapse it — the state is saved. ';
+  html += 'Hidden items stay reachable: try <a href="#leaderboard">#leaderboard</a> in the address bar.';
+  html += '</div>';
+
+  html += '<div class="settings-sidebar-reset" id="sidebarResetWrap">';
+  html += '<button type="button" class="settings-sidebar-reset-btn" data-stage="initial" onclick="onResetSidebarClick(event)">Reset to defaults</button>';
+  html += '</div>';
+
+  html += '</div>';
+  return html;
+}
+
+// Two-stage reset: first click arms the button (highlights it red and changes
+// label), second click within ~6s actually resets. Cancel button shown while
+// armed. Prevents accidental wipeout per WCAG/NN/g destructive-action guidance.
+var _resetArmedAt = 0;
+var _resetArmedTimer = null;
+var RESET_ARM_WINDOW_MS = 6000;
+
+function onResetSidebarClick(event) {
+  var btn = event.currentTarget;
+  var now = Date.now();
+  if (btn.getAttribute('data-stage') === 'armed' && (now - _resetArmedAt) < RESET_ARM_WINDOW_MS) {
+    _disarmReset();
+    resetSidebarConfig();
+    _announceSidebar('Sidebar reset to defaults');
+    return;
+  }
+  // Arm
+  _resetArmedAt = now;
+  btn.setAttribute('data-stage', 'armed');
+  btn.classList.add('confirming');
+  btn.textContent = 'Click again to confirm';
+  var wrap = document.getElementById('sidebarResetWrap');
+  if (wrap && !wrap.querySelector('.settings-sidebar-reset-cancel')) {
+    var cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'settings-sidebar-reset-cancel';
+    cancel.textContent = 'Cancel';
+    cancel.onclick = _disarmReset;
+    wrap.appendChild(cancel);
+  }
+  if (_resetArmedTimer) clearTimeout(_resetArmedTimer);
+  _resetArmedTimer = setTimeout(_disarmReset, RESET_ARM_WINDOW_MS);
+}
+
+function _disarmReset() {
+  if (_resetArmedTimer) { clearTimeout(_resetArmedTimer); _resetArmedTimer = null; }
+  _resetArmedAt = 0;
+  var btn = document.querySelector('.settings-sidebar-reset-btn');
+  if (btn) {
+    btn.setAttribute('data-stage', 'initial');
+    btn.classList.remove('confirming');
+    btn.textContent = 'Reset to defaults';
+  }
+  var cancel = document.querySelector('.settings-sidebar-reset-cancel');
+  if (cancel && cancel.parentNode) cancel.parentNode.removeChild(cancel);
+}
+
+function _bindSidebarSettingsDelegate() {
+  var group = document.getElementById('settingsSidebarGroup');
+  if (!group || group._delegateBound) return;
+  group._delegateBound = true;
+  group.addEventListener('change', function (e) {
+    var input = e.target;
+    if (!input || input.tagName !== 'INPUT' || input.type !== 'checkbox') return;
+    var key = input.getAttribute('data-sidebar-key');
+    if (!key) return;
+    toggleSidebarItem(key, input.checked);
+    _announceSidebar((input.checked ? 'Shown: ' : 'Hidden: ') + _labelForKey(key));
+  });
+}
+
+function _labelForKey(key) {
+  for (var i = 0; i < SIDEBAR_ITEM_META.length; i++) {
+    var items = SIDEBAR_ITEM_META[i].items;
+    for (var j = 0; j < items.length; j++) {
+      if (items[j][0] === key) return items[j][1];
+    }
+  }
+  return key;
+}
+
+function _announceSidebar(msg) {
+  var region = document.getElementById('sidebarStatus');
+  if (!region) return;
+  // Forcing a content change inside aria-live="polite" triggers SR announcement.
+  region.textContent = '';
+  region.textContent = msg;
+}
+
 // ── Keyboard navigation ────────────────────────────────────────
 
 function isInput(e) {
@@ -2530,18 +2779,98 @@ function focusSession(sessionId) {
 
 // ── Changelog view ────────────────────────────────────────────
 
+// Sub-tabs grouping for the Settings page. Order matches visual left-to-right.
+// Adding a new setting => decide which tab it belongs to and add it to the right
+// _settingsTab* renderer below.
+var SETTINGS_TABS = [
+  { id: 'appearance',   label: 'Appearance' },
+  { id: 'sidebar',      label: 'Sidebar' },
+  { id: 'sessions',     label: 'Sessions' },
+  { id: 'integrations', label: 'Integrations' }
+];
+
+function _getSettingsTab() {
+  try {
+    var saved = localStorage.getItem('codedash-settings-tab');
+    if (saved && SETTINGS_TABS.some(function(t) { return t.id === saved; })) return saved;
+  } catch (e) { /* private mode */ }
+  return 'appearance';
+}
+
+function setSettingsTab(id) {
+  if (!SETTINGS_TABS.some(function(t) { return t.id === id; })) return;
+  try { localStorage.setItem('codedash-settings-tab', id); } catch (e) { /* private mode */ }
+  var content = document.getElementById('content');
+  if (content) renderSettings(content);
+}
+
 function renderSettings(container) {
-  var savedTheme = localStorage.getItem('codedash-theme') || 'dark';
-  var savedTerminal = localStorage.getItem('codedash-terminal') || '';
-  var aiTitlesOn = localStorage.getItem('codedash-ai-titles') === 'true';
-  var allSessionsListBadgesOn = localStorage.getItem('codedash-all-sessions-list-badges') !== 'false';
-  var savedGroupingMode = normalizeGroupingMode(localStorage.getItem('codedash-grouping-mode'));
+  var activeTab = _getSettingsTab();
+  var panelId = 'settingsPanel-' + activeTab;
 
   var html = '<div class="settings-page">';
-  html += '<h2 style="margin:0 0 24px;font-size:18px;font-weight:600">Settings</h2>';
+  html += '<h2 style="margin:0 0 16px;font-size:18px;font-weight:600">Settings</h2>';
 
-  // Theme
-  html += '<div class="settings-group">';
+  // Tab strip (reuses .ap-tabs visual pattern from the Add Project modal)
+  html += '<div class="ap-tabs settings-tabs" role="tablist" aria-label="Settings categories" onkeydown="onSettingsTabKey(event)">';
+  SETTINGS_TABS.forEach(function(t) {
+    var isActive = t.id === activeTab;
+    var tabId = 'settingsTab-' + t.id;
+    var ariaControls = isActive ? panelId : ('settingsPanel-' + t.id);
+    html += '<button type="button" class="ap-tab' + (isActive ? ' active' : '') + '"' +
+      ' id="' + escHtml(tabId) + '"' +
+      ' role="tab" aria-selected="' + (isActive ? 'true' : 'false') + '"' +
+      ' aria-controls="' + escHtml(ariaControls) + '"' +
+      ' tabindex="' + (isActive ? '0' : '-1') + '"' +
+      ' data-tab-id="' + escHtml(t.id) + '"' +
+      ' onclick="setSettingsTab(\'' + escHtml(t.id) + '\')">' + escHtml(t.label) + '</button>';
+  });
+  html += '</div>';
+
+  html += '<div class="settings-tab-body" role="tabpanel" id="' + escHtml(panelId) + '"' +
+    ' aria-labelledby="' + escHtml('settingsTab-' + activeTab) + '">';
+  if (activeTab === 'appearance')        html += _renderSettingsAppearance();
+  else if (activeTab === 'sidebar')      html += renderSidebarSettingsGroup();
+  else if (activeTab === 'sessions')     html += _renderSettingsSessions();
+  else if (activeTab === 'integrations') html += _renderSettingsIntegrations();
+  html += '</div>';
+
+  html += '</div>';
+  container.innerHTML = html;
+
+  // LLM inputs need post-render hydration when the Integrations tab is open.
+  if (activeTab === 'integrations') loadLLMSettings();
+  // Wire the delegated checkbox listener (avoids inline attribute-context risk).
+  if (activeTab === 'sidebar') _bindSidebarSettingsDelegate();
+}
+
+// Arrow-key navigation across the Settings tablist per WAI-ARIA Authoring
+// Practices. Left/Right cycle; Home/End jump. Activates the focused tab
+// (NN/g "automatic activation" — the panels are cheap to render).
+function onSettingsTabKey(event) {
+  var key = event.key;
+  var navKeys = ['ArrowLeft', 'ArrowRight', 'Home', 'End'];
+  if (navKeys.indexOf(key) === -1) return;
+  event.preventDefault();
+  var current = _getSettingsTab();
+  var idx = SETTINGS_TABS.findIndex(function (t) { return t.id === current; });
+  if (idx < 0) idx = 0;
+  var next = idx;
+  if (key === 'ArrowLeft')  next = (idx - 1 + SETTINGS_TABS.length) % SETTINGS_TABS.length;
+  if (key === 'ArrowRight') next = (idx + 1) % SETTINGS_TABS.length;
+  if (key === 'Home')       next = 0;
+  if (key === 'End')        next = SETTINGS_TABS.length - 1;
+  if (next === idx) return;
+  setSettingsTab(SETTINGS_TABS[next].id);
+  // After re-render, move focus to the now-active tab so keyboard flow stays
+  // inside the strip. setSettingsTab calls renderSettings synchronously.
+  var nextEl = document.getElementById('settingsTab-' + SETTINGS_TABS[next].id);
+  if (nextEl) nextEl.focus();
+}
+
+function _renderSettingsAppearance() {
+  var savedTheme = localStorage.getItem('codedash-theme') || 'dark';
+  var html = '<div class="settings-group">';
   html += '<label class="settings-label">Theme</label>';
   html += '<div class="settings-theme-btns">';
   ['dark', 'light', 'system'].forEach(function(t) {
@@ -2550,21 +2879,16 @@ function renderSettings(container) {
   });
   html += '</div>';
   html += '</div>';
+  return html;
+}
 
-  // Terminal
-  html += '<div class="settings-group">';
-  html += '<label class="settings-label">Terminal</label>';
-  html += '<p style="font-size:12px;color:var(--text-muted);margin:0 0 8px">Binary name or full path (e.g. kitty, /usr/bin/alacritty)</p>';
-  html += '<input type="text" class="settings-select" list="terminal-suggestions" value="' + escHtml(savedTerminal) + '" onchange="saveTerminalPref(this.value)" placeholder="x-terminal-emulator">';
-  html += '<datalist id="terminal-suggestions">';
-  if (Array.isArray(availableTerminals)) {
-    availableTerminals.forEach(function(t) {
-      if (!t.available) return;
-      html += '<option value="' + escHtml(t.id) + '">' + escHtml(t.name) + '</option>';
-    });
-  }
-  html += '</datalist>';
-  html += '</div>';
+function _renderSettingsSessions() {
+  var aiTitlesOn = localStorage.getItem('codedash-ai-titles') === 'true';
+  var allSessionsListBadgesOn = localStorage.getItem('codedash-all-sessions-list-badges') !== 'false';
+  var savedGroupingMode = normalizeGroupingMode(localStorage.getItem('codedash-grouping-mode'));
+  var savedMsgSort = localStorage.getItem('codedash-msg-sort') || 'asc';
+
+  var html = '';
 
   // AI Titles
   html += '<div class="settings-group">';
@@ -2575,7 +2899,7 @@ function renderSettings(container) {
   html += '</div>';
   html += '</div>';
 
-  // All Sessions list badges
+  // Session List Badges
   html += '<div class="settings-group">';
   html += '<label class="settings-label">Session List Badges</label>';
   html += '<div class="settings-checkbox">';
@@ -2598,7 +2922,6 @@ function renderSettings(container) {
   html += '</div>';
 
   // Message Sort Order
-  var savedMsgSort = localStorage.getItem('codedash-msg-sort') || 'asc';
   html += '<div class="settings-group">';
   html += '<label class="settings-label">Message Sort Order</label>';
   html += '<p style="font-size:12px;color:var(--text-muted);margin:0 0 8px">Default order for messages in session drawer</p>';
@@ -2608,6 +2931,29 @@ function renderSettings(container) {
     html += '<button class="theme-btn' + active + '" onclick="localStorage.setItem(\'codedash-msg-sort\',\'' + pair[0] + '\');renderSettings(document.getElementById(\'content\'))">' + pair[1] + '</button>';
   });
   html += '</div>';
+  html += '</div>';
+
+  return html;
+}
+
+function _renderSettingsIntegrations() {
+  var savedTerminal = localStorage.getItem('codedash-terminal') || '';
+
+  var html = '';
+
+  // Terminal
+  html += '<div class="settings-group">';
+  html += '<label class="settings-label">Terminal</label>';
+  html += '<p style="font-size:12px;color:var(--text-muted);margin:0 0 8px">Binary name or full path (e.g. kitty, /usr/bin/alacritty)</p>';
+  html += '<input type="text" class="settings-select" list="terminal-suggestions" value="' + escHtml(savedTerminal) + '" onchange="saveTerminalPref(this.value)" placeholder="x-terminal-emulator">';
+  html += '<datalist id="terminal-suggestions">';
+  if (Array.isArray(availableTerminals)) {
+    availableTerminals.forEach(function(t) {
+      if (!t.available) return;
+      html += '<option value="' + escHtml(t.id) + '">' + escHtml(t.name) + '</option>';
+    });
+  }
+  html += '</datalist>';
   html += '</div>';
 
   // LLM Configuration
@@ -2625,11 +2971,7 @@ function renderSettings(container) {
   html += '</div>';
   html += '</div>';
 
-  html += '</div>';
-  container.innerHTML = html;
-
-  // Load LLM config into the inputs
-  loadLLMSettings();
+  return html;
 }
 
 // → moved to leaderboard.js
@@ -3696,6 +4038,11 @@ function _onProjectsHashChange() {
 }
 
 (function init() {
+  // Sidebar customization — apply persisted config before any other init so the
+  // user never sees a flash of hidden items.
+  applySidebarConfig();
+  _bindSidebarHeaders();
+
   // Load data
   loadSessions();
   loadTerminals();
