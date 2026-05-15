@@ -184,6 +184,17 @@ function escHtml(s) {
     .replace(/'/g, '&#39;');
 }
 
+function escJsString(s) {
+  if (s === null || s === undefined) return '';
+  return escHtml(String(s)
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029'));
+}
+
 function showToast(msg) {
   const el = document.getElementById('toast');
   if (!el) return;
@@ -856,8 +867,8 @@ function renderCard(s, idx) {
   if (s.has_detail) {
     var btnTitle = sessionTitles[s.id] ? 'Regenerate AI title' : 'Generate AI title';
     var btnIcon = sessionTitles[s.id] ? '&#8635;' : '&#9883;';
-    html += '<button class="card-gen-btn" onclick="event.stopPropagation();generateTitle(\'' + s.id + '\',\'' + escHtml(s.project || '').replace(/'/g, "\\'") + '\')" title="' + btnTitle + '">' + btnIcon + '</button>';
-    html += '<button class="card-expand-btn" onclick="event.stopPropagation();toggleExpand(\'' + s.id + '\',\'' + escHtml(s.project || '').replace(/'/g, "\\'") + '\',this)" title="Preview messages">&#9662;</button>';
+    html += '<button class="card-gen-btn" onclick="event.stopPropagation();generateTitle(\'' + escJsString(s.id) + '\',\'' + escJsString(s.project || '') + '\')" title="' + btnTitle + '">' + btnIcon + '</button>';
+    html += '<button class="card-expand-btn" onclick="event.stopPropagation();toggleExpand(\'' + escJsString(s.id) + '\',\'' + escJsString(s.project || '') + '\',this)" title="Preview messages">&#9662;</button>';
   }
   html += '</div>';
   // MCP/Skills footer
@@ -2051,7 +2062,7 @@ function renderRunningCard(a, s) {
   html += '<button class="launch-btn" style="background:var(--accent-green);color:#000" onclick="focusSession(\'' + sid + '\')">Focus</button>';
   if (s) {
     html += '<button class="launch-btn btn-secondary" onclick="var ss=allSessions.find(function(x){return x.id===\'' + sid + '\'});if(ss)openDetail(ss);">Details</button>';
-    html += '<button class="launch-btn btn-secondary" onclick="closeDetail();openReplay(\'' + sid + '\',\'' + escHtml((s.project || '').replace(/'/g, "\\'")) + '\')">Replay</button>';
+    html += '<button class="launch-btn btn-secondary" onclick="closeDetail();openReplay(\'' + escJsString(sid) + '\',\'' + escJsString(s.project || '') + '\')">Replay</button>';
   }
   html += '</div>';
   html += '</div>';
@@ -2074,7 +2085,7 @@ function renderDoneCard(s) {
   if (s.last_time) html += '<div class="running-stat"><span class="running-stat-val">' + s.last_time.slice(11) + '</span><span class="running-stat-label">ended</span></div>';
   html += '</div>';
   html += '<div class="running-actions">';
-  html += '<button class="launch-btn btn-secondary" onclick="openDetail(' + JSON.stringify({id: s.id, project: s.project || '', tool: s.tool || ''}) + ')">Details</button>';
+  html += '<button class="launch-btn btn-secondary" onclick="openDetail({id:\'' + escJsString(s.id) + '\',project:\'' + escJsString(s.project || '') + '\',tool:\'' + escJsString(s.tool || '') + '\'})">Details</button>';
   html += '</div>';
   html += '</div>';
   return html;

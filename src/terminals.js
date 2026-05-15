@@ -192,41 +192,70 @@ function termLog(tag, msg) {
   console.log(`  ${color}${ts} [${tag}]\x1b[0m ${msg}`);
 }
 
-function openInTerminal(sessionId, tool, flags, projectDir, terminalId, mode) {
-  const skipPerms = flags.includes('skip-permissions');
+function buildAgentCommand(sessionId, tool, flags, mode) {
+  const skipPerms = (flags || []).includes('skip-permissions');
   const fresh = mode === 'fresh';
-  let cmd;
 
   if (fresh) {
     // Start a brand new session in projectDir (no --resume). We map known
     // tools to their CLI entry point; unrecognised tools fall back to claude
     // so a misconfigured UI doesn't silently open the wrong agent.
     switch (tool) {
-      case 'codex': cmd = 'codex'; break;
-      case 'qwen': cmd = 'qwen'; break;
-      case 'kilo': cmd = 'kilo'; break;
-      case 'kiro': cmd = 'kiro-cli'; break;
-      case 'opencode': cmd = 'opencode'; break;
-      case 'cursor': cmd = 'cursor-agent'; break;
+      case 'codex': return 'codex';
+      case 'qwen': return 'qwen';
+      case 'kilo': return 'kilo';
+      case 'kiro': return 'kiro-cli';
+      case 'opencode': return 'opencode';
+      case 'cursor': return 'cursor-agent';
       case 'copilot':
-      case 'copilot-chat': cmd = 'gh copilot suggest'; break;
+      case 'copilot-chat': return 'gh copilot suggest';
       default:
-        cmd = 'claude';
-        if (skipPerms) cmd += ' --dangerously-skip-permissions';
+        return 'claude' + (skipPerms ? ' --dangerously-skip-permissions' : '');
     }
-  } else if (tool === 'codex') {
-    cmd = `codex resume ${sessionId}`;
-  } else if (tool === 'qwen') {
-    cmd = `qwen -r ${sessionId}`;
-  } else if (tool === 'kilo') {
-    cmd = `kilo resume ${sessionId}`;
-  } else {
-    cmd = `claude --resume ${sessionId}`;
-    if (skipPerms) cmd += ' --dangerously-skip-permissions';
   }
 
+  if (tool === 'codex') return `codex resume ${sessionId}`;
+  if (tool === 'qwen') return `qwen -r ${sessionId}`;
+  if (tool === 'kilo') return `kilo resume ${sessionId}`;
+  return `claude --resume ${sessionId}` + (skipPerms ? ' --dangerously-skip-permissions' : '');
+}
+
+function buildPosixShellCommand(cmd, projectDir) {
   const cdPart = projectDir ? `cd ${JSON.stringify(projectDir)} && ` : '';
-  const fullCmd = cdPart + cmd;
+  return cdPart + cmd;
+}
+
+function quotePowerShellSingle(value) {
+  return "'" + String(value).replace(/'/g, "''") + "'";
+}
+
+function buildStartProcessArgs(filePath, argList, workingDirectory) {
+  const script = [
+    `Start-Process -FilePath ${quotePowerShellSingle(filePath)}`,
+    workingDirectory ? `-WorkingDirectory ${quotePowerShellSingle(workingDirectory)}` : '',
+    `-ArgumentList @(${argList.map(quotePowerShellSingle).join(',')})`,
+  ].filter(Boolean).join(' ');
+  return ['-NoProfile', '-Command', script];
+}
+
+function buildWindowsCmdStartArgs(cmd, projectDir) {
+  return buildStartProcessArgs('cmd.exe', ['/k', cmd], projectDir);
+}
+
+function buildWindowsPowerShellStartArgs(cmd, projectDir) {
+  return buildStartProcessArgs('powershell.exe', ['-NoExit', '-NoProfile', '-Command', cmd], projectDir);
+}
+
+function buildWindowsTerminalArgs(cmd, projectDir) {
+  const args = ['new-tab'];
+  if (projectDir) args.push('--startingDirectory', projectDir);
+  args.push('cmd.exe', '/k', cmd);
+  return args;
+}
+
+function openInTerminal(sessionId, tool, flags, projectDir, terminalId, mode) {
+  const cmd = buildAgentCommand(sessionId, tool, flags, mode);
+  const fullCmd = buildPosixShellCommand(cmd, projectDir);
   const escapedCmd = fullCmd.replace(/"/g, '\\"');
   termLog('TERM', `openInTerminal: terminal=${terminalId || 'default'} tool=${tool} cmd="${fullCmd}"`);
 
@@ -407,13 +436,13 @@ function openInTerminal(sessionId, tool, flags, projectDir, terminalId, mode) {
   } else {
     switch (terminalId) {
       case 'powershell':
-        exec(`start powershell -NoExit -Command "${fullCmd}"`);
+        execFileSafe('powershell.exe', buildWindowsPowerShellStartArgs(cmd, projectDir));
         break;
       case 'windows-terminal':
-        exec(`wt new-tab cmd /k "${fullCmd}"`);
+        execFileSafe('wt.exe', buildWindowsTerminalArgs(cmd, projectDir));
         break;
       default:
-        exec(`start cmd /k "${fullCmd}"`);
+        execFileSafe('powershell.exe', buildWindowsCmdStartArgs(cmd, projectDir));
         break;
     }
   }
@@ -1019,4 +1048,17 @@ function focusTerminalByPid(pid, sessionId) {
   return { ok: false };
 }
 
-module.exports = { detectTerminals, openInTerminal, focusTerminalByPid, isWSL };
+module.exports = {
+  detectTerminals,
+  openInTerminal,
+  focusTerminalByPid,
+  isWSL,
+  __test: {
+    buildAgentCommand,
+    buildPosixShellCommand,
+    buildWindowsCmdStartArgs,
+    buildWindowsPowerShellStartArgs,
+    buildWindowsTerminalArgs,
+    quotePowerShellSingle,
+  },
+};
