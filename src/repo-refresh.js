@@ -52,6 +52,13 @@ function createRepoRefreshManager(opts = {}) {
   const waiters = new Map();     // gitRoot -> Set<(state)=>void> for waitForRefreshOrTimeout
   let settings = { ...DEFAULT_SETTINGS };
   let saveTimer = null;
+  // Track every manager-owned setTimeout so shutdown() can cancel them.
+  // .unref() alone is not enough — node:test's resource tracker may flag the
+  // pending timer as a leak and cancel subsequent tests.
+  const pendingTimers = new Set();
+  // Track spawned children so shutdown() can SIGTERM them on host teardown.
+  const inflightChildren = new Set();
+  let isShutdown = false;
 
   // ── Semaphore ────────────────────────────────────────────
   // Synchronous when capacity is available so triggerRefresh can spawn the
@@ -110,11 +117,18 @@ function createRepoRefreshManager(opts = {}) {
         resolve(next);
       };
 
+      const cleanupTimers = () => {
+        if (timeoutTimer) { pendingTimers.delete(timeoutTimer); clearTimeout(timeoutTimer); timeoutTimer = null; }
+        if (killTimer) { pendingTimers.delete(killTimer); clearTimeout(killTimer); killTimer = null; }
+      };
+
       const child = execFile('git', ['-C', gitRoot, 'fetch', '--all', '--prune'], {
         timeout: 0, // we manage timeout manually for SIGTERM → SIGKILL escalation
         windowsHide: true,
       }, (err, stdout, stderr) => {
+        inflightChildren.delete(child);
         if (timeoutFired) {
+          cleanupTimers();
           finalize(setState(gitRoot, {
             status: 'error',
             startedAt: null,
@@ -124,6 +138,7 @@ function createRepoRefreshManager(opts = {}) {
           return;
         }
         if (err) {
+          cleanupTimers();
           const errStderr = err.stderr || stderr || '';
           const msg = errStderr || err.message || 'git fetch failed';
           finalize(setState(gitRoot, {
@@ -134,6 +149,7 @@ function createRepoRefreshManager(opts = {}) {
           }));
           return;
         }
+        cleanupTimers();
         finalize(setState(gitRoot, {
           status: 'idle',
           startedAt: null,
@@ -142,16 +158,21 @@ function createRepoRefreshManager(opts = {}) {
           lastErrorAt: null,
         }));
       });
+      inflightChildren.add(child);
 
       timeoutTimer = setTimeout(() => {
+        pendingTimers.delete(timeoutTimer);
         timeoutFired = true;
         try { child.kill('SIGTERM'); } catch {}
         killTimer = setTimeout(() => {
+          pendingTimers.delete(killTimer);
           try { child.kill('SIGKILL'); } catch {}
         }, sigkillGraceMs);
         if (killTimer && killTimer.unref) killTimer.unref();
+        pendingTimers.add(killTimer);
       }, fetchTimeoutMs);
       if (timeoutTimer && timeoutTimer.unref) timeoutTimer.unref();
+      pendingTimers.add(timeoutTimer);
     });
   }
 
@@ -223,6 +244,7 @@ function createRepoRefreshManager(opts = {}) {
       bucket.add(onDone);
 
       to = setTimeout(() => {
+        pendingTimers.delete(to);
         if (settled) return;
         settled = true;
         bucket.delete(onDone);
@@ -230,6 +252,7 @@ function createRepoRefreshManager(opts = {}) {
         resolve({ state: state.get(gitRoot) || defaultRepoState(), timedOut: true });
       }, timeoutMs);
       if (to && to.unref) to.unref();
+      pendingTimers.add(to);
     });
   }
 
@@ -270,8 +293,9 @@ function createRepoRefreshManager(opts = {}) {
   }
 
   function scheduleSave() {
-    if (saveTimer) clearTimeout(saveTimer);
+    if (saveTimer) { clearTimeout(saveTimer); pendingTimers.delete(saveTimer); }
     saveTimer = setTimeout(() => {
+      pendingTimers.delete(saveTimer);
       saveTimer = null;
       try {
         // 0o600 — settings include the user's project list; keep them
@@ -282,6 +306,7 @@ function createRepoRefreshManager(opts = {}) {
       }
     }, debounceMs);
     if (saveTimer && saveTimer.unref) saveTimer.unref();
+    pendingTimers.add(saveTimer);
   }
 
   function updateSettings(partial) {
@@ -350,6 +375,22 @@ function createRepoRefreshManager(opts = {}) {
     }
   }
 
+  // Cancel every manager-owned timer and signal SIGTERM to any in-flight git
+  // fetch children. Safe to call multiple times. Intended for test teardown
+  // and host process shutdown — once called, the manager should not be used
+  // for new operations (no internal flag enforces this; callers decide).
+  function shutdown() {
+    if (isShutdown) return;
+    isShutdown = true;
+    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+    for (const t of pendingTimers) clearTimeout(t);
+    pendingTimers.clear();
+    for (const child of inflightChildren) {
+      try { child.kill('SIGTERM'); } catch {}
+    }
+    inflightChildren.clear();
+  }
+
   // Load settings synchronously on construction.
   loadSettings();
 
@@ -360,6 +401,7 @@ function createRepoRefreshManager(opts = {}) {
     updateSettings,
     initOnStartup,
     setKnownGitRootsProvider,
+    shutdown,
     // Exposed for tests only — production callers should never invoke these
     // directly (loadSettings can drop in-flight debounced changes;
     // triggerAllEnabled duplicates initOnStartup minus the known-roots gate).

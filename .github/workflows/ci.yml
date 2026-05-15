@@ -24,3 +24,5 @@ jobs:
           node bin/cli.js help
       - name: Syntax check
         run: node -c bin/cli.js && node -c src/data.js && node -c src/server.js && node -c src/terminals.js && node -c src/html.js
+      - name: Tests
+        run: node --test test/*.test.js
