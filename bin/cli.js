@@ -16,7 +16,31 @@ if (process.argv[1] && process.argv[1].includes('codedash') && !process.argv[1].
 }
 
 const { loadSessions, searchFullText, getSessionPreview, computeSessionCost } = require('../src/data');
-const { startServer } = require('../src/server');
+const { startServer, getKnownGitRoots } = require('../src/server');
+const { repoRefreshManager } = require('../src/repo-refresh');
+
+function bootRepoRefresh() {
+  // Wire the known-roots gate so initOnStartup can't fetch arbitrary paths
+  // injected into the settings file by another process.
+  let gateWired = false;
+  try {
+    repoRefreshManager.setKnownGitRootsProvider(getKnownGitRoots);
+    gateWired = true;
+  } catch (err) {
+    console.error('[repo-refresh] failed to wire known-roots provider:', err.message);
+  }
+  // If the gate is not wired we MUST NOT run initOnStartup — it would fetch
+  // arbitrary paths from the settings file without validation.
+  if (!gateWired) {
+    console.error('[repo-refresh] skipping initOnStartup because gate is not wired');
+    return;
+  }
+  // Fire-and-forget — initOnStartup never blocks; errors land in per-repo state.
+  process.nextTick(() => {
+    try { repoRefreshManager.initOnStartup(); }
+    catch (err) { console.error('[repo-refresh] init failed:', err.message); }
+  });
+}
 const { exportArchive, importArchive } = require('../src/migrate');
 const { convertSession } = require('../src/convert');
 const { generateHandoff, quickHandoff } = require('../src/handoff');
@@ -66,6 +90,7 @@ switch (command) {
     const host = hostArg ? hostArg.split('=')[1] : (process.env.CODEDASH_HOST || DEFAULT_HOST);
     const noBrowser = args.includes('--no-browser');
     startServer(host, port, !noBrowser);
+    bootRepoRefresh();
     break;
   }
 
@@ -321,6 +346,7 @@ switch (command) {
       console.log('  Starting...\n');
       const noBrowser = args.includes('--no-browser');
       startServer(host, port, !noBrowser);
+      bootRepoRefresh();
     }, 500);
     break;
   }
