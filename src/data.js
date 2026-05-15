@@ -2513,6 +2513,43 @@ let _projectsDirMtime = 0;
 let _copilotDirMtime = 0;
 let _copilotJbDirMtime = 0;
 let _projectsSubDirMtimes = {}; // { subDirPath: mtimeMs }
+let _codexHistoryMtime = 0;
+let _codexHistorySize = 0;
+let _codexIndexMtime = 0;
+let _codexIndexSize = 0;
+let _codexSessionsDirMtimes = {}; // { dayDirPath: mtimeMs } — shallow leaf dirs under ~/.codex/sessions
+// Stashed result of the most recent _codexDayDirMtimes() walk during a rescan
+// check. Reused by _updateScanMarkers() to avoid a second filesystem walk
+// (which would race against the first and yield inconsistent snapshots).
+let _codexDayDirMtimesPending = null;
+
+// Collect mtimes of YYYY/MM/DD leaf dirs under ~/.codex/sessions.
+// Returns { [dayDirPath]: mtimeMs } — fingerprint used for cache invalidation.
+function _codexDayDirMtimes() {
+  const out = {};
+  const root = path.join(CODEX_DIR, 'sessions');
+  if (!fs.existsSync(root)) return out;
+  try {
+    for (const y of fs.readdirSync(root, { withFileTypes: true })) {
+      if (!y.isDirectory()) continue;
+      const yPath = path.join(root, y.name);
+      let mDir;
+      try { mDir = fs.readdirSync(yPath, { withFileTypes: true }); } catch { continue; }
+      for (const m of mDir) {
+        if (!m.isDirectory()) continue;
+        const mPath = path.join(yPath, m.name);
+        let dDir;
+        try { dDir = fs.readdirSync(mPath, { withFileTypes: true }); } catch { continue; }
+        for (const d of dDir) {
+          if (!d.isDirectory()) continue;
+          const dPath = path.join(mPath, d.name);
+          try { out[dPath] = fs.statSync(dPath).mtimeMs; } catch {}
+        }
+      }
+    }
+  } catch {}
+  return out;
+}
 
 function _sessionsNeedRescan() {
   // Check if history.jsonl or projects dir changed since last scan
@@ -2541,6 +2578,25 @@ function _sessionsNeedRescan() {
       const st = fs.statSync(COPILOT_JB_DIR);
       if (st.mtimeMs !== _copilotJbDirMtime) return true;
     }
+    // Codex history.jsonl + session_index.jsonl + per-day session dirs
+    const codexHistory = path.join(CODEX_DIR, 'history.jsonl');
+    if (fs.existsSync(codexHistory)) {
+      const st = fs.statSync(codexHistory);
+      if (st.mtimeMs !== _codexHistoryMtime || st.size !== _codexHistorySize) return true;
+    }
+    const codexIndex = path.join(CODEX_DIR, 'session_index.jsonl');
+    if (fs.existsSync(codexIndex)) {
+      const st = fs.statSync(codexIndex);
+      if (st.mtimeMs !== _codexIndexMtime || st.size !== _codexIndexSize) return true;
+    }
+    const dayMtimes = _codexDayDirMtimes();
+    _codexDayDirMtimesPending = dayMtimes; // reuse in _updateScanMarkers
+    const prevKeys = Object.keys(_codexSessionsDirMtimes);
+    const curKeys = Object.keys(dayMtimes);
+    if (prevKeys.length !== curKeys.length) return true;
+    for (const k of curKeys) {
+      if (dayMtimes[k] !== _codexSessionsDirMtimes[k]) return true;
+    }
   } catch {}
   return false;
 }
@@ -2567,6 +2623,26 @@ function _updateScanMarkers() {
     if (fs.existsSync(COPILOT_JB_DIR)) {
       _copilotJbDirMtime = fs.statSync(COPILOT_JB_DIR).mtimeMs;
     }
+    const codexHistory = path.join(CODEX_DIR, 'history.jsonl');
+    if (fs.existsSync(codexHistory)) {
+      const st = fs.statSync(codexHistory);
+      _codexHistoryMtime = st.mtimeMs;
+      _codexHistorySize = st.size;
+    } else {
+      _codexHistoryMtime = 0; _codexHistorySize = 0;
+    }
+    const codexIndex = path.join(CODEX_DIR, 'session_index.jsonl');
+    if (fs.existsSync(codexIndex)) {
+      const st = fs.statSync(codexIndex);
+      _codexIndexMtime = st.mtimeMs;
+      _codexIndexSize = st.size;
+    } else {
+      _codexIndexMtime = 0; _codexIndexSize = 0;
+    }
+    // Reuse the walk performed by _sessionsNeedRescan() when present;
+    // otherwise (first call / direct invocation) walk now.
+    _codexSessionsDirMtimes = _codexDayDirMtimesPending || _codexDayDirMtimes();
+    _codexDayDirMtimesPending = null;
   } catch {}
 }
 
@@ -5013,12 +5089,34 @@ function getActiveSessions() {
         if (sessionId) sessionSource = 'pid-file';
       }
 
-      // Try to get cwd from lsof if not from PID file
+      // Try to get cwd if not from PID file:
+      //   1) /proc/<pid>/cwd readlink on Linux — fast, reliable, no spawn
+      //   2) lsof -a -p <pid> -d cwd -Fn — fallback (macOS, or restricted Linux)
+      // lsof can output a path suffixed with " (readlink: Permission denied)"
+      // when it cannot resolve the link; we discard such results.
+      if (!cwd) {
+        if (process.platform === 'linux' && Number.isFinite(pid) && pid > 0) {
+          try {
+            const linkTarget = fs.readlinkSync(`/proc/${pid}/cwd`);
+            if (linkTarget && linkTarget.startsWith('/')) cwd = linkTarget;
+          } catch {}
+        }
+      }
       if (!cwd) {
         try {
           const lsofOut = execSync(`lsof -a -p ${pid} -d cwd -Fn 2>/dev/null`, { encoding: 'utf8', timeout: 2000, stdio: ['pipe', 'pipe', 'pipe'] });
-          const match = lsofOut.match(/\nn(\/[^\n]+)/);
-          if (match) cwd = match[1];
+          // -F output is line-oriented; cwd path lives on a line starting with "n".
+          // Anchor to start-of-line (multiline flag) so we don't depend on a
+          // preceding newline, and tolerate non-path lines mixed in.
+          const match = lsofOut.match(/^n(\/[^\n]*)/m);
+          if (match) {
+            let p = match[1].trim();
+            // Strip lsof's trailing "(readlink: …)" annotation if present.
+            const errIdx = p.indexOf(' (');
+            if (errIdx !== -1) p = p.slice(0, errIdx).trim();
+            // Reject pseudo-paths we know are unusable for session matching.
+            if (p && p.startsWith('/') && !p.startsWith('/proc/')) cwd = p;
+          }
         } catch {}
       }
 
@@ -5031,19 +5129,32 @@ function getActiveSessions() {
             match = qwenMatch.session;
             sessionSource = qwenMatch.source;
           }
-        } else {
-          match = allSessions.find(s => s.tool === tool && s.project === cwd);
-          if (match) sessionSource = 'cwd-match';
+        } else if (cwd) {
+          // For codex, multiple sessions may share the same cwd over time —
+          // prefer the most recently modified one rather than the first hit.
+          const candidates = allSessions.filter(s => s.tool === tool && s.project === cwd);
+          if (candidates.length) {
+            candidates.sort((a, b) => (b.last_ts || 0) - (a.last_ts || 0));
+            match = candidates[0];
+            sessionSource = 'cwd-match';
+          }
         }
         if (match) {
           sessionId = match.id;
         }
-        // If still no match, find latest session of this tool
+        // If still no match: fall back to the latest session of this tool
+        // ONLY when we have no cwd at all. With a known cwd, returning some
+        // arbitrary "latest" session is misleading — leave sessionId empty
+        // and mark the source as unmatched so the UI can show it honestly.
         if (!sessionId) {
-          const latest = allSessions.filter(s => s.tool === tool).sort((a,b) => b.last_ts - a.last_ts)[0];
-          if (latest) {
-            sessionId = latest.id;
-            sessionSource = 'fallback-latest';
+          if (!cwd) {
+            const latest = allSessions.filter(s => s.tool === tool).sort((a,b) => b.last_ts - a.last_ts)[0];
+            if (latest) {
+              sessionId = latest.id;
+              sessionSource = 'fallback-latest';
+            }
+          } else {
+            sessionSource = 'unmatched';
           }
         }
       }
