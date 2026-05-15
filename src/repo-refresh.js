@@ -58,6 +58,11 @@ function createRepoRefreshManager(opts = {}) {
   const pendingTimers = new Set();
   // Track spawned children so shutdown() can SIGTERM them on host teardown.
   const inflightChildren = new Set();
+  // Track each in-flight runFetch finalizer so shutdown() can resolve the
+  // promise. Without this, an unresolved fetch leaves a pending promise that
+  // node:test flags as "Promise resolution is still pending" on stricter
+  // hosts (e.g. macOS CI runners), even after timers are cancelled.
+  const activeFinalizers = new Set();
   let isShutdown = false;
 
   // ── Semaphore ────────────────────────────────────────────
@@ -112,10 +117,12 @@ function createRepoRefreshManager(opts = {}) {
       const finalize = (next) => {
         if (settled) return;
         settled = true;
+        activeFinalizers.delete(finalize);
         if (timeoutTimer) clearTimeout(timeoutTimer);
         if (killTimer) clearTimeout(killTimer);
         resolve(next);
       };
+      activeFinalizers.add(finalize);
 
       const cleanupTimers = () => {
         if (timeoutTimer) { pendingTimers.delete(timeoutTimer); clearTimeout(timeoutTimer); timeoutTimer = null; }
@@ -389,6 +396,21 @@ function createRepoRefreshManager(opts = {}) {
       try { child.kill('SIGTERM'); } catch {}
     }
     inflightChildren.clear();
+    // Resolve every in-flight fetch with a synthetic "cancelled" error state
+    // so callers awaiting the promise don't hang and node:test does not flag
+    // pending promises at teardown. Snapshot first — finalize mutates the Set.
+    const pending = [...activeFinalizers];
+    activeFinalizers.clear();
+    for (const fin of pending) {
+      try {
+        fin({
+          status: 'error',
+          startedAt: null,
+          lastError: 'cancelled (manager shutdown)',
+          lastErrorAt: Date.now(),
+        });
+      } catch {}
+    }
   }
 
   // Load settings synchronously on construction.
