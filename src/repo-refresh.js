@@ -53,8 +53,12 @@ function createRepoRefreshManager(opts = {}) {
   let settings = { ...DEFAULT_SETTINGS };
   let saveTimer = null;
   // Track every manager-owned setTimeout so shutdown() can cancel them.
-  // .unref() alone is not enough — node:test's resource tracker may flag the
-  // pending timer as a leak and cancel subsequent tests.
+  // We deliberately do NOT .unref() these timers — node:test treats unref'd
+  // timers as if they don't keep the event loop alive, so awaiting a Promise
+  // whose only "alive" handle is an unref'd timer reports as
+  // "Promise resolution is still pending but the event loop has already
+  // resolved" (observed on macOS/ubuntu CI runners). Hosts should call
+  // shutdown() at process exit instead to release timers gracefully.
   const pendingTimers = new Set();
   // Track spawned children so shutdown() can SIGTERM them on host teardown.
   const inflightChildren = new Set();
@@ -175,10 +179,8 @@ function createRepoRefreshManager(opts = {}) {
           pendingTimers.delete(killTimer);
           try { child.kill('SIGKILL'); } catch {}
         }, sigkillGraceMs);
-        if (killTimer && killTimer.unref) killTimer.unref();
         pendingTimers.add(killTimer);
       }, fetchTimeoutMs);
-      if (timeoutTimer && timeoutTimer.unref) timeoutTimer.unref();
       pendingTimers.add(timeoutTimer);
     });
   }
@@ -258,7 +260,6 @@ function createRepoRefreshManager(opts = {}) {
         if (bucket.size === 0) waiters.delete(gitRoot);
         resolve({ state: state.get(gitRoot) || defaultRepoState(), timedOut: true });
       }, timeoutMs);
-      if (to && to.unref) to.unref();
       pendingTimers.add(to);
     });
   }
@@ -312,7 +313,6 @@ function createRepoRefreshManager(opts = {}) {
         logger.error('Failed to save refresh settings: ' + err.message);
       }
     }, debounceMs);
-    if (saveTimer && saveTimer.unref) saveTimer.unref();
     pendingTimers.add(saveTimer);
   }
 

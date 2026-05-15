@@ -73,7 +73,7 @@ function request(port, method, urlPath, body) {
   });
 }
 
-function makeDeps(extraOverrides = {}) {
+function makeDeps(t, extraOverrides = {}) {
   const settingsPath = path.join(mkTmp('codbash-api-'), 'settings.json');
   const exec = makeMockExecFile();
   const manager = createRepoRefreshManager({
@@ -87,6 +87,11 @@ function makeDeps(extraOverrides = {}) {
     existsSync: () => true,
     ...extraOverrides,
   });
+  // Cancel manager-owned timers and resolve any in-flight fetch promise on
+  // test teardown so node:test's resource tracker doesn't see them as leaks.
+  if (t && typeof t.after === 'function') {
+    t.after(() => { try { manager.shutdown(); } catch {} });
+  }
   // Fixed list of "known" gitRoots used for /trigger and /settings validation.
   const knownGitRoots = new Set(['/repos/known-a', '/repos/known-b']);
   const getKnownGitRoots = () => knownGitRoots;
@@ -95,8 +100,8 @@ function makeDeps(extraOverrides = {}) {
 
 // ── Tests ─────────────────────────────────────────────────────
 
-test('GET /api/repo-refresh/state returns repos + settings on a fresh manager', async () => {
-  const deps = makeDeps();
+test('GET /api/repo-refresh/state returns repos + settings on a fresh manager', async (t) => {
+  const deps = makeDeps(t);
   const { server, port } = await startTestServer(deps);
   try {
     const res = await request(port, 'GET', '/api/repo-refresh/state');
@@ -109,8 +114,8 @@ test('GET /api/repo-refresh/state returns repos + settings on a fresh manager', 
   }
 });
 
-test('POST /api/repo-refresh/trigger spawns a fetch for a known gitRoot', async () => {
-  const deps = makeDeps();
+test('POST /api/repo-refresh/trigger spawns a fetch for a known gitRoot', async (t) => {
+  const deps = makeDeps(t);
   const { server, port } = await startTestServer(deps);
   try {
     const res = await request(port, 'POST', '/api/repo-refresh/trigger', { gitRoot: '/repos/known-a' });
@@ -124,8 +129,8 @@ test('POST /api/repo-refresh/trigger spawns a fetch for a known gitRoot', async 
   }
 });
 
-test('POST /api/repo-refresh/trigger returns 404 with code=not_found for an unknown gitRoot', async () => {
-  const deps = makeDeps();
+test('POST /api/repo-refresh/trigger returns 404 with code=not_found for an unknown gitRoot', async (t) => {
+  const deps = makeDeps(t);
   const { server, port } = await startTestServer(deps);
   try {
     const res = await request(port, 'POST', '/api/repo-refresh/trigger', { gitRoot: '/repos/wat' });
@@ -137,8 +142,8 @@ test('POST /api/repo-refresh/trigger returns 404 with code=not_found for an unkn
   }
 });
 
-test('POST /api/repo-refresh/trigger returns 400 with code=invalid_payload when gitRoot is missing', async () => {
-  const deps = makeDeps();
+test('POST /api/repo-refresh/trigger returns 400 with code=invalid_payload when gitRoot is missing', async (t) => {
+  const deps = makeDeps(t);
   const { server, port } = await startTestServer(deps);
   try {
     const res = await request(port, 'POST', '/api/repo-refresh/trigger', {});
@@ -149,8 +154,8 @@ test('POST /api/repo-refresh/trigger returns 400 with code=invalid_payload when 
   }
 });
 
-test('POST /api/repo-refresh/trigger returns 400 for malformed JSON body', async () => {
-  const deps = makeDeps();
+test('POST /api/repo-refresh/trigger returns 400 for malformed JSON body', async (t) => {
+  const deps = makeDeps(t);
   const { server, port } = await startTestServer(deps);
   try {
     const res = await request(port, 'POST', '/api/repo-refresh/trigger', '{ not json');
@@ -161,8 +166,8 @@ test('POST /api/repo-refresh/trigger returns 400 for malformed JSON body', async
   }
 });
 
-test('POST /api/repo-refresh/wait returns timedOut=true when fetch outruns the wait', async () => {
-  const deps = makeDeps();
+test('POST /api/repo-refresh/wait returns timedOut=true when fetch outruns the wait', async (t) => {
+  const deps = makeDeps(t);
   const { server, port } = await startTestServer(deps);
   try {
     // Start a fetch that never resolves.
@@ -177,8 +182,8 @@ test('POST /api/repo-refresh/wait returns timedOut=true when fetch outruns the w
   }
 });
 
-test('POST /api/repo-refresh/wait returns 404 with code=not_found for unknown gitRoot', async () => {
-  const deps = makeDeps();
+test('POST /api/repo-refresh/wait returns 404 with code=not_found for unknown gitRoot', async (t) => {
+  const deps = makeDeps(t);
   const { server, port } = await startTestServer(deps);
   try {
     const res = await request(port, 'POST', '/api/repo-refresh/wait', { gitRoot: '/repos/not-mine' });
@@ -189,8 +194,8 @@ test('POST /api/repo-refresh/wait returns 404 with code=not_found for unknown gi
   }
 });
 
-test('POST /api/repo-refresh/wait clamps timeoutMs to a sane maximum', async () => {
-  const deps = makeDeps();
+test('POST /api/repo-refresh/wait clamps timeoutMs to a sane maximum', async (t) => {
+  const deps = makeDeps(t);
   const { server, port } = await startTestServer(deps);
   try {
     // No fetch in flight — wait should return immediately regardless of timeoutMs.
@@ -203,8 +208,8 @@ test('POST /api/repo-refresh/wait clamps timeoutMs to a sane maximum', async () 
   }
 });
 
-test('GET /api/repo-refresh/settings returns the current settings', async () => {
-  const deps = makeDeps();
+test('GET /api/repo-refresh/settings returns the current settings', async (t) => {
+  const deps = makeDeps(t);
   const { server, port } = await startTestServer(deps);
   try {
     const res = await request(port, 'GET', '/api/repo-refresh/settings');
@@ -216,8 +221,8 @@ test('GET /api/repo-refresh/settings returns the current settings', async () => 
   }
 });
 
-test('POST /api/repo-refresh/settings merges and persists valid input', async () => {
-  const deps = makeDeps();
+test('POST /api/repo-refresh/settings merges and persists valid input', async (t) => {
+  const deps = makeDeps(t);
   const { server, port } = await startTestServer(deps);
   try {
     const res = await request(port, 'POST', '/api/repo-refresh/settings', {
@@ -238,8 +243,8 @@ test('POST /api/repo-refresh/settings merges and persists valid input', async ()
   }
 });
 
-test('POST /api/repo-refresh/settings returns 400 with code=invalid_payload for unknown gitRoot in perProject', async () => {
-  const deps = makeDeps();
+test('POST /api/repo-refresh/settings returns 400 with code=invalid_payload for unknown gitRoot in perProject', async (t) => {
+  const deps = makeDeps(t);
   const { server, port } = await startTestServer(deps);
   try {
     const res = await request(port, 'POST', '/api/repo-refresh/settings', {
@@ -252,8 +257,8 @@ test('POST /api/repo-refresh/settings returns 400 with code=invalid_payload for 
   }
 });
 
-test('GET /api/repo-refresh/settings returns the value just POSTed', async () => {
-  const deps = makeDeps();
+test('GET /api/repo-refresh/settings returns the value just POSTed', async (t) => {
+  const deps = makeDeps(t);
   const { server, port } = await startTestServer(deps);
   try {
     await request(port, 'POST', '/api/repo-refresh/settings', {
@@ -267,8 +272,8 @@ test('GET /api/repo-refresh/settings returns the value just POSTed', async () =>
   }
 });
 
-test('Unknown route under /api/repo-refresh/ returns 404', async () => {
-  const deps = makeDeps();
+test('Unknown route under /api/repo-refresh/ returns 404', async (t) => {
+  const deps = makeDeps(t);
   const { server, port } = await startTestServer(deps);
   try {
     const res = await request(port, 'GET', '/api/repo-refresh/nonsense');
