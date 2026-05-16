@@ -59,11 +59,21 @@ function defaults(overrides = {}) {
   };
 }
 
+// Create a manager and register shutdown() via t.after() so per-test timers
+// (60s fetch timeout, debounced save, waiter timeouts) never leak into
+// subsequent tests — otherwise node:test's resource tracker may mark them as
+// leaks and cancel later tests on slower machines.
+function makeMgr(t, opts) {
+  const mgr = createRepoRefreshManager(opts);
+  t.after(() => { try { mgr.shutdown(); } catch {} });
+  return mgr;
+}
+
 // ── Tests ─────────────────────────────────────────────────────
 
-test('triggerRefresh transitions idle → fetching → idle on success', async () => {
+test('triggerRefresh transitions idle → fetching → idle on success', async (t) => {
   const exec = makeMockExecFile();
-  const mgr = createRepoRefreshManager({ ...defaults(), execFile: exec.execFile });
+  const mgr = makeMgr(t, { ...defaults(), execFile: exec.execFile });
 
   const before = mgr.getState().repos['/repos/x'];
   assert.equal(before, undefined);
@@ -81,9 +91,9 @@ test('triggerRefresh transitions idle → fetching → idle on success', async (
   assert.ok(final.lastSuccessAt > 0);
 });
 
-test('triggerRefresh single-flight: 2 concurrent calls share the same promise', async () => {
+test('triggerRefresh single-flight: 2 concurrent calls share the same promise', async (t) => {
   const exec = makeMockExecFile();
-  const mgr = createRepoRefreshManager({ ...defaults(), execFile: exec.execFile });
+  const mgr = makeMgr(t, { ...defaults(), execFile: exec.execFile });
 
   const p1 = mgr.triggerRefresh('/repos/x');
   const p2 = mgr.triggerRefresh('/repos/x');
@@ -95,9 +105,9 @@ test('triggerRefresh single-flight: 2 concurrent calls share the same promise', 
   await p1;
 });
 
-test('semaphore caps concurrent fetches at 4; 5th queues until one finishes', async () => {
+test('semaphore caps concurrent fetches at 4; 5th queues until one finishes', async (t) => {
   const exec = makeMockExecFile();
-  const mgr = createRepoRefreshManager({
+  const mgr = makeMgr(t, {
     ...defaults(),
     execFile: exec.execFile,
     maxConcurrency: 4,
@@ -119,9 +129,9 @@ test('semaphore caps concurrent fetches at 4; 5th queues until one finishes', as
   await Promise.all(promises);
 });
 
-test('60s timeout: child killed (SIGTERM then SIGKILL grace), state=error, inflight cleared', async () => {
+test('60s timeout: child killed (SIGTERM then SIGKILL grace), state=error, inflight cleared', async (t) => {
   const exec = makeMockExecFile();
-  const mgr = createRepoRefreshManager({
+  const mgr = makeMgr(t, {
     ...defaults(),
     execFile: exec.execFile,
     fetchTimeoutMs: 50,
@@ -151,9 +161,9 @@ test('60s timeout: child killed (SIGTERM then SIGKILL grace), state=error, infli
   await p2;
 });
 
-test('non-zero exit propagates as state=error with truncated stderr (≤200 chars)', async () => {
+test('non-zero exit propagates as state=error with truncated stderr (≤200 chars)', async (t) => {
   const exec = makeMockExecFile();
-  const mgr = createRepoRefreshManager({ ...defaults(), execFile: exec.execFile });
+  const mgr = makeMgr(t, { ...defaults(), execFile: exec.execFile });
 
   const p = mgr.triggerRefresh('/repos/x');
   const longErr = 'fatal: ' + 'x'.repeat(500);
@@ -167,14 +177,14 @@ test('non-zero exit propagates as state=error with truncated stderr (≤200 char
   assert.ok(state.lastErrorAt > 0);
 });
 
-test('corrupt settings file → loadSettings logs warning, sets defaults, file untouched', () => {
+test('corrupt settings file → loadSettings logs warning, sets defaults, file untouched', (t) => {
   const dir = mkTmp('codbash-repo-refresh-');
   const settingsPath = path.join(dir, 'settings.json');
   fs.writeFileSync(settingsPath, '{ not valid json');
   const original = fs.readFileSync(settingsPath, 'utf8');
 
   const warnings = [];
-  const mgr = createRepoRefreshManager({
+  const mgr = makeMgr(t, {
     ...defaults(),
     settingsPath,
     logger: { warn: (msg) => warnings.push(msg) },
@@ -187,10 +197,10 @@ test('corrupt settings file → loadSettings logs warning, sets defaults, file u
   assert.equal(fs.readFileSync(settingsPath, 'utf8'), original, 'file must NOT be auto-overwritten');
 });
 
-test('updateSettings round-trips through atomicWriteJson (debounced)', async () => {
+test('updateSettings round-trips through atomicWriteJson (debounced)', async (t) => {
   const exec = makeMockExecFile();
   const atomic = makeMockAtomicWrite();
-  const mgr = createRepoRefreshManager({
+  const mgr = makeMgr(t, {
     ...defaults(),
     execFile: exec.execFile,
     atomicWriteJson: atomic.atomicWriteJson,
@@ -211,9 +221,9 @@ test('updateSettings round-trips through atomicWriteJson (debounced)', async () 
   assert.deepEqual(atomic.calls[0].obj.perProject, { '/repos/x': { autoRefreshOnNewChat: true } });
 });
 
-test('gitRoot with spaces is passed as a single argv element', async () => {
+test('gitRoot with spaces is passed as a single argv element', async (t) => {
   const exec = makeMockExecFile();
-  const mgr = createRepoRefreshManager({ ...defaults(), execFile: exec.execFile });
+  const mgr = makeMgr(t, { ...defaults(), execFile: exec.execFile });
   const root = '/repos/My Project (legacy)';
 
   const p = mgr.triggerRefresh(root);
@@ -225,7 +235,7 @@ test('gitRoot with spaces is passed as a single argv element', async () => {
   await p;
 });
 
-test('initOnStartup triggers only enabled repos and does not block', async () => {
+test('initOnStartup triggers only enabled repos and does not block', async (t) => {
   const dir = mkTmp('codbash-repo-refresh-');
   const settingsPath = path.join(dir, 'settings.json');
   fs.writeFileSync(settingsPath, JSON.stringify({
@@ -239,7 +249,7 @@ test('initOnStartup triggers only enabled repos and does not block', async () =>
   }));
 
   const exec = makeMockExecFile();
-  const mgr = createRepoRefreshManager({ ...defaults(), settingsPath, execFile: exec.execFile });
+  const mgr = makeMgr(t, { ...defaults(), settingsPath, execFile: exec.execFile });
 
   const t0 = Date.now();
   mgr.initOnStartup();
@@ -256,7 +266,7 @@ test('initOnStartup triggers only enabled repos and does not block', async () =>
   for (const c of exec.calls) c.resolve();
 });
 
-test('initOnStartup with refreshOnStartup=false launches nothing', async () => {
+test('initOnStartup with refreshOnStartup=false launches nothing', async (t) => {
   const dir = mkTmp('codbash-repo-refresh-');
   const settingsPath = path.join(dir, 'settings.json');
   fs.writeFileSync(settingsPath, JSON.stringify({
@@ -266,14 +276,14 @@ test('initOnStartup with refreshOnStartup=false launches nothing', async () => {
   }));
 
   const exec = makeMockExecFile();
-  const mgr = createRepoRefreshManager({ ...defaults(), settingsPath, execFile: exec.execFile });
+  const mgr = makeMgr(t, { ...defaults(), settingsPath, execFile: exec.execFile });
 
   mgr.initOnStartup();
   await new Promise(r => setImmediate(r));
   assert.equal(exec.calls.length, 0);
 });
 
-test('initOnStartup garbage-collects orphan perProject entries', async () => {
+test('initOnStartup garbage-collects orphan perProject entries', async (t) => {
   const dir = mkTmp('codbash-repo-refresh-');
   const settingsPath = path.join(dir, 'settings.json');
   fs.writeFileSync(settingsPath, JSON.stringify({
@@ -286,7 +296,7 @@ test('initOnStartup garbage-collects orphan perProject entries', async () => {
   }));
 
   const atomic = makeMockAtomicWrite();
-  const mgr = createRepoRefreshManager({
+  const mgr = makeMgr(t, {
     ...defaults(),
     settingsPath,
     atomicWriteJson: atomic.atomicWriteJson,
@@ -305,9 +315,9 @@ test('initOnStartup garbage-collects orphan perProject entries', async () => {
   assert.ok(atomic.calls.some(c => c.obj.perProject && !('/repos/deleted' in c.obj.perProject)));
 });
 
-test('waitForRefreshOrTimeout returns timedOut=true when fetch outruns the wait', async () => {
+test('waitForRefreshOrTimeout returns timedOut=true when fetch outruns the wait', async (t) => {
   const exec = makeMockExecFile();
-  const mgr = createRepoRefreshManager({ ...defaults(), execFile: exec.execFile });
+  const mgr = makeMgr(t, { ...defaults(), execFile: exec.execFile });
 
   const fetchP = mgr.triggerRefresh('/repos/x');
   const result = await mgr.waitForRefreshOrTimeout('/repos/x', 30);
@@ -320,9 +330,9 @@ test('waitForRefreshOrTimeout returns timedOut=true when fetch outruns the wait'
   await fetchP;
 });
 
-test('lastError redacts https://user:token@host credentials', async () => {
+test('lastError redacts https://user:token@host credentials', async (t) => {
   const exec = makeMockExecFile();
-  const mgr = createRepoRefreshManager({ ...defaults(), execFile: exec.execFile });
+  const mgr = makeMgr(t, { ...defaults(), execFile: exec.execFile });
 
   const p = mgr.triggerRefresh('/repos/x');
   const errMsg = "fatal: Authentication failed for 'https://alice:ghp_secrettoken123@github.com/org/repo.git'";
@@ -336,7 +346,7 @@ test('lastError redacts https://user:token@host credentials', async () => {
   assert.ok(/<redacted>@github\.com/.test(state.lastError), 'should preserve host with <redacted> placeholder');
 });
 
-test('initOnStartup skips perProject entries not in known-roots set', async () => {
+test('initOnStartup skips perProject entries not in known-roots set', async (t) => {
   const dir = mkTmp('codbash-repo-refresh-');
   const settingsPath = path.join(dir, 'settings.json');
   fs.writeFileSync(settingsPath, JSON.stringify({
@@ -349,7 +359,7 @@ test('initOnStartup skips perProject entries not in known-roots set', async () =
   }));
 
   const exec = makeMockExecFile();
-  const mgr = createRepoRefreshManager({
+  const mgr = makeMgr(t, {
     ...defaults(),
     settingsPath,
     execFile: exec.execFile,
@@ -367,7 +377,7 @@ test('initOnStartup skips perProject entries not in known-roots set', async () =
   for (const c of exec.calls) c.resolve();
 });
 
-test('setKnownGitRootsProvider wires the gate after construction', async () => {
+test('setKnownGitRootsProvider wires the gate after construction', async (t) => {
   const dir = mkTmp('codbash-repo-refresh-');
   const settingsPath = path.join(dir, 'settings.json');
   fs.writeFileSync(settingsPath, JSON.stringify({
@@ -377,7 +387,7 @@ test('setKnownGitRootsProvider wires the gate after construction', async () => {
   }));
 
   const exec = makeMockExecFile();
-  const mgr = createRepoRefreshManager({ ...defaults(), settingsPath, execFile: exec.execFile });
+  const mgr = makeMgr(t, { ...defaults(), settingsPath, execFile: exec.execFile });
   // No known-roots set yet — wire it in after construction.
   mgr.setKnownGitRootsProvider(() => new Set(['/repos/a']));
 
@@ -387,9 +397,9 @@ test('setKnownGitRootsProvider wires the gate after construction', async () => {
   exec.calls[0].resolve();
 });
 
-test('waitForRefreshOrTimeout returns timedOut=false when fetch finishes first', async () => {
+test('waitForRefreshOrTimeout returns timedOut=false when fetch finishes first', async (t) => {
   const exec = makeMockExecFile();
-  const mgr = createRepoRefreshManager({ ...defaults(), execFile: exec.execFile });
+  const mgr = makeMgr(t, { ...defaults(), execFile: exec.execFile });
 
   const fetchP = mgr.triggerRefresh('/repos/x');
   const waitP = mgr.waitForRefreshOrTimeout('/repos/x', 200);

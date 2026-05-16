@@ -45,7 +45,11 @@ test('buildWslUncPath and shortenHomePath normalize WSL-visible paths', () => {
   assert.equal(normalizeProjectPath('\\\\?\\C:\\Projects\\codedash'), 'C:\\Projects\\codedash');
 });
 
-test('detectWindowsWslHomes discovers only running distros with supported agent data', () => {
+// The implementation uses `path.join` (platform-default), so the constructed
+// `\\wsl$\...` paths only match the mocked existsSync set when path defaults
+// to win32. Run this assertion only on Windows; the cross-platform behavior
+// is covered by the test below.
+test('detectWindowsWslHomes discovers only running distros with supported agent data', { skip: process.platform !== 'win32' && 'win32-only: uses backslash path joining' }, () => {
   const existing = new Set([
     '\\\\wsl$\\Ubuntu-24.04\\home\\dius\\.codex',
     '\\\\wsl$\\Debian\\home\\tester\\.cursor',
