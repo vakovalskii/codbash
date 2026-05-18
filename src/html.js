@@ -6,6 +6,7 @@ const FRONTEND_DIR = path.join(__dirname, 'frontend');
 
 // JS files inlined in order (later files can use globals from earlier ones)
 const JS_FILES = [
+  'sidebar-config.js',
   'app.js',
   'calendar.js',
   'detail.js',
