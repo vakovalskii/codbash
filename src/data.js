@@ -274,6 +274,38 @@ function shortenHomePath(value, homes = ALL_HOMES) {
   }
   return value;
 }
+
+// Returns a human-readable project label for analytics displays.
+// "/Users/x/code/codbash" -> "codbash"; "~/code/foo" -> "foo"; "$HOME" -> "(home)"; empty -> "unknown".
+// Same basename from different paths collide intentionally (accepted in SDD).
+function displayProject(s, homes = ALL_HOMES) {
+  if (!s || typeof s !== 'object') return 'unknown';
+  let raw = s.project || s.project_short || '';
+  if (typeof raw !== 'string') return 'unknown';
+  raw = raw.trim();
+  if (!raw) return 'unknown';
+  if (raw === '~') return '(home)';
+  const homeList = Array.isArray(homes) && homes.length ? homes : [os.homedir()];
+  if (raw.startsWith('~/') || raw.startsWith('~\\')) {
+    const tail = raw.slice(2);
+    if (!tail) return '(home)';
+    raw = path.join(homeList[0], tail);
+  }
+  const normalized = normalizeProjectPath(raw);
+  for (const homeRaw of homeList) {
+    const home = normalizeProjectPath(homeRaw);
+    if (home && normalized.toLowerCase() === home.toLowerCase()) return '(home)';
+  }
+  // Strip trailing slash before basename to avoid empty result on "/foo/bar/"
+  const trimmed = normalized.replace(/[\\/]+$/, '');
+  // Handle Windows-style paths even on POSIX (path.basename treats them as one segment)
+  const lastWin = trimmed.lastIndexOf('\\');
+  const lastUnix = trimmed.lastIndexOf('/');
+  const lastSep = Math.max(lastWin, lastUnix);
+  const base = lastSep >= 0 ? trimmed.slice(lastSep + 1) : trimmed;
+  return base || 'unknown';
+}
+
 // OpenCode built-in tools that should NOT be treated as MCP servers
 const OPENCODE_BUILTIN_TOOLS = new Set([
   'read', 'write', 'edit', 'bash', 'glob', 'grep', 'task', 'todowrite',
@@ -4871,7 +4903,7 @@ function _computeCostAnalytics(sessions) {
     }
 
     // By project
-    const proj = s.project_short || s.project || 'unknown';
+    const proj = displayProject(s);
     if (!byProject[proj]) byProject[proj] = { cost: 0, sessions: 0, tokens: 0 };
     byProject[proj].cost += cost;
     byProject[proj].sessions++;
@@ -5531,6 +5563,7 @@ module.exports = {
     buildWslUncPath,
     normalizeProjectPath,
     shortenHomePath,
+    displayProject,
     detectWindowsWslHomes,
     parseStructuredWrapper,
     parseStructuredFields,

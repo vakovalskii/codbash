@@ -207,15 +207,24 @@ async function renderAnalytics(container) {
     // ── Subscription vs API ────────────────────────────────────
     var sub = getSubscriptionConfig();
     var subEntries = (sub && sub.entries) || [];
-    var totalPaid = subTotalPaid(subEntries);
+    // Annotate every entry with its original index so per-row Remove buttons
+    // map back into the combined array after splitting by kind.
+    var subIndexed = subEntries.map(function(e, i) { return { entry: e, idx: i }; });
+    var subOnly = subIndexed.filter(function(x){ return (x.entry.kind || 'subscription') === 'subscription'; });
+    var apiOnly = subIndexed.filter(function(x){ return x.entry.kind === 'api'; });
+    var totalSubs = subTotalPaid(subOnly.map(function(x){return x.entry;}));
+    var totalApi  = subTotalPaid(apiOnly.map(function(x){return x.entry;}));
+    var totalPaid = totalSubs;  // ROI vs API rates is meaningful only for subscriptions
     html += '<div class="chart-section subscription-section">';
     html += '<h3>Subscription vs API</h3>';
+    html += '<div id="sub-aria-live" class="sr-only" aria-live="polite"></div>';
 
     if (totalPaid > 0) {
       var savings = data.totalCost - totalPaid;
       var multiplier = data.totalCost / totalPaid;
       var savingsPositive = savings > 0;
-      var breakdown = subEntries.map(function(e) {
+      var breakdown = subOnly.map(function(x) {
+        var e = x.entry;
         var prefix = e.service ? escHtml(e.service) + ' ' : '';
         return prefix + escHtml(e.plan || 'Sub') + ' $' + parseFloat(e.paid).toFixed(0);
       }).join(' + ');
@@ -228,39 +237,61 @@ async function renderAnalytics(container) {
       html += '<div class="sub-bar-track" title="$' + totalPaid.toFixed(2) + ' paid of $' + data.totalCost.toFixed(2) + ' API equivalent">';
       html += '<div class="sub-bar-fill" style="width:' + barPct + '%"></div>';
       html += '</div>';
+    } else if (subEntries.length === 0) {
+      html += '<p class="sub-empty">Add your first subscription to see total monthly spend.</p>';
     } else {
       html += '<p class="sub-hint">Add your subscription periods below to see how much you\'re saving vs API rates.</p>';
     }
 
-    // Period list
+    // Entries grouped by kind. (Function expression \u2014 block-scoped declarations
+    // inside try{} have implementation-defined semantics.)
     html += '<div class="sub-entries">';
-    if (subEntries.length > 0) {
-      subEntries.forEach(function(e, i) {
-        var serviceLabel = e.service && SERVICE_PLANS[e.service] ? SERVICE_PLANS[e.service].label : e.service || '';
-        html += '<div class="sub-entry-row">';
-        if (serviceLabel) html += '<span class="sub-entry-service">' + escHtml(serviceLabel) + '</span>';
-        html += '<span class="sub-entry-plan">' + escHtml(e.plan || '\u2014') + '</span>';
-        html += '<span class="sub-entry-paid">$' + parseFloat(e.paid || 0).toFixed(2) + '/mo</span>';
-        html += '<span class="sub-entry-from">' + (e.from ? 'from ' + escHtml(e.from) : 'no date') + '</span>';
-        html += '<button class="sub-entry-remove" onclick="removeSubEntry(' + i + ')" title="Remove">\u00d7</button>';
-        html += '</div>';
-      });
+    var renderEntryRow = function(x) {
+      var e = x.entry;
+      var serviceLabel = e.service && SERVICE_PLANS[e.service] ? SERVICE_PLANS[e.service].label : e.service || '';
+      var paidSuffix = e.kind === 'api' ? '' : '/mo';
+      var fromText = e.from ? 'from ' + escHtml(e.from) : 'no date';
+      // x.idx is a non-negative integer from Array#map \u2014 safe to inline.
+      var rowHtml = '<div class="sub-entry-row">';
+      if (serviceLabel) rowHtml += '<span class="sub-entry-service">' + escHtml(serviceLabel) + '</span>';
+      rowHtml += '<span class="sub-entry-plan" title="' + escHtml(e.plan || '') + '">' + escHtml(e.plan || '\u2014') + '</span>';
+      rowHtml += '<span class="sub-entry-paid">$' + parseFloat(e.paid || 0).toFixed(2) + paidSuffix + '</span>';
+      rowHtml += '<span class="sub-entry-from">' + fromText + '</span>';
+      rowHtml += '<button class="sub-entry-remove" aria-label="Remove ' + (e.kind === 'api' ? 'API deposit' : 'subscription') + ' entry" onclick="removeSubEntry(' + x.idx + ')" title="Remove">\u00d7</button>';
+      rowHtml += '</div>';
+      return rowHtml;
+    };
+    if (subOnly.length > 0) {
+      html += '<h4 class="sub-group-header">Subscriptions \u2014 $' + totalSubs.toFixed(2) + ' / month</h4>';
+      subOnly.forEach(function(x){ html += renderEntryRow(x); });
+    }
+    if (apiOnly.length > 0) {
+      html += '<h4 class="sub-group-header">API deposits \u2014 $' + totalApi.toFixed(2) + ' total</h4>';
+      apiOnly.forEach(function(x){ html += renderEntryRow(x); });
     }
     html += '</div>';
 
-    // Add form
-    var serviceDatalistOpts = Object.keys(SERVICE_PLANS).map(function(k) {
-      return '<option value="' + escHtml(k) + '">';
-    }).join('');
-    html += '<div class="sub-add-form">';
-    html += '<datalist id="sub-service-opts">' + serviceDatalistOpts + '</datalist>';
-    html += '<datalist id="sub-plan-opts"></datalist>';
-    html += '<input id="sub-new-service" list="sub-service-opts" placeholder="Service" aria-label="Service name" oninput="onSubServiceChange()" autocomplete="off" />';
-    html += '<input id="sub-new-plan" list="sub-plan-opts" placeholder="Plan" aria-label="Plan name" oninput="onSubPlanChange()" autocomplete="off" />';
-    html += '<input id="sub-new-paid" type="number" min="0" step="0.01" placeholder="$/mo" aria-label="Monthly price in dollars" />';
-    html += '<input id="sub-new-from" type="date" title="Start date of this billing period" aria-label="Subscription start date" />';
-    html += '<button onclick="addSubEntry()">+ Add period</button>';
-    html += '</div>';
+    // Add form — native selects for Service and Plan (Plan becomes free-text input for API custom)
+    var serviceOpts = '<option value="">Select service…</option>' +
+      Object.keys(SERVICE_PLANS).map(function(k) {
+        var cfg = SERVICE_PLANS[k];
+        var label = cfg && cfg.label ? cfg.label : k;
+        return '<option value="' + escHtml(k) + '">' + escHtml(label) + '</option>';
+      }).join('');
+    html += '<form class="sub-add-form" onsubmit="event.preventDefault(); addSubEntry(); return false;">';
+    html += '<label for="sub-new-service" class="sr-only">Service</label>';
+    html += '<select id="sub-new-service" name="service" onchange="onSubServiceChange()">' + serviceOpts + '</select>';
+    // Plan slot — replaced dynamically by onSubServiceChange (select for plans / input for API custom)
+    html += '<span id="sub-plan-slot"><label for="sub-new-plan" class="sr-only">Plan</label>';
+    html += '<select id="sub-new-plan" name="plan" aria-describedby="sub-new-hint" disabled>';
+    html += '<option value="" disabled selected hidden>Select plan…</option></select></span>';
+    html += '<label for="sub-new-paid" class="sr-only">Amount in dollars</label>';
+    html += '<input id="sub-new-paid" name="paid" type="number" min="0" step="0.01" placeholder="$/mo" oninput="updateAddButtonState()" />';
+    html += '<label for="sub-new-from" class="sr-only">Start date</label>';
+    html += '<input id="sub-new-from" name="from" type="date" title="Start date of this billing period" />';
+    html += '<button id="sub-add-btn" type="submit" disabled>+ Add subscription</button>';
+    html += '<div id="sub-new-hint" class="sub-hint-line"></div>';
+    html += '</form>';
     html += '</div>';
 
     // ── Daily cost chart ───────────────────────────────────────
