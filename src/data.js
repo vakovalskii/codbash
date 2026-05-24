@@ -834,6 +834,48 @@ function parseCodexSessionIndex(codexDir) {
   return titles;
 }
 
+// Codex Desktop (>= 0.133.0-alpha.1) ingests Claude Code sessions from
+// ~/.claude/projects/**/*.jsonl, rewrites them as Codex rollouts under
+// ~/.codex/sessions/YYYY/MM/DD/, and registers them in session_index.jsonl.
+// The imported rollout gets a fresh UUIDv7 (originator: "Codex Desktop",
+// turn_id: "external-import-turn-1"), while the original Claude file with its
+// own UUIDv4 session id stays in place. Codbash loads both — the user sees the
+// same conversation twice, once as a Claude session and once as a fake Codex
+// session.
+//
+// The ledger ~/.codex/external_agent_session_imports.json maps each import's
+// new thread id back to the source Claude path. We use it to skip imports
+// whose original file still exists on disk. If the source has been deleted,
+// we keep the Codex copy so no history is lost.
+function parseCodexExternalImports(codexDir) {
+  const importedThreadIds = new Set();
+  const ledgerFile = path.join(codexDir, 'external_agent_session_imports.json');
+  if (!fs.existsSync(ledgerFile)) return importedThreadIds;
+  let raw;
+  try {
+    raw = fs.readFileSync(ledgerFile, 'utf8');
+  } catch {
+    return importedThreadIds;
+  }
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    return importedThreadIds;
+  }
+  const records = Array.isArray(data && data.records) ? data.records : [];
+  for (const rec of records) {
+    if (!rec || typeof rec.imported_thread_id !== 'string') continue;
+    const src = typeof rec.source_path === 'string' ? rec.source_path : '';
+    // Only skip the Codex copy when the original is still on disk — otherwise
+    // the imported rollout is the only surviving copy of the conversation.
+    if (src && fs.existsSync(src)) {
+      importedThreadIds.add(rec.imported_thread_id);
+    }
+  }
+  return importedThreadIds;
+}
+
 function scanOpenCodeSessions() {
   const sessions = [];
   if (!fs.existsSync(OPENCODE_DB)) return sessions;
@@ -2303,6 +2345,7 @@ function parseCodexSessionFile(sessionFile) {
 function scanCodexSessions() {
   const sessions = [];
   const codexTitles = parseCodexSessionIndex(CODEX_DIR);
+  const importedFromClaude = parseCodexExternalImports(CODEX_DIR);
   const codexHistory = path.join(CODEX_DIR, 'history.jsonl');
   if (fs.existsSync(codexHistory)) {
     const lines = readLines(codexHistory);
@@ -2312,6 +2355,7 @@ function scanCodexSessions() {
         // Codex uses session_id, ts (seconds), text
         const sid = d.session_id || d.sessionId || d.id;
         if (!sid) continue;
+        if (importedFromClaude.has(sid)) continue; // skip — original Claude file loaded separately
         const ts = d.ts ? d.ts * 1000 : (d.timestamp || Date.now());
         if (!sessions.find(s => s.id === sid)) {
           sessions.push({
@@ -2354,6 +2398,7 @@ function scanCodexSessions() {
         const uuidMatch = basename.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/);
         if (!uuidMatch) continue;
         const sid = uuidMatch[1];
+        if (importedFromClaude.has(sid)) continue; // skip — original Claude file loaded separately
         const summary = parseCodexSessionFile(f);
         if (!summary) continue;
 
@@ -2550,6 +2595,8 @@ let _codexHistoryMtime = 0;
 let _codexHistorySize = 0;
 let _codexIndexMtime = 0;
 let _codexIndexSize = 0;
+let _codexImportsLedgerMtime = 0;
+let _codexImportsLedgerSize = 0;
 let _codexSessionsDirMtimes = {}; // { dayDirPath: mtimeMs } — shallow leaf dirs under ~/.codex/sessions
 // Stashed result of the most recent _codexDayDirMtimes() walk during a rescan
 // check. Reused by _updateScanMarkers() to avoid a second filesystem walk
@@ -2622,6 +2669,17 @@ function _sessionsNeedRescan() {
       const st = fs.statSync(codexIndex);
       if (st.mtimeMs !== _codexIndexMtime || st.size !== _codexIndexSize) return true;
     }
+    // Codex Desktop's external-import ledger drives Claude-vs-Codex attribution.
+    // Watching it guarantees a rescan after a two-phase import (rollout/index
+    // written first, ledger appended a tick later) instead of waiting for an
+    // unrelated mtime change.
+    const codexLedger = path.join(CODEX_DIR, 'external_agent_session_imports.json');
+    if (fs.existsSync(codexLedger)) {
+      const st = fs.statSync(codexLedger);
+      if (st.mtimeMs !== _codexImportsLedgerMtime || st.size !== _codexImportsLedgerSize) return true;
+    } else if (_codexImportsLedgerMtime !== 0 || _codexImportsLedgerSize !== 0) {
+      return true;
+    }
     const dayMtimes = _codexDayDirMtimes();
     _codexDayDirMtimesPending = dayMtimes; // reuse in _updateScanMarkers
     const prevKeys = Object.keys(_codexSessionsDirMtimes);
@@ -2671,6 +2729,14 @@ function _updateScanMarkers() {
       _codexIndexSize = st.size;
     } else {
       _codexIndexMtime = 0; _codexIndexSize = 0;
+    }
+    const codexLedger = path.join(CODEX_DIR, 'external_agent_session_imports.json');
+    if (fs.existsSync(codexLedger)) {
+      const st = fs.statSync(codexLedger);
+      _codexImportsLedgerMtime = st.mtimeMs;
+      _codexImportsLedgerSize = st.size;
+    } else {
+      _codexImportsLedgerMtime = 0; _codexImportsLedgerSize = 0;
     }
     // Reuse the walk performed by _sessionsNeedRescan() when present;
     // otherwise (first call / direct invocation) walk now.
