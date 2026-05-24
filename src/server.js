@@ -1545,6 +1545,8 @@ async function syncLeaderboard() {
     token: profile.token, // for server-side GitHub verification
     version: pkg.version,
     integrity: integrity,
+    timezone: stats.timezone || '',
+    utcOffsetMinutes: stats.utcOffsetMinutes,
     stats: {
       today: { ...stats.today, hours: Math.min(stats.today.hours || 0, 24) },
       week: stats.daily ? stats.daily.slice(0, 7).reduce((acc, d) => ({ messages: acc.messages + d.messages, hours: acc.hours + d.hours, cost: acc.cost + d.cost }), { messages: 0, hours: 0, cost: 0 }) : { messages: 0, hours: 0, cost: 0 },
