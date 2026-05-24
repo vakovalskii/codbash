@@ -184,6 +184,7 @@ function renderHeatmap(container) {
     'claude-ext': '#60a5fa',
     codex: '#22d3ee',
     qwen: '#fbbf24',
+    pi: '#a78bfa',
     cursor: '#4a9eff',
     opencode: '#c084fc',
     kiro: '#fb923c',

@@ -63,7 +63,7 @@ codbash run [--port=N] [--no-browser]
 codbash search <query>
 codbash show <session-id>
 codbash handoff <id> [target] [--verbosity=full] [--out=file.md]
-codbash convert <id> claude|codex
+codbash convert <id> claude|codex|qwen
 codbash list [limit]
 codbash stats
 codbash export [file.tar.gz]
@@ -81,6 +81,8 @@ codbash stop
 ~/.claude/                              Claude Code sessions + PID tracking
 ~/.codex/                               Codex CLI sessions
 ~/.cursor/projects/*/agent-transcripts/ Cursor agent sessions
+~/.pi/agent/sessions/*/*.jsonl           Pi coding-agent sessions
+~/.omp/agent/sessions/*/*.jsonl          OhMyPi coding-agent sessions
 ~/.local/share/opencode/opencode.db     OpenCode (SQLite)
 ~/Library/Application Support/kiro-cli/ Kiro CLI (SQLite)
 <vscode-user-data>/workspaceStorage/    Copilot Chat (JSON/JSONL)
@@ -97,6 +99,7 @@ Zero dependencies. Everything runs on `localhost`.
 curl -fsSL https://claude.ai/install.sh | bash          # Claude Code
 npm i -g @openai/codex                                   # Codex CLI
 curl -fsSL https://cli.kiro.dev/install | bash           # Kiro CLI
+bun install -g @oh-my-pi/pi-coding-agent                  # OhMyPi / Pi
 curl -fsSL https://opencode.ai/install | bash            # OpenCode
 ```
 

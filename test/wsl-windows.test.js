@@ -51,8 +51,8 @@ test('buildWslUncPath and shortenHomePath normalize WSL-visible paths', () => {
 // is covered by the test below.
 test('detectWindowsWslHomes discovers only running distros with supported agent data', { skip: process.platform !== 'win32' && 'win32-only: uses backslash path joining' }, () => {
   const existing = new Set([
-    '\\\\wsl$\\Ubuntu-24.04\\home\\dius\\.codex',
-    '\\\\wsl$\\Debian\\home\\tester\\.cursor',
+    '\\\\wsl$\\Ubuntu-24.04\\home\\dius\\.pi',
+    '\\\\wsl$\\Debian\\home\\tester\\.omp',
   ]);
   const mockFs = { existsSync: (candidate) => existing.has(candidate) };
   const distros = ['Ubuntu-24.04', 'Debian', 'Stopped'];

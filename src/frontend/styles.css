@@ -490,6 +490,7 @@ body {
 .tool-chip.active-claude { background: rgba(96, 165, 250, 0.2); border-color: var(--accent-blue); color: var(--accent-blue); }
 .tool-chip.active-codex { background: rgba(34, 211, 238, 0.2); border-color: var(--accent-cyan); color: var(--accent-cyan); }
 .tool-chip.active-qwen { background: rgba(251, 191, 36, 0.2); border-color: #fbbf24; color: #fbbf24; }
+.tool-chip.active-pi { background: rgba(167, 139, 250, 0.2); border-color: #a78bfa; color: #a78bfa; }
 
 .stats { color: var(--text-muted); font-size: 13px; white-space: nowrap; }
 
@@ -658,6 +659,7 @@ body {
 .badge-claude { background: rgba(96, 165, 250, 0.15); color: var(--accent-blue); }
 .badge-codex { background: rgba(34, 211, 238, 0.15); color: var(--accent-cyan); }
 .badge-qwen { background: rgba(251, 191, 36, 0.15); color: #fbbf24; }
+.badge-pi { background: rgba(167, 139, 250, 0.15); color: #a78bfa; }
 
 [data-theme="light"] .badge { background: rgba(0,0,0,0.05); }
 
@@ -1487,6 +1489,14 @@ body {
     padding: 2px 8px;
     border-radius: 4px;
 }
+.tool-pi, .tool-ohmypi {
+    text-transform: none;
+}
+
+.tool-alias-badge {
+    margin-left: 3px;
+    opacity: 0.75;
+}
 
 .tool-claude {
     background: rgba(96, 165, 250, 0.15);
@@ -1501,6 +1511,11 @@ body {
 .tool-qwen {
     background: rgba(251, 191, 36, 0.15);
     color: #fbbf24;
+}
+
+.tool-pi, .tool-ohmypi {
+    background: rgba(167, 139, 250, 0.15);
+    color: #a78bfa;
 }
 
 .tool-opencode {
@@ -2446,7 +2461,7 @@ body {
     align-items: center;
     gap: 12px;
 }
-.lb-agent-row .tool-badge { min-width: 80px; text-align: center; }
+.lb-agent-row .tool-badge { min-width: 104px; text-align: center; }
 
 .lb-agent-bar {
     flex: 1;
@@ -2617,6 +2632,8 @@ body {
 
 .lb-global-agents { display: flex; gap: 4px; margin-top: 2px; }
 .lb-agent-mini { font-size: 10px; padding: 1px 5px; border-radius: 4px; background: rgba(99,102,241,0.1); color: var(--text-muted); }
+.lb-agent-mini.tool-pi,
+.lb-agent-mini.tool-ohmypi { background: rgba(167, 139, 250, 0.15); color: #a78bfa; }
 
 /* ── Cloud Sync ────────────────────────────────────────────── */
 .cloud-container { padding: 24px; max-width: 800px; }

@@ -33,3 +33,10 @@ test('Windows PowerShell launcher also uses WorkingDirectory', () => {
   assert.match(script, /'-NoExit','-NoProfile','-Command','claude --resume abc123 --dangerously-skip-permissions'/);
   assert.equal(script.includes('&&'), false);
 });
+
+test('Pi launch commands prefer pi with omp override fallback and quote resume targets', () => {
+  assert.equal(__test.buildAgentCommand('', 'pi', [], 'fresh'), 'pi');
+  assert.equal(__test.buildAgentCommand('pi-session-1', 'pi', [], 'resume'), "pi --resume 'pi-session-1'");
+  assert.equal(__test.buildAgentCommand('', 'pi', [], 'fresh', 'omp'), 'omp');
+  assert.equal(__test.buildAgentCommand('safe-session-id', 'pi', [], 'resume', 'omp', "/tmp/session file's.jsonl"), "omp --resume '/tmp/session file'\\''s.jsonl'");
+});

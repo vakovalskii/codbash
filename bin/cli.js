@@ -56,6 +56,7 @@ const TOOL_LABELS = {
   'claude-ext': { label: 'claude-ext', ansi: '\x1b[34mclaude-ext\x1b[0m' },
   codex: { label: 'codex', ansi: '\x1b[36mcodex\x1b[0m' },
   qwen: { label: 'qwen', ansi: '\x1b[33mqwen\x1b[0m' },
+  pi: { label: 'pi', ansi: '\x1b[95mpi\x1b[0m' },
   cursor: { label: 'cursor', ansi: '\x1b[35mcursor\x1b[0m' },
   opencode: { label: 'opencode', ansi: '\x1b[95mopencode\x1b[0m' },
   kiro: { label: 'kiro', ansi: '\x1b[91mkiro\x1b[0m' },
@@ -65,9 +66,19 @@ function getToolDisplay(tool) {
   return TOOL_LABELS[tool] || { label: tool || 'unknown', ansi: tool || 'unknown' };
 }
 
-function getResumeCommand(tool, sessionId) {
+function quoteShellArg(value) {
+  return "'" + String(value).replace(/'/g, "'\\''") + "'";
+}
+
+function getResumeCommand(session) {
+  const tool = session && session.tool;
+  const sessionId = session && session.id;
   if (tool === 'codex') return `codex resume ${sessionId}`;
   if (tool === 'qwen') return `qwen -r ${sessionId}`;
+  if (tool === 'pi') {
+    const target = session.resume_target || sessionId;
+    return `${session.agent_variant === 'ohmypi' ? 'omp' : 'pi'} --resume ${quoteShellArg(target)}`;
+  }
   if (tool === 'cursor') return 'cursor';
   return `claude --resume ${sessionId}`;
 }
@@ -76,6 +87,7 @@ const STATS_TOOL_ROWS = [
   { label: 'Claude sessions', match: (s) => s.tool === 'claude' || s.tool === 'claude-ext' },
   { label: 'Codex sessions', match: (s) => s.tool === 'codex' },
   { label: 'Qwen sessions', match: (s) => s.tool === 'qwen' },
+  { label: 'Pi/OhMyPi sessions', match: (s) => s.tool === 'pi' },
   { label: 'Cursor sessions', match: (s) => s.tool === 'cursor' },
   { label: 'OpenCode sessions', match: (s) => s.tool === 'opencode' },
   { label: 'Kiro sessions', match: (s) => s.tool === 'kiro' },
@@ -206,7 +218,7 @@ switch (command) {
       console.log('');
     }
 
-    console.log(`  Resume: \x1b[2m${getResumeCommand(session.tool, session.id)}\x1b[0m`);
+    console.log(`  Resume: \x1b[2m${getResumeCommand(session)}\x1b[0m`);
     console.log('');
     break;
   }

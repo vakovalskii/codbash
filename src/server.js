@@ -3,7 +3,8 @@ const http = require('http');
 const https = require('https');
 const { URL } = require('url');
 const { exec, execFile, execFileSync } = require('child_process');
-const { loadSessions, loadSessionDetail, deleteSession, getGitCommits, exportSessionMarkdown, getSessionPreview, searchFullText, getActiveSessions, getSessionReplay, getCostAnalytics, computeSessionCost, getProjectGitInfo, getLeaderboardStats } = require('./data');
+const dataApi = require('./data');
+const { loadSessions, loadSessionDetail, deleteSession, getGitCommits, exportSessionMarkdown, getSessionPreview, searchFullText, getActiveSessions, getSessionReplay, getCostAnalytics, computeSessionCost, getProjectGitInfo, getLeaderboardStats } = dataApi;
 const { detectTerminals, openInTerminal, focusTerminalByPid, isWSL } = require('./terminals');
 const { convertSession } = require('./convert');
 const { generateHandoff } = require('./handoff');
@@ -20,6 +21,16 @@ const fs = require('fs');
 const pathLib = require('path');
 const { repoRefreshManager } = require('./repo-refresh');
 const { handleRepoRefreshRoute } = require('./repo-refresh-routes');
+
+function isValidPiResumeTarget(sessionId, resumeTarget) {
+  if (typeof sessionId !== 'string' || !/^[A-Za-z0-9._-]{1,128}$/.test(sessionId)) return false;
+  if (typeof resumeTarget !== 'string' || !resumeTarget.endsWith('.jsonl')) return false;
+  if (/['`$\\\n\r\0]/.test(resumeTarget)) return false;
+  const resolvedTarget = pathLib.resolve(resumeTarget);
+  const found = dataApi.findSessionFile(sessionId);
+  if (!found || found.format !== 'pi' || !found.file) return false;
+  return pathLib.resolve(found.file) === resolvedTarget;
+}
 
 // ── Logging ──────────────────────────────────
 const LOG_VERBOSE = process.env.CODEDASH_LOG !== '0';
@@ -165,10 +176,13 @@ function startServer(host, port, openBrowser = true) {
         (async () => {
           try {
             const parsed = JSON.parse(body);
-            const { sessionId, tool, flags, project, terminal, mode, autoRegister } = parsed;
+            const { sessionId, resumeTarget, tool, flags, project, terminal, mode, autoRegister } = parsed;
             const fresh = mode === 'fresh';
-            if (!fresh && !/^[A-Za-z0-9._-]{1,128}$/.test(String(sessionId || ''))) {
-              throw new Error('invalid sessionId');
+            if (!fresh) {
+              const isSafeId = /^[A-Za-z0-9._-]{1,128}$/.test(String(sessionId || ''));
+              const hasResumeTarget = resumeTarget !== undefined && resumeTarget !== null && resumeTarget !== '';
+              const isSafePiTarget = tool === 'pi' && hasResumeTarget && isValidPiResumeTarget(sessionId, resumeTarget);
+              if (!isSafeId || (hasResumeTarget && !isSafePiTarget)) throw new Error('invalid sessionId');
             }
             if (fresh && !project) {
               throw new Error('project path required for fresh session');
@@ -181,15 +195,24 @@ function startServer(host, port, openBrowser = true) {
             if (project && !projectsApi.isSafeLaunchPath(project)) {
               throw new Error('invalid or unsafe project path');
             }
-            const resolvedTool = settingsApi.isKnownAgent(tool) ? tool : 'claude';
+            const detection = await agentsDetect.detectRealOS();
+            const knownTool = settingsApi.isKnownAgent(tool);
+            const detectedAgent = detection.agents.find(a => a.id === tool);
+            if (knownTool && !detectedAgent) {
+              throw new Error('agent not installed: ' + tool);
+            }
+            const resolvedTool = knownTool ? tool : 'claude';
             // Explicit allowlist for flags — element-level. Defense-in-depth in
             // case a future code path interpolates a flag string into a shell
             // command. Today only --dangerously-skip-permissions is allowed.
             const safeFlags = Array.isArray(flags)
               ? flags.filter(f => typeof f === 'string' && ALLOWED_LAUNCH_FLAGS.has(f))
               : [];
+            const launchCommand = resolvedTool === tool && detectedAgent && typeof detectedAgent.command === 'string'
+              ? detectedAgent.command
+              : undefined;
             log('LAUNCH', `mode=${fresh ? 'fresh' : 'resume'} session=${sessionId || '(none)'} tool=${resolvedTool} terminal=${terminal || 'default'} project=${project || '(none)'} flags=${safeFlags.join(',') || '(none)'}`);
-            openInTerminal(fresh ? '' : sessionId, resolvedTool, safeFlags, project || '', terminal || '', fresh ? 'fresh' : 'resume');
+            openInTerminal(fresh ? '' : sessionId, resolvedTool, safeFlags, project || '', terminal || '', fresh ? 'fresh' : 'resume', launchCommand, fresh ? '' : (resumeTarget || ''));
 
             // Auto-register: when a fresh launch fires for a path under $HOME
             // that is either a git repo or has been launched ≥2 times, add it

@@ -33,13 +33,13 @@
     'sessions', 'projects', 'timeline', 'activity', 'running',
     'analytics', 'starred', 'leaderboard', 'cloud',
     // Agents
-    'claude-only', 'codex-only', 'qwen-only', 'kiro-only', 'cursor-only',
+    'claude-only', 'codex-only', 'qwen-only', 'pi-original-only', 'ohmypi-only', 'kiro-only', 'cursor-only',
     'copilot-chat-only', 'copilot-only', 'opencode-only', 'kilo-only',
     // Tools (Settings is intentionally absent — always visible)
     'export-import', 'changelog',
     // Install agents
-    'install:claude', 'install:codex', 'install:qwen', 'install:kiro',
-    'install:opencode', 'install:kilo', 'install:copilot'
+    'install:claude', 'install:codex', 'install:qwen', 'install:pi', 'install:ohmypi',
+    'install:kiro', 'install:opencode', 'install:kilo', 'install:copilot'
   ];
 
   var DEFAULT_COLLAPSED = {

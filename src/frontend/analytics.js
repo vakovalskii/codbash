@@ -95,6 +95,12 @@ async function renderAnalytics(container) {
           ? '<span class="coverage-est">Qwen tokens only</span>'
           : '<span class="coverage-ok">Qwen Code \u2713</span>');
       }
+      if (byAgent['pi'] && byAgent['pi'].sessions > 0) {
+        var piLabel = getPiAggregateLabel();
+        coverageparts.push(byAgent['pi'].unavailable
+          ? '<span class="coverage-est">' + escHtml(piLabel) + ' tokens only</span>'
+          : '<span class="coverage-ok">' + escHtml(piLabel) + ' ✓</span>');
+      }
       if (byAgent['opencode'] && byAgent['opencode'].sessions > 0)
         coverageparts.push(byAgent['opencode'].estimated
           ? '<span class="coverage-est">OpenCode ~est.</span>'
@@ -120,7 +126,7 @@ async function renderAnalytics(container) {
       agentEntriesOv.forEach(function(entry) {
         var name = entry[0]; var info = entry[1];
         var pct = maxAgentCostOv > 0 ? (info.cost / maxAgentCostOv * 100) : 0;
-        var label = getToolLabel(name);
+        var label = name === 'pi' ? getPiAggregateLabel() : getToolLabel(name);
         var estMark = info.unavailable
           ? ' <span style="font-size:10px;opacity:0.6">tokens only</span>'
           : (info.estimated ? ' <span style="font-size:10px;opacity:0.6">~est.</span>' : '');
