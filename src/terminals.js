@@ -43,6 +43,10 @@ function wslDistro() {
 // use IDs that fit this regex (UUIDs, slugs, integers).
 const SAFE_SESSION_ID = /^[A-Za-z0-9._-]{1,128}$/;
 
+function quotePosixArg(value) {
+  return "'" + String(value).replace(/'/g, "'\\''") + "'";
+}
+
 function assertSafeSessionId(sessionId) {
   if (!SAFE_SESSION_ID.test(String(sessionId || ''))) {
     throw new Error(`Invalid session id: ${JSON.stringify(sessionId)}`);
@@ -192,9 +196,10 @@ function termLog(tag, msg) {
   console.log(`  ${color}${ts} [${tag}]\x1b[0m ${msg}`);
 }
 
-function buildAgentCommand(sessionId, tool, flags, mode) {
+function buildAgentCommand(sessionId, tool, flags, mode, commandOverride, resumeTarget) {
   const skipPerms = (flags || []).includes('skip-permissions');
   const fresh = mode === 'fresh';
+  const piCommand = commandOverride === 'omp' ? 'omp' : 'pi';
 
   if (fresh) {
     // Start a brand new session in projectDir (no --resume). We map known
@@ -203,6 +208,7 @@ function buildAgentCommand(sessionId, tool, flags, mode) {
     switch (tool) {
       case 'codex': return 'codex';
       case 'qwen': return 'qwen';
+      case 'pi': return piCommand;
       case 'kilo': return 'kilo';
       case 'kiro': return 'kiro-cli';
       case 'opencode': return 'opencode';
@@ -217,6 +223,9 @@ function buildAgentCommand(sessionId, tool, flags, mode) {
   if (tool === 'codex') return `codex resume ${sessionId}`;
   if (tool === 'qwen') return `qwen -r ${sessionId}`;
   if (tool === 'kilo') return `kilo resume ${sessionId}`;
+  if (tool === 'pi') return piCommand === 'omp'
+    ? `omp --resume ${quotePosixArg(resumeTarget || sessionId)}`
+    : `pi --session ${quotePosixArg(resumeTarget || sessionId)}`;
   return `claude --resume ${sessionId}` + (skipPerms ? ' --dangerously-skip-permissions' : '');
 }
 
@@ -253,8 +262,8 @@ function buildWindowsTerminalArgs(cmd, projectDir) {
   return args;
 }
 
-function openInTerminal(sessionId, tool, flags, projectDir, terminalId, mode) {
-  const cmd = buildAgentCommand(sessionId, tool, flags, mode);
+function openInTerminal(sessionId, tool, flags, projectDir, terminalId, mode, commandOverride, resumeTarget) {
+  const cmd = buildAgentCommand(sessionId, tool, flags, mode, commandOverride, resumeTarget);
   const fullCmd = buildPosixShellCommand(cmd, projectDir);
   const escapedCmd = fullCmd.replace(/"/g, '\\"');
   termLog('TERM', `openInTerminal: terminal=${terminalId || 'default'} tool=${tool} cmd="${fullCmd}"`);
@@ -1054,6 +1063,7 @@ module.exports = {
   focusTerminalByPid,
   isWSL,
   __test: {
+    quotePosixArg,
     buildAgentCommand,
     buildPosixShellCommand,
     buildWindowsCmdStartArgs,

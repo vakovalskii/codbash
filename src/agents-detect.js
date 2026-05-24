@@ -33,6 +33,7 @@ const AGENT_DEFS = Object.freeze([
   { id: 'codex',        label: 'Codex',        bin: 'codex' },
   { id: 'cursor',       label: 'Cursor',       bin: 'cursor-agent', appBundle: 'Cursor.app' },
   { id: 'qwen',         label: 'Qwen Code',    bin: 'qwen' },
+  { id: 'pi',           label: 'OhMyPi',        customCheck: 'piPath' },
   { id: 'kilo',         label: 'Kilo',         bin: 'kilo' },
   { id: 'kiro',         label: 'Kiro CLI',     bin: 'kiro-cli' },
   { id: 'opencode',     label: 'OpenCode',     bin: 'opencode' },
@@ -75,9 +76,21 @@ function vscodeCopilotChatExtension() {
   return null;
 }
 
+function piPath(ctx) {
+  const which = ctx && ctx.which ? ctx.which : realWhich;
+  const pi = which('pi');
+  const omp = which('omp');
+  if (!pi && !omp) return null;
+  const commands = [];
+  if (pi) commands.push('pi');
+  if (omp) commands.push('omp');
+  return { ok: true, detectedVia: 'path', binPath: pi || omp, command: pi ? 'pi' : 'omp', commands };
+}
+
 var CUSTOM_CHECKS = {
   ghCopilotExtension: ghCopilotExtension,
   vscodeCopilotChatExtension: vscodeCopilotChatExtension,
+  piPath: piPath,
 };
 
 function realWhich(bin) {
@@ -128,6 +141,8 @@ async function detect(ctx) {
   for (const def of AGENT_DEFS) {
     let detectedVia = null;
     let binPath;
+    let detectedCommand;
+    let detectedCommands;
     if (def.bin) {
       const found = which(def.bin);
       if (found) {
@@ -142,14 +157,19 @@ async function detect(ctx) {
     }
     if (!detectedVia && def.customCheck) {
       const fn = customChecks[def.customCheck];
-      const result = typeof fn === 'function' ? fn() : null;
+      const result = typeof fn === 'function' ? fn({ which, platform, appBundleExists }) : null;
       if (result && result.ok) {
         detectedVia = result.detectedVia || 'custom';
+        if (result.binPath) binPath = result.binPath;
+        if (result.command) detectedCommand = result.command;
+        if (Array.isArray(result.commands) && result.commands.length) detectedCommands = result.commands.slice();
       }
     }
     if (detectedVia) {
       const entry = { id: def.id, label: def.label, detectedVia };
       if (binPath) entry.binPath = binPath;
+      if (detectedCommand) entry.command = detectedCommand;
+      if (detectedCommands) entry.commands = detectedCommands;
       out.push(entry);
     }
   }

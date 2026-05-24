@@ -94,6 +94,8 @@ function detectWindowsWslHomes({
         path.join(uncHome, '.codex'),
         path.join(uncHome, '.cursor'),
         path.join(uncHome, '.local', 'share', 'opencode'),
+        path.join(uncHome, '.pi'),
+        path.join(uncHome, '.omp'),
       ].some((candidate) => fsImpl.existsSync(candidate));
       if (hasRelevantAgentData) homes.push(uncHome);
     } catch {}
@@ -155,6 +157,12 @@ const CLAUDE_DIR = path.join(ALL_HOMES[0], '.claude');
 const CODEX_DIR = path.join(ALL_HOMES[0], '.codex');
 const QWEN_DIR = path.join(ALL_HOMES[0], '.qwen');
 const OPENCODE_DB = path.join(ALL_HOMES[0], '.local', 'share', 'opencode', 'opencode.db');
+const PI_CONFIG_DIR_NAME = process.env.PI_CONFIG_DIR || '.pi';
+const OMP_CONFIG_DIR_NAME = process.env.OMP_CONFIG_DIR || '.omp';
+const PI_AGENT_DIR = process.env.PI_CODING_AGENT_DIR || path.join(ALL_HOMES[0], PI_CONFIG_DIR_NAME, 'agent');
+const OMP_AGENT_DIR = process.env.OMP_CODING_AGENT_DIR || path.join(ALL_HOMES[0], OMP_CONFIG_DIR_NAME, 'agent');
+const PI_SESSIONS_DIR = path.join(PI_AGENT_DIR, 'sessions');
+const OMP_SESSIONS_DIR = path.join(OMP_AGENT_DIR, 'sessions');
 const KIRO_DB = path.join(ALL_HOMES[0], 'Library', 'Application Support', 'kiro-cli', 'data.sqlite3');
 const COPILOT_SESSION_DIR = path.join(ALL_HOMES[0], '.copilot', 'session-state');
 const COPILOT_JB_DIR = path.join(ALL_HOMES[0], '.copilot', 'jb');
@@ -213,6 +221,8 @@ const EXTRA_CLAUDE_DIRS = [
 ];
 const EXTRA_CODEX_DIRS = ALL_HOMES.slice(1).map(h => path.join(h, '.codex')).filter(d => fs.existsSync(d));
 const EXTRA_QWEN_DIRS = ALL_HOMES.slice(1).map(h => path.join(h, '.qwen')).filter(d => fs.existsSync(d));
+const EXTRA_PI_AGENT_DIRS = process.env.PI_CODING_AGENT_DIR ? [] : ALL_HOMES.slice(1).map(h => path.join(h, '.pi', 'agent')).filter(d => fs.existsSync(d));
+const EXTRA_OMP_AGENT_DIRS = process.env.OMP_CODING_AGENT_DIR ? [] : ALL_HOMES.slice(1).map(h => path.join(h, '.omp', 'agent')).filter(d => fs.existsSync(d));
 const EXTRA_CURSOR_DIRS = ALL_HOMES.slice(1).map(h => path.join(h, '.cursor')).filter(d => fs.existsSync(d));
 
 // Extra OpenCode/Kiro DBs on Windows side
@@ -225,6 +235,8 @@ if (IS_WSL) {
   if (EXTRA_CLAUDE_DIRS.length) console.log('  \x1b[36m[WSL]\x1b[0m Windows-side Claude dirs:', EXTRA_CLAUDE_DIRS.join(', '));
   if (EXTRA_CODEX_DIRS.length) console.log('  \x1b[36m[WSL]\x1b[0m Windows-side Codex dirs:', EXTRA_CODEX_DIRS.join(', '));
   if (EXTRA_QWEN_DIRS.length) console.log('  \x1b[36m[WSL]\x1b[0m Windows-side Qwen dirs:', EXTRA_QWEN_DIRS.join(', '));
+  if (EXTRA_PI_AGENT_DIRS.length) console.log('  \x1b[36m[WSL]\x1b[0m Windows-side Pi dirs:', EXTRA_PI_AGENT_DIRS.join(', '));
+  if (EXTRA_OMP_AGENT_DIRS.length) console.log('  \x1b[36m[WSL]\x1b[0m Windows-side OhMyPi dirs:', EXTRA_OMP_AGENT_DIRS.join(', '));
   if (EXTRA_CURSOR_DIRS.length) console.log('  \x1b[36m[WSL]\x1b[0m Windows-side Cursor dirs:', EXTRA_CURSOR_DIRS.join(', '));
 }
 
@@ -627,6 +639,224 @@ function scanQwenSessions(qwenDir) {
       skills: [],
       _session_file: filePath,
       _qwen_dir: qwenDir,
+    });
+  }
+
+  return sessions;
+}
+
+function listPiSessionFiles(agentDir) {
+  const files = [];
+  const sessionsDir = path.join(agentDir, 'sessions');
+  if (!fs.existsSync(sessionsDir)) return files;
+
+  function walk(dir, depth) {
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isFile() && entry.name.endsWith('.jsonl')) {
+        files.push(fullPath);
+      } else if (entry.isDirectory() && depth < 3) {
+        walk(fullPath, depth + 1);
+      }
+    }
+  }
+
+  walk(sessionsDir, 0);
+  return files;
+}
+
+function extractPiText(content) {
+  if (typeof content === 'string') return content.trim();
+  if (!Array.isArray(content)) return '';
+
+  const lines = [];
+  for (const part of content) {
+    if (!part || typeof part !== 'object') continue;
+    if (typeof part.text === 'string' && part.text.trim()) {
+      lines.push(part.text.trim());
+    } else if (typeof part.content === 'string' && part.content.trim()) {
+      lines.push(part.content.trim());
+    }
+  }
+
+  return lines.join('\n').trim();
+}
+
+function normalizePiUsage(usage) {
+  if (!usage || typeof usage !== 'object') return null;
+  const inputTokens = Number(usage.input) || 0;
+  const outputTokens = Number(usage.output) || 0;
+  const cacheReadTokens = Number(usage.cacheRead) || 0;
+  const cacheCreateTokens = Number(usage.cacheWrite) || 0;
+  const totalTokens = inputTokens + outputTokens + cacheReadTokens + cacheCreateTokens;
+  const rawCost = usage.cost && typeof usage.cost === 'object' ? usage.cost.total : usage.cost;
+  const totalCost = Number(rawCost);
+  if (totalTokens === 0 && !Number.isFinite(totalCost)) return null;
+
+  return {
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheCreateTokens,
+    totalTokens,
+    cost: Number.isFinite(totalCost) ? totalCost : null,
+  };
+}
+
+function parsePiSessionFile(sessionFile) {
+  if (!fs.existsSync(sessionFile)) return null;
+
+  let stat;
+  let lines;
+  try {
+    stat = fs.statSync(sessionFile);
+    lines = readLines(sessionFile);
+  } catch {
+    return null;
+  }
+  if (lines.length === 0) return null;
+
+  let header;
+  try { header = JSON.parse(lines[0]); } catch { return null; }
+  if (!header || header.type !== 'session' || !header.id) return null;
+
+  let sessionId = String(header.id);
+  let projectPath = typeof header.cwd === 'string' ? header.cwd : '';
+  let title = typeof header.title === 'string' ? header.title.trim().slice(0, 200) : '';
+  let msgCount = 0;
+  let userMsgCount = 0;
+  let firstMsg = '';
+  let firstTs = parseTimestamp(header.timestamp);
+  let lastTs = firstTs;
+  if (!Number.isFinite(firstTs)) firstTs = stat.mtimeMs;
+  if (!Number.isFinite(lastTs)) lastTs = stat.mtimeMs;
+  let model = '';
+  let hasUsage = false;
+  let explicitCost = false;
+
+  for (let i = 1; i < lines.length; i++) {
+    try {
+      const entry = JSON.parse(lines[i]);
+      const ts = parseTimestamp(entry.timestamp || entry.ts);
+      if (Number.isFinite(ts)) {
+        if (ts < firstTs) firstTs = ts;
+        if (ts > lastTs) lastTs = ts;
+      }
+
+      if (!projectPath && typeof entry.cwd === 'string') projectPath = entry.cwd;
+      const msg = entry.message || {};
+      if (!model && typeof entry.model === 'string') model = entry.model;
+      if (!model && typeof msg.model === 'string') model = msg.model;
+
+      if (entry.type !== 'message') continue;
+      const role = msg.role || entry.role;
+      if (role !== 'user' && role !== 'assistant') continue;
+      const text = extractPiText(msg.content !== undefined ? msg.content : entry.content);
+      if (!text || isSystemMessage(text)) continue;
+
+      msgCount++;
+      if (role === 'user') userMsgCount++;
+      if (!firstMsg && role === 'user') firstMsg = text.slice(0, 200);
+
+      const usage = normalizePiUsage(msg.usage || entry.usage);
+      if (usage) {
+        hasUsage = true;
+        if (usage.cost !== null) explicitCost = true;
+      }
+    } catch {}
+  }
+
+  return {
+    sessionId,
+    projectPath,
+    title,
+    msgCount,
+    userMsgCount,
+    firstMsg,
+    firstTs,
+    lastTs,
+    fileSize: stat.size,
+    model,
+    hasUsage,
+    explicitCost,
+  };
+}
+
+function piResumeTarget(sessionFile) {
+  if (typeof sessionFile === 'string' && sessionFile) return sessionFile;
+  return '';
+}
+
+function loadPiDetail(sessionId, filePath, options) {
+  options = options || {};
+  const maxMessages = options.maxMessages || 0;
+  const messages = [];
+  if (!filePath || !fs.existsSync(filePath)) return { messages };
+
+  let lines;
+  try { lines = readLines(filePath); } catch { return { messages }; }
+
+  for (let i = 1; i < lines.length; i++) {
+    if (maxMessages && messages.length >= maxMessages) break;
+    try {
+      const entry = JSON.parse(lines[i]);
+      if (entry.type !== 'message') continue;
+      const raw = entry.message || {};
+      const role = raw.role || entry.role;
+      if (role !== 'user' && role !== 'assistant') continue;
+      const content = extractPiText(raw.content !== undefined ? raw.content : entry.content);
+      if (!content || isSystemMessage(content)) continue;
+
+      const msg = {
+        role,
+        content: content.slice(0, 2000),
+        uuid: entry.uuid || raw.id || '',
+        timestamp: entry.timestamp || raw.timestamp || '',
+        model: role === 'assistant' ? (raw.model || entry.model || '') : '',
+      };
+      const usage = normalizePiUsage(raw.usage || entry.usage);
+      if (usage) msg.tokens = usage;
+      messages.push(msg);
+    } catch {}
+  }
+
+  return { messages };
+}
+
+function scanPiSessions(agentDir, variant) {
+  const sessions = [];
+  const files = listPiSessionFiles(agentDir);
+
+  for (const filePath of files) {
+    const summary = parsePiSessionFile(filePath);
+    if (!summary || !summary.sessionId) continue;
+
+    const projectPath = summary.projectPath || '';
+    sessions.push({
+      id: summary.sessionId,
+      tool: 'pi',
+      project: projectPath,
+      project_short: projectPath ? projectPath.replace(os.homedir(), '~') : '',
+      session_name: summary.title || '',
+      first_ts: summary.firstTs,
+      last_ts: summary.lastTs,
+      messages: summary.msgCount,
+      first_message: summary.firstMsg || '',
+      has_detail: true,
+      file_size: summary.fileSize,
+      detail_messages: summary.msgCount,
+      user_messages: summary.userMsgCount || 0,
+      model: summary.model || '',
+      mcp_servers: [],
+      skills: [],
+      _session_file: filePath,
+      _pi_agent_dir: agentDir,
+      agent_variant: variant || 'pi',
+      _has_usage: summary.hasUsage,
+      _has_explicit_cost: summary.explicitCost,
+      resume_target: piResumeTarget(filePath),
     });
   }
 
@@ -2555,6 +2785,37 @@ let _codexSessionsDirMtimes = {}; // { dayDirPath: mtimeMs } — shallow leaf di
 // check. Reused by _updateScanMarkers() to avoid a second filesystem walk
 // (which would race against the first and yield inconsistent snapshots).
 let _codexDayDirMtimesPending = null;
+let _ompSessionDirMtimes = {};
+let _ompSessionDirMtimesPending = null;
+
+function _piSessionDirMtimes(agentDirs) {
+  const out = {};
+  for (const agentDir of agentDirs) {
+    const root = path.join(agentDir, 'sessions');
+    if (!fs.existsSync(root)) continue;
+    function walk(dir, depth) {
+      let entries;
+      try {
+        const st = fs.statSync(dir);
+        out[dir] = st.mtimeMs;
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch { return; }
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isFile() && entry.name.endsWith('.jsonl')) {
+          try {
+            const st = fs.statSync(fullPath);
+            out[fullPath] = st.mtimeMs + ':' + st.size;
+          } catch {}
+        } else if (entry.isDirectory() && depth < 3) {
+          walk(fullPath, depth + 1);
+        }
+      }
+    }
+    walk(root, 0);
+  }
+  return out;
+}
 
 // Collect mtimes of YYYY/MM/DD leaf dirs under ~/.codex/sessions.
 // Returns { [dayDirPath]: mtimeMs } — fingerprint used for cache invalidation.
@@ -2630,6 +2891,14 @@ function _sessionsNeedRescan() {
     for (const k of curKeys) {
       if (dayMtimes[k] !== _codexSessionsDirMtimes[k]) return true;
     }
+    const piDirMtimes = _piSessionDirMtimes([PI_AGENT_DIR, OMP_AGENT_DIR].concat(EXTRA_PI_AGENT_DIRS, EXTRA_OMP_AGENT_DIRS));
+    _ompSessionDirMtimesPending = piDirMtimes;
+    const prevPiKeys = Object.keys(_ompSessionDirMtimes);
+    const curPiKeys = Object.keys(piDirMtimes);
+    if (prevPiKeys.length !== curPiKeys.length) return true;
+    for (const k of curPiKeys) {
+      if (piDirMtimes[k] !== _ompSessionDirMtimes[k]) return true;
+    }
   } catch {}
   return false;
 }
@@ -2676,6 +2945,8 @@ function _updateScanMarkers() {
     // otherwise (first call / direct invocation) walk now.
     _codexSessionsDirMtimes = _codexDayDirMtimesPending || _codexDayDirMtimes();
     _codexDayDirMtimesPending = null;
+    _ompSessionDirMtimes = _ompSessionDirMtimesPending || _piSessionDirMtimes([PI_AGENT_DIR, OMP_AGENT_DIR].concat(EXTRA_PI_AGENT_DIRS, EXTRA_OMP_AGENT_DIRS));
+    _ompSessionDirMtimesPending = null;
   } catch {}
 }
 
@@ -2813,8 +3084,8 @@ function _loadCursorVscdbInBackground() {
 function loadSessions() {
   const now = Date.now();
   if (_sessionsCache) {
-    // Hot cache: return immediately if within TTL and no file changes
-    if ((now - _sessionsCacheTs) < SESSIONS_CACHE_TTL) return _sessionsCache;
+    // Hot cache: return immediately only when the tracked files have not changed.
+    if ((now - _sessionsCacheTs) < SESSIONS_CACHE_TTL && !_sessionsNeedRescan()) return _sessionsCache;
     // Extended cache: even after TTL, only rescan if files actually changed
     if (!_sessionsNeedRescan()) {
       _sessionsCacheTs = now; // extend TTL
@@ -2875,6 +3146,26 @@ function loadSessions() {
       const qwenSessions = scanQwenSessions(QWEN_DIR);
       for (const qs of qwenSessions) {
         sessions[qs.id] = qs;
+      }
+    } catch {}
+  }
+
+  // Load Pi sessions
+  if (fs.existsSync(PI_SESSIONS_DIR)) {
+    try {
+      const piSessions = scanPiSessions(PI_AGENT_DIR, 'pi');
+      for (const ps of piSessions) {
+        sessions[ps.id] = ps;
+      }
+    } catch {}
+  }
+
+  // Load OhMyPi sessions
+  if (fs.existsSync(OMP_SESSIONS_DIR)) {
+    try {
+      const ompSessions = scanPiSessions(OMP_AGENT_DIR, 'ohmypi');
+      for (const ps of ompSessions) {
+        sessions[ps.id] = ps;
       }
     } catch {}
   }
@@ -3004,6 +3295,24 @@ function loadSessions() {
       const qwenSessions = scanQwenSessions(extraQwenDir);
       for (const qs of qwenSessions) {
         sessions[qs.id] = qs;
+      }
+    } catch {}
+  }
+
+  for (const extraPiDir of EXTRA_PI_AGENT_DIRS) {
+    try {
+      const piSessions = scanPiSessions(extraPiDir, 'pi');
+      for (const ps of piSessions) {
+        sessions[ps.id] = ps;
+      }
+    } catch {}
+  }
+
+  for (const extraOmpDir of EXTRA_OMP_AGENT_DIRS) {
+    try {
+      const ompSessions = scanPiSessions(extraOmpDir, 'ohmypi');
+      for (const ps of ompSessions) {
+        sessions[ps.id] = ps;
       }
     } catch {}
   }
@@ -3143,6 +3452,11 @@ function loadSessionDetail(sessionId, project) {
   // Qwen
   if (found.format === 'qwen') {
     return loadQwenDetail(sessionId, found.file, { maxMessages: 200 });
+  }
+
+  // OhMyPi
+  if (found.format === 'pi') {
+    return loadPiDetail(sessionId, found.file, { maxMessages: 200 });
   }
 
   // Kiro uses SQLite
@@ -3383,6 +3697,7 @@ function exportSessionMarkdown(sessionId, project) {
       found.format === 'kiro' ? loadKiroDetail(sessionId) :
       found.format === 'kilo' ? loadKiloCliDetail(sessionId) :
       found.format === 'qwen' ? loadQwenDetail(sessionId, found.file) :
+      found.format === 'pi' ? loadPiDetail(sessionId, found.file) :
       null;
     if (detail && detail.messages && detail.messages.length > 0) {
       const parts = [`# Session ${sessionId}\n\n**Project:** ${project || '(none)'}\n`];
@@ -3495,6 +3810,16 @@ function _buildSessionFileIndex() {
     } catch {}
   }
 
+  // Index Pi / OhMyPi session files
+  for (const agentDir of [PI_AGENT_DIR, OMP_AGENT_DIR].concat(EXTRA_PI_AGENT_DIRS, EXTRA_OMP_AGENT_DIRS)) {
+    const files = listPiSessionFiles(agentDir);
+    for (const filePath of files) {
+      const summary = parsePiSessionFile(filePath);
+      if (summary && summary.sessionId && !_sessionFileIndex[summary.sessionId]) {
+        _sessionFileIndex[summary.sessionId] = { file: filePath, format: 'pi' };
+      }
+    }
+  }
   // Index Copilot chat session files
   if (fs.existsSync(VSCODE_WORKSPACE_STORAGE)) {
     try {
@@ -4000,6 +4325,13 @@ function getSessionPreview(sessionId, project, limit) {
     });
   }
 
+  if (found.format === 'pi') {
+    const detail = loadPiDetail(sessionId, found.file, { maxMessages: limit });
+    return detail.messages.map(function(m) {
+      return { role: m.role, content: m.content.slice(0, 300) };
+    });
+  }
+
   // Kiro: use loadKiroDetail and slice
   if (found.format === 'kiro') {
     var detail = loadKiroDetail(sessionId);
@@ -4146,6 +4478,13 @@ function buildSearchIndex(sessions) {
             texts.push({ role: msg.role, content: msg.content.slice(0, 500) });
           }
         }
+      } else if (found.format === 'pi') {
+        const detail = loadPiDetail(s.id, found.file);
+        for (const msg of detail.messages) {
+          if (msg.content && !isSystemMessage(msg.content)) {
+            texts.push({ role: msg.role, content: msg.content.slice(0, 500) });
+          }
+        }
       } else {
         const lines = readLines(found.file);
 
@@ -4286,6 +4625,19 @@ function getSessionReplay(sessionId, project) {
           content: msg.content.slice(0, 3000),
           timestamp: 0,
           ms: 0,
+        });
+      }
+    }
+  } else if (found.format === 'pi') {
+    const detail = loadPiDetail(sessionId, found.file);
+    for (const msg of detail.messages) {
+      if (msg.content && !isSystemMessage(msg.content)) {
+        const ms = msg.timestamp ? new Date(msg.timestamp).getTime() : 0;
+        messages.push({
+          role: msg.role,
+          content: msg.content.slice(0, 3000),
+          timestamp: msg.timestamp || '',
+          ms: Number.isFinite(ms) ? ms : 0,
         });
       }
     }
@@ -4604,6 +4956,66 @@ function computeSessionCost(sessionId, project) {
       estimated: false,
       unavailable,
     };
+  }
+
+  if (found.format === 'pi') {
+    try {
+      const lines = readLines(found.file);
+      for (let i = 1; i < lines.length; i++) {
+        try {
+          const entry = JSON.parse(lines[i]);
+          if (entry.type !== 'message') continue;
+          const msg = entry.message || {};
+          const role = msg.role || entry.role;
+          if (role !== 'assistant') continue;
+          if (!model && typeof msg.model === 'string') model = msg.model;
+          if (!model && typeof entry.model === 'string') model = entry.model;
+
+          const usage = normalizePiUsage(msg.usage || entry.usage);
+          if (!usage) continue;
+          totalInput += usage.inputTokens;
+          totalOutput += usage.outputTokens;
+          totalCacheRead += usage.cacheReadTokens;
+          totalCacheCreate += usage.cacheCreateTokens;
+
+          if (usage.cost !== null) {
+            totalCost += usage.cost;
+          } else {
+            const pricing = findModelPricing(msg.model || entry.model || model || '');
+            if (pricing) {
+              totalCost += usage.inputTokens * pricing.input
+                       + usage.cacheCreateTokens * pricing.cache_create
+                       + usage.cacheReadTokens * pricing.cache_read
+                       + usage.outputTokens * pricing.output;
+            } else if (usage.totalTokens > 0) {
+              unavailable = true;
+            }
+          }
+
+          const contextThisTurn = usage.inputTokens + usage.cacheCreateTokens + usage.cacheReadTokens;
+          if (contextThisTurn > 0) {
+            contextPctSum += (contextThisTurn / CONTEXT_WINDOW) * 100;
+            contextTurnCount++;
+          }
+        } catch {}
+      }
+    } catch {}
+
+    const result = {
+      cost: totalCost,
+      inputTokens: totalInput,
+      outputTokens: totalOutput,
+      cacheReadTokens: totalCacheRead,
+      cacheCreateTokens: totalCacheCreate,
+      contextPctSum,
+      contextTurnCount,
+      model,
+      estimated: false,
+      unavailable,
+    };
+    if (cacheKey) _costDiskCache[cacheKey] = result;
+    _costMemCache[sessionId] = result;
+    return result;
   }
 
   try {
@@ -4982,8 +5394,10 @@ function _computeCostAnalytics(sessions) {
 function extractSessionIdFromCommand(cmd, tool) {
   if (!cmd || !tool) return '';
 
+  const safePiId = '[A-Za-z0-9._:-]{1,128}';
   const patternsByTool = {
     qwen: [/(?:^|\s)(?:-r|--resume)\s+([0-9a-f-]{36})(?:\s|$)/i, /(?:^|\s)--session-id\s+([0-9a-f-]{36})(?:\s|$)/i],
+    pi: [new RegExp('(?:^|\\s)(?:--resume|--session)\\s+(' + safePiId + ')(?:\\s|$)', 'i')],
     codex: [/(?:^|\s)resume\s+([0-9a-f-]{36})(?:\s|$)/i],
     claude: [/(?:^|\s)--resume\s+([0-9a-f-]{36})(?:\s|$)/i],
   };
@@ -4995,6 +5409,27 @@ function extractSessionIdFromCommand(cmd, tool) {
   }
 
   return '';
+}
+
+function decodeShellToken(token) {
+  if (!token) return '';
+  if ((token[0] === "'" && token[token.length - 1] === "'") || (token[0] === '"' && token[token.length - 1] === '"')) {
+    const body = token.slice(1, -1);
+    if (token[0] === "'") return body.replace(/'\\''/g, "'");
+    try { return JSON.parse(token); } catch { return body; }
+  }
+  return token;
+}
+
+function extractPiResumeTargetFromCommand(cmd) {
+  const match = String(cmd || '').match(/(?:^|\s)(?:--resume|--session)\s+((?:'[^']*(?:'\\''[^']*)*')|(?:"(?:\\.|[^"])*")|\S+)/);
+  return match ? decodeShellToken(match[1]) : '';
+}
+
+function findPiSessionByResumeTarget(resumeTarget, allSessions) {
+  if (!resumeTarget) return null;
+  const resolvedTarget = path.resolve(resumeTarget);
+  return (allSessions || []).find(s => s.tool === 'pi' && s.resume_target && path.resolve(s.resume_target) === resolvedTarget) || null;
 }
 
 function findQwenSessionByPid(pid, cwd, allSessions) {
@@ -5057,6 +5492,7 @@ function getActiveSessions() {
     { pattern: 'claude', tool: 'claude', match: /\/claude\s|^claude\s|\bclaude\b/ },
     { pattern: 'codex', tool: 'codex', match: /\/codex\s|^codex\s|codex app-server|\bcodex\b/ },
     { pattern: 'qwen', tool: 'qwen', match: /(?:^|[\/\s])qwen(?:\s|$)/ },
+    { pattern: 'omp', tool: 'pi', match: /(?:^|[\/\s])(?:omp|omp\.cmd|pi)(?:\s|$)/ },
     { pattern: 'opencode', tool: 'opencode', match: /\/opencode\s|^opencode\s|\bopencode\b/ },
     { pattern: 'kiro', tool: 'kiro', match: /kiro-cli/ },
     { pattern: 'cursor-agent', tool: 'cursor', match: /cursor-agent/ },
@@ -5068,7 +5504,7 @@ function getActiveSessions() {
 
   try {
     const psOut = execSync(
-      'ps aux 2>/dev/null | grep -E "claude|codex|qwen|opencode|kiro-cli|cursor-agent|kilo" | grep -v grep || true',
+      'ps aux 2>/dev/null | grep -E "claude|codex|qwen|omp|omp.cmd|(^|[[:space:]/])pi([[:space:]]|$)|opencode|kiro-cli|cursor-agent|kilo" | grep -v grep || true',
       { encoding: 'utf8', timeout: 3000, stdio: ['pipe', 'pipe', 'pipe'] }
     );
 
@@ -5114,6 +5550,14 @@ function getActiveSessions() {
       if (explicitSessionId) {
         sessionId = explicitSessionId;
         sessionSource = 'cmd-arg';
+      }
+      if (tool === 'pi') {
+        const piResumeTarget = extractPiResumeTargetFromCommand(cmd);
+        const piMatch = findPiSessionByResumeTarget(piResumeTarget, allSessions);
+        if (piMatch) {
+          sessionId = piMatch.id;
+          sessionSource = 'cmd-arg';
+        }
       }
       if (claudePidMap[pid]) {
         sessionId = claudePidMap[pid].sessionId || '';
@@ -5263,6 +5707,13 @@ const fmtLocalDay = (ts) => {
   return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
 };
 
+function leaderboardAgentKey(session) {
+  if (!session || typeof session !== 'object') return 'unknown';
+  if (session.tool === 'pi') return session.agent_variant === 'ohmypi' ? 'ohmypi' : 'pi';
+  return session.tool || 'unknown';
+}
+
+
 // Disk cache for per-session daily message breakdown
 const DAILY_STATS_CACHE_FILE = path.join(os.tmpdir(), 'codedash-daily-stats-cache.json');
 let _dailyStatsDiskCache = null;
@@ -5360,7 +5811,7 @@ function _computeSessionDailyBreakdown(s, found) {
 }
 
 // Daily stats result cache
-const DAILY_RESULT_CACHE_FILE = path.join(os.tmpdir(), 'codedash-daily-result-cache.json');
+const DAILY_RESULT_CACHE_FILE = path.join(os.tmpdir(), 'codedash-daily-result-cache-v2.json');
 let _dailyResultCache = null;
 let _dailyResultCacheKey = null;
 
@@ -5400,7 +5851,7 @@ function _computeDailyStats(sessions) {
 
   for (const s of sessions) {
     if (!s.first_ts || !s.last_ts) continue;
-    const tool = s.tool || 'unknown';
+    const tool = leaderboardAgentKey(s);
 
     // Cost per session
     const costData = computeSessionCost(s.id, s.project);
@@ -5548,6 +5999,10 @@ module.exports = {
   CLAUDE_DIR,
   CODEX_DIR,
   QWEN_DIR,
+  PI_AGENT_DIR,
+  PI_SESSIONS_DIR,
+  OMP_AGENT_DIR,
+  OMP_SESSIONS_DIR,
   OPENCODE_DB,
   KIRO_DB,
   COPILOT_SESSION_DIR,
@@ -5574,5 +6029,15 @@ module.exports = {
     _parseMainWorktree,
     resolveGitRoot,
     ALL_HOMES,
+    listPiSessionFiles,
+    extractPiText,
+    normalizePiUsage,
+    parsePiSessionFile,
+    loadPiDetail,
+    scanPiSessions,
+    leaderboardAgentKey,
+    _piSessionDirMtimes,
+    extractPiResumeTargetFromCommand,
+    findPiSessionByResumeTarget,
   },
 };

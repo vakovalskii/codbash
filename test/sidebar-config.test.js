@@ -221,6 +221,20 @@ test('setItemHidden refuses to hide Settings (returns config unchanged)', () => 
     'Settings must never be persistable as hidden');
 });
 
+test('Pi sidebar keys round-trip through hidden config', () => {
+  const m = loadModule();
+  const cfg = m.parseSidebarConfig(JSON.stringify({
+    v: 1,
+    hidden: { 'pi-original-only': true, 'ohmypi-only': true },
+    collapsed: {}
+  }));
+  assert.equal(m.isItemHidden(cfg, 'pi-original-only'), true);
+  assert.equal(m.isItemHidden(cfg, 'ohmypi-only'), true);
+  const next = m.setItemHidden(cfg, 'pi-original-only', false);
+  assert.equal(next.hidden['pi-original-only'], undefined);
+  assert.equal(next.hidden['ohmypi-only'], true);
+});
+
 test('setSectionCollapsed returns a new config object (immutability)', () => {
   const m = loadModule();
   const cfg = m.parseSidebarConfig(null);
@@ -241,7 +255,7 @@ test('KNOWN_ITEM_KEYS includes all current sidebar entries', () => {
     assert.ok(keys.has(k), 'workspace key missing: ' + k);
   });
   // Agents
-  ['claude-only','codex-only','qwen-only','kiro-only','cursor-only',
+  ['claude-only','codex-only','qwen-only','pi-original-only','ohmypi-only','kiro-only','cursor-only',
    'copilot-chat-only','copilot-only','opencode-only','kilo-only'].forEach(k => {
     assert.ok(keys.has(k), 'agent key missing: ' + k);
   });
@@ -250,8 +264,8 @@ test('KNOWN_ITEM_KEYS includes all current sidebar entries', () => {
     assert.ok(keys.has(k), 'tools key missing: ' + k);
   });
   // Install
-  ['install:claude','install:codex','install:qwen','install:kiro',
-   'install:opencode','install:kilo','install:copilot'].forEach(k => {
+  ['install:claude','install:codex','install:qwen','install:pi','install:ohmypi',
+   'install:kiro','install:opencode','install:kilo','install:copilot'].forEach(k => {
     assert.ok(keys.has(k), 'install key missing: ' + k);
   });
 });

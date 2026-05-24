@@ -180,33 +180,53 @@ function setView(view) {
   // Handle tool filter views
   if (view === 'claude-only') {
     toolFilter = toolFilter === 'claude' ? null : 'claude';
+    piVariantFilter = null;
     currentView = 'sessions';
   } else if (view === 'codex-only') {
     toolFilter = toolFilter === 'codex' ? null : 'codex';
+    piVariantFilter = null;
     currentView = 'sessions';
   } else if (view === 'qwen-only') {
     toolFilter = toolFilter === 'qwen' ? null : 'qwen';
+    piVariantFilter = null;
+    currentView = 'sessions';
+  } else if (view === 'pi-original-only') {
+    var activePi = toolFilter === 'pi' && piVariantFilter === 'pi';
+    toolFilter = activePi ? null : 'pi';
+    piVariantFilter = activePi ? null : 'pi';
+    currentView = 'sessions';
+  } else if (view === 'ohmypi-only') {
+    var activeOhMyPi = toolFilter === 'pi' && piVariantFilter === 'ohmypi';
+    toolFilter = activeOhMyPi ? null : 'pi';
+    piVariantFilter = activeOhMyPi ? null : 'ohmypi';
     currentView = 'sessions';
   } else if (view === 'cursor-only') {
     toolFilter = toolFilter === 'cursor' ? null : 'cursor';
+    piVariantFilter = null;
     currentView = 'sessions';
   } else if (view === 'kiro-only') {
     toolFilter = toolFilter === 'kiro' ? null : 'kiro';
+    piVariantFilter = null;
     currentView = 'sessions';
   } else if (view === 'copilot-chat-only') {
     toolFilter = toolFilter === 'copilot-chat' ? null : 'copilot-chat';
+    piVariantFilter = null;
     currentView = 'sessions';
   } else if (view === 'copilot-only') {
     toolFilter = toolFilter === 'copilot' ? null : 'copilot';
+    piVariantFilter = null;
     currentView = 'sessions';
   } else if (view === 'opencode-only') {
     toolFilter = toolFilter === 'opencode' ? null : 'opencode';
+    piVariantFilter = null;
     currentView = 'sessions';
   } else if (view === 'kilo-only') {
     toolFilter = toolFilter === 'kilo' ? null : 'kilo';
+    piVariantFilter = null;
     currentView = 'sessions';
   } else {
     toolFilter = null;
+    piVariantFilter = null;
     currentView = view;
   }
 
@@ -215,7 +235,11 @@ function setView(view) {
 
   // Update sidebar active state
   document.querySelectorAll('.sidebar-item').forEach(function(el) {
-    el.classList.toggle('active', el.getAttribute('data-view') === view);
+    var itemView = el.getAttribute('data-view');
+    var active = itemView === view;
+    if (itemView === 'pi-original-only') active = toolFilter === 'pi' && piVariantFilter === 'pi';
+    else if (itemView === 'ohmypi-only') active = toolFilter === 'pi' && piVariantFilter === 'ohmypi';
+    el.classList.toggle('active', active);
   });
 
   applyFilters();

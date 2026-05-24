@@ -12,7 +12,7 @@ const os = require('os');
 const path = require('path');
 
 const KNOWN_AGENTS = Object.freeze([
-  'claude', 'codex', 'cursor', 'qwen',
+  'claude', 'codex', 'cursor', 'qwen', 'pi',
   'kilo', 'kiro', 'opencode', 'copilot', 'copilot-chat',
 ]);
 const KNOWN_AGENT_SET = new Set(KNOWN_AGENTS);

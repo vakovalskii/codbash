@@ -12,7 +12,7 @@ function loadFresh() {
 }
 
 // Default stub for custom detectors so tests don't probe the real filesystem.
-const NO_CUSTOM = { ghCopilotExtension: () => null, vscodeCopilotChatExtension: () => null };
+const NO_CUSTOM = { ghCopilotExtension: () => null, vscodeCopilotChatExtension: () => null, piPath: () => null };
 
 test('detect picks up an agent found on PATH', async () => {
   const { detect } = loadFresh();
@@ -83,13 +83,39 @@ test('detect uses customCheck only when PATH and app-bundle miss', async () => {
   assert.equal(chat, undefined, 'copilot-chat should NOT be detected when extension is missing');
 });
 
+test('detect prefers pi and falls back to omp for Pi', async () => {
+  const { detect } = loadFresh();
+  const pi = await detect({
+    platform: 'linux',
+    which: (bin) => bin === 'pi' ? '/usr/local/bin/pi' : (bin === 'omp' ? '/usr/local/bin/omp' : null),
+    appBundleExists: () => false,
+  });
+  const detectedPi = pi.agents.find(a => a.id === 'pi');
+  assert.ok(detectedPi, 'Pi should be detected when pi exists');
+  assert.equal(detectedPi.detectedVia, 'path');
+  assert.equal(detectedPi.binPath, '/usr/local/bin/pi');
+  assert.equal(detectedPi.command, 'pi');
+  assert.deepEqual(detectedPi.commands, ['pi', 'omp']);
+
+  const fallback = await detect({
+    platform: 'linux',
+    which: (bin) => bin === 'omp' ? '/usr/local/bin/omp' : null,
+    appBundleExists: () => false,
+  });
+  const fallbackPi = fallback.agents.find(a => a.id === 'pi');
+  assert.ok(fallbackPi, 'Pi should be detected by omp fallback binary');
+  assert.equal(fallbackPi.binPath, '/usr/local/bin/omp');
+  assert.equal(fallbackPi.command, 'omp');
+  assert.deepEqual(fallbackPi.commands, ['omp']);
+});
+
 test('detect labels each agent with a human-readable string', async () => {
   const { detect } = loadFresh();
   const got = await detect({
     platform: 'darwin',
     which: (bin) => '/usr/bin/' + bin,
     appBundleExists: () => false,
-    customChecks: NO_CUSTOM,
+    customChecks: Object.assign({}, NO_CUSTOM, { piPath: ({ which }) => ({ ok: true, detectedVia: 'path', binPath: which('pi'), command: 'pi', commands: ['pi', 'omp'] }) }),
   });
   // All 7 agents from terminals.js plus the synthetic copilot-chat alias.
   const ids = got.agents.map(a => a.id).sort();
@@ -97,6 +123,7 @@ test('detect labels each agent with a human-readable string', async () => {
   assert.ok(ids.includes('codex'));
   assert.ok(ids.includes('cursor'));
   assert.ok(ids.includes('qwen'));
+  assert.ok(ids.includes('pi'));
   assert.ok(ids.includes('kilo'));
   assert.ok(ids.includes('kiro'));
   assert.ok(ids.includes('opencode'));

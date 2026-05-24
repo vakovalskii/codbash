@@ -11,6 +11,7 @@ let layout = localStorage.getItem('codedash-layout') || 'grid'; // 'grid' or 'li
 let groupingMode = normalizeGroupingMode(localStorage.getItem('codedash-grouping-mode'));
 let searchQuery = '';
 let toolFilter = null;  // null, 'claude', 'codex'
+let piVariantFilter = null; // null, 'pi', 'ohmypi'
 let gitProjectFilter = null; // null or { key, name } — drill-down from Projects view
 let tagFilter = '';
 let dateFrom = '';
@@ -473,6 +474,8 @@ var TOOL_META = {
   'claude-ext': { label: 'Claude Ext', shortLabel: 'claude ext', color: '#60a5fa' },
   codex: { label: 'Codex', shortLabel: 'codex', color: '#22d3ee' },
   qwen: { label: 'Qwen Code', shortLabel: 'qwen', color: '#fbbf24' },
+  pi: { label: 'Pi', shortLabel: 'Pi', color: '#a78bfa' },
+  ohmypi: { label: 'OhMyPi', shortLabel: 'OhMyPi', color: '#a78bfa' },
   cursor: { label: 'Cursor', shortLabel: 'cursor', color: '#4a9eff' },
   opencode: { label: 'OpenCode', shortLabel: 'opencode', color: '#c084fc' },
   kiro: { label: 'Kiro', shortLabel: 'kiro', color: '#fb923c' },
@@ -486,9 +489,68 @@ function getToolLabel(tool, shortLabel) {
   return shortLabel ? meta.shortLabel : meta.label;
 }
 
-function getResumeCommand(tool, sessionId, project) {
+function getToolAliases(tool) {
+  var meta = TOOL_META[tool];
+  return meta && Array.isArray(meta.aliases) ? meta.aliases : [];
+}
+
+function getPiVariantLabel(session) {
+  if (!session || session.agent_variant !== 'ohmypi') return 'Pi';
+  return 'OhMyPi';
+}
+
+function getPiAggregateLabel() {
+  var hasPi = false;
+  var hasOhMyPi = false;
+  for (var i = 0; i < allSessions.length; i++) {
+    var s = allSessions[i];
+    if (!s || s.tool !== 'pi') continue;
+    if (s.agent_variant === 'ohmypi') hasOhMyPi = true;
+    else hasPi = true;
+    if (hasPi && hasOhMyPi) return 'Pi/OhMyPi';
+  }
+  if (hasPi) return 'Pi';
+  if (hasOhMyPi) return 'OhMyPi';
+  return 'Pi/OhMyPi';
+}
+
+function getPiDisplayLabel(session) {
+  return session ? getPiVariantLabel(session) : getPiAggregateLabel();
+}
+
+
+function renderToolBadges(tool, session) {
+  var toolClass = 'tool-' + tool;
+  var labels;
+  if (tool === 'pi') {
+    labels = [getPiDisplayLabel(session)];
+  } else {
+    labels = [getToolLabel(tool, true)].concat(getToolAliases(tool));
+  }
+  return labels.map(function(label, idx) {
+    var aliasClass = idx === 0 ? '' : ' tool-alias-badge';
+    return '<span class="tool-badge ' + toolClass + aliasClass + '">' + escHtml(label) + '</span>';
+  }).join('');
+}
+
+function getPiCommand() {
+  var found = (window.installedAgents || []).find(function(a) { return a.id === 'pi'; });
+  return found && found.command === 'omp' ? 'omp' : 'pi';
+}
+
+function quoteShellArg(value) {
+  return "'" + String(value).replace(/'/g, "'\\''") + "'";
+}
+
+function getResumeCommand(tool, sessionId, project, session) {
   if (tool === 'codex') return 'codex resume ' + sessionId;
   if (tool === 'qwen') return 'qwen -r ' + sessionId;
+  if (tool === 'pi') {
+    var target = session && session.resume_target ? session.resume_target : sessionId;
+    return getPiCommand() === 'omp'
+      ? 'omp --resume ' + quoteShellArg(target)
+      : 'pi --session ' + quoteShellArg(target);
+  }
   if (tool === 'cursor') return 'cursor ' + (project ? '"' + project + '"' : '.');
   return 'claude --resume ' + sessionId;
 }
@@ -608,7 +670,7 @@ function getEstimatedSessionCost(session) {
 // Pricing verified 2026-05-15 against vendor pages.
 // Sources: claude.com/pricing, openai.com/chatgpt/pricing, cursor.com/pricing,
 //          github.com/features/copilot/plans + docs.github.com, kiro.dev/pricing,
-//          opencode.ai/go + opencode.ai/zen
+//          opencode.ai/go + opencode.ai/zen; OhMyPi is API-provider backed.
 var SERVICE_PLANS = {
   'Claude Code':   { label: 'Claude Code (Anthropic)', kind: 'subscription', plans: [
     { name: 'Pro', price: 20 },
@@ -642,6 +704,8 @@ var SERVICE_PLANS = {
   ]},
   'Qwen Code':     { label: 'Qwen Code', kind: 'api-only', plans: [],
                      note: 'Free / API-only — use "API (custom)" to track deposits' },
+  'OhMyPi':       { label: 'OhMyPi', kind: 'api-only', plans: [],
+                     note: 'API-provider backed — use "API (custom)" to track deposits' },
   'Kilo':          { label: 'Kilo', kind: 'api-only', plans: [],
                      note: 'Free / API-only — use "API (custom)" to track deposits' },
   'API (custom)':  { label: 'API (custom)', kind: 'api', plans: [],
@@ -1208,6 +1272,11 @@ function applyFilters() {
       var toolMatch = s.tool === toolFilter || (s.tool === 'claude-ext' && toolFilter === 'claude');
       if (!toolMatch) continue;
     }
+    if (piVariantFilter) {
+      if (s.tool !== 'pi') continue;
+      var variant = s.agent_variant === 'ohmypi' ? 'ohmypi' : 'pi';
+      if (variant !== piVariantFilter) continue;
+    }
 
     // Git project drill-down filter (always uses git-root key, independent of groupingMode)
     if (gitProjectFilter) {
@@ -1300,7 +1369,7 @@ function renderCard(s, idx) {
   var html = '<div class="' + classes + '" data-id="' + s.id + '" onclick="onCardClick(\'' + s.id + '\', event)">';
   html += '<div class="card-top">';
   html += '<input type="checkbox" class="card-checkbox" style="' + checkboxStyle + '" ' + (isSelected ? 'checked' : '') + ' onclick="toggleSelect(\'' + s.id + '\', event)">';
-  html += '<span class="tool-badge ' + toolClass + '">' + escHtml(toolLabel) + '</span>';
+  html += renderToolBadges(s.tool, s);
   html += '<span class="card-project" style="color:' + projColor + '">' + escHtml(projName) + '</span>';
   html += '<span class="card-time">' + timeAgo(s.last_ts) + '</span>';
   if (costStr) {
@@ -1386,8 +1455,7 @@ function renderListCard(s, idx) {
   if (isFocused) classes += ' focused';
 
   var html = '<div class="' + classes + '" data-id="' + s.id + '" onclick="onCardClick(\'' + s.id + '\', event)">';
-  var listToolLabel = getToolLabel(s.tool, true);
-  html += '<span class="tool-badge tool-' + s.tool + '">' + escHtml(listToolLabel) + '</span>';
+  html += renderToolBadges(s.tool, s);
   if (showBadges && s.mcp_servers && s.mcp_servers.length > 0) {
     s.mcp_servers.forEach(function(m) {
       html += '<span class="tool-badge badge-mcp">' + escHtml(m) + '</span>';
@@ -1542,7 +1610,8 @@ function render() {
   // Stats
   if (stats) {
     var statsText = sessions.length + ' sessions';
-    if (toolFilter) statsText += ' (' + toolFilter + ')';
+    if (piVariantFilter) statsText += ' (' + (piVariantFilter === 'ohmypi' ? 'OhMyPi' : 'Pi') + ')';
+    else if (toolFilter) statsText += ' (' + toolFilter + ')';
     if (tagFilter) statsText += ' [' + tagFilter + ']';
     stats.textContent = statsText;
   }
@@ -1744,7 +1813,7 @@ function renderQACard(s, idx) {
   var classes = 'qa-item' + (selectedIds.has(s.id) ? ' selected' : '');
 
   var html = '<div class="' + classes + '" data-id="' + s.id + '" onclick="onCardClick(\'' + s.id + '\', event)">';
-  html += '<span class="tool-badge ' + toolClass + '">' + escHtml(toolLabel) + '</span>';
+  html += renderToolBadges(s.tool, s);
   html += '<span class="qa-question">' + escHtml(getSessionDisplayName(s).slice(0, 160)) + '</span>';
   html += '<span class="qa-meta">';
   html += '<span class="qa-msgs">' + s.messages + ' msgs</span>';
@@ -2056,7 +2125,7 @@ function pickPreferredTool(projectPath, lastSession) {
 // Hard-coded labels so we can render a friendly name even when /api/agents/installed
 // has not returned yet (or when the tool is no longer detected on this box).
 const _AGENT_LABEL_FALLBACK = {
-  claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor', qwen: 'Qwen Code',
+  claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor', qwen: 'Qwen Code', pi: 'Pi/OhMyPi',
   kilo: 'Kilo', kiro: 'Kiro CLI', opencode: 'OpenCode',
   copilot: 'Copilot CLI', 'copilot-chat': 'Copilot Chat',
 };
@@ -2509,8 +2578,8 @@ var SIDEBAR_ITEM_META = [
   ]},
   { group: 'Agents', items: [
     ['claude-only', 'Claude Code'], ['codex-only', 'Codex'], ['qwen-only', 'Qwen Code'],
-    ['kiro-only', 'Kiro'], ['cursor-only', 'Cursor'], ['copilot-chat-only', 'Copilot Chat'],
-    ['copilot-only', 'Copilot CLI'], ['opencode-only', 'OpenCode'], ['kilo-only', 'Kilo']
+    ['pi-original-only', 'Pi'], ['ohmypi-only', 'Oh My Pi'], ['kiro-only', 'Kiro'], ['cursor-only', 'Cursor'],
+    ['copilot-chat-only', 'Copilot Chat'], ['copilot-only', 'Copilot CLI'], ['opencode-only', 'OpenCode'], ['kilo-only', 'Kilo']
   ]},
   { group: 'Tools', items: [
     ['export-import', 'Export / Import'], ['changelog', 'Changelog'],
@@ -2518,8 +2587,8 @@ var SIDEBAR_ITEM_META = [
   ]},
   { group: 'Install agents', items: [
     ['install:claude', 'Claude Code'], ['install:codex', 'Codex CLI'], ['install:qwen', 'Qwen Code'],
-    ['install:kiro', 'Kiro CLI'], ['install:opencode', 'OpenCode'], ['install:kilo', 'Kilo CLI'],
-    ['install:copilot', 'Copilot CLI']
+    ['install:pi', 'Pi'], ['install:ohmypi', 'Oh My Pi'], ['install:kiro', 'Kiro CLI'],
+    ['install:opencode', 'OpenCode'], ['install:kilo', 'Kilo CLI'], ['install:copilot', 'Copilot CLI']
   ]}
 ];
 
@@ -3207,6 +3276,18 @@ var AGENT_INSTALL = {
     alt: null,
     url: 'https://github.com/QwenLM/qwen-code',
   },
+  pi: {
+    name: 'Pi',
+    cmd: 'npm i -g @earendil-works/pi-coding-agent',
+    alt: 'npm install -g @earendil-works/pi-coding-agent',
+    url: 'https://github.com/earendil-works/pi-mono',
+  },
+  ohmypi: {
+    name: 'Oh My Pi',
+    cmd: 'curl -fsSL https://omp.sh/install | sh',
+    alt: 'bun install -g @oh-my-pi/pi-coding-agent',
+    url: 'https://github.com/can1357/oh-my-pi',
+  },
   kiro: {
     name: 'Kiro CLI',
     cmd: 'curl -fsSL https://cli.kiro.dev/install | bash',
@@ -3579,6 +3660,7 @@ const _ALL_AGENT_META = [
   { id: 'codex',        label: 'Codex',        expects: 'codex on PATH' },
   { id: 'cursor',       label: 'Cursor',       expects: 'cursor-agent on PATH, or Cursor.app on macOS' },
   { id: 'qwen',         label: 'Qwen Code',    expects: 'qwen on PATH' },
+  { id: 'pi',           label: 'Pi/OhMyPi',     expects: 'pi or omp on PATH' },
   { id: 'kilo',         label: 'Kilo',         expects: 'kilo on PATH' },
   { id: 'kiro',         label: 'Kiro CLI',     expects: 'kiro-cli on PATH' },
   { id: 'opencode',     label: 'OpenCode',     expects: 'opencode on PATH' },
@@ -3711,6 +3793,11 @@ async function resumeLastProjectSession(sessionId, tool, projectPath, btn) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         sessionId: sessionId,
+        resumeTarget: (function() {
+          if ((tool || '') !== 'pi') return '';
+          var s = (window.allSessions || allSessions || []).find(function(x) { return x.id === sessionId; });
+          return s && s.resume_target ? s.resume_target : '';
+        })(),
         tool: tool || 'claude',
         flags: [],
         project: projectPath || '',
