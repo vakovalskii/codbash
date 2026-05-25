@@ -25,6 +25,8 @@ Browser (localhost:3847)            Node.js Server
                               ~/.claude/  ~/.codex/  ~/.cursor/
                               ~/.local/share/opencode/opencode.db
                               ~/Library/Application Support/kiro-cli/data.sqlite3
+                              ~/.pi/agent/sessions/*/*.jsonl
+                              ~/.omp/agent/sessions/*/*.jsonl
                               ~/.config/Code/User/workspaceStorage/*/chatSessions/
 ```
 
@@ -112,6 +114,7 @@ Detection logic in `data.js`:
 | History index | `~/.codex/history.jsonl` |
 | Session data | `~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-<TIMESTAMP>-<UUID>.jsonl` |
 
+
 **history.jsonl**:
 ```json
 {"session_id": "uuid", "ts": 1712345678, "text": "user prompt", "display": "...", "project": "/path", "cwd": "/path"}
@@ -127,7 +130,20 @@ Note: `ts` is in **seconds** (not milliseconds like Claude).
 
 Session ID extracted from filename: `rollout-20260406-<UUID>.jsonl` → UUID part.
 
-### 4. Cursor (Agent Mode)
+
+### 4. OhMyPi / Pi
+
+| File | Purpose |
+|------|---------|
+| Pi session data | `~/.pi/agent/sessions/--<cwd-encoded>--/<timestamp>_<sessionId>.jsonl` |
+| OhMyPi session data | `~/.omp/agent/sessions/--<cwd-encoded>--/<timestamp>_<sessionId>.jsonl` |
+
+**JSONL format**:
+- First line is a session header: `{ type: "session", id, timestamp, cwd, title }`.
+- Conversation rows use `{ type: "message", message: { role, content, usage } }`.
+- Token usage maps `usage.input`, `usage.output`, `usage.cacheRead`, `usage.cacheWrite`, and optional `usage.cost.total` into codbash analytics.
+
+### 5. Cursor (Agent Mode)
 
 | Item | Location |
 |------|----------|
@@ -146,7 +162,7 @@ Session ID extracted from filename: `rollout-20260406-<UUID>.jsonl` → UUID par
 
 User messages wrapped in `<user_query>...</user_query>` tags — stripped during parsing.
 
-### 5. OpenCode
+### 6. OpenCode
 
 | Item | Location |
 |------|----------|
@@ -171,7 +187,7 @@ GROUP BY m.id ORDER BY m.time_created
 
 Tables: `session`, `message`, `part`. Message `data` is JSON with `{role, tokens, model}`. Part `data` is JSON with `{type, text}`.
 
-### 6. Kiro CLI
+### 7. Kiro CLI
 
 | Item | Location |
 |------|----------|
@@ -198,7 +214,7 @@ FROM conversations_v2 ORDER BY updated_at DESC
 }
 ```
 
-### 7. Copilot (VS Code Extension)
+### 8. Copilot (VS Code Extension)
 
 | Item | Location |
 |------|----------|
@@ -241,15 +257,16 @@ FROM conversations_v2 ORDER BY updated_at DESC
 ```
 1. Read ~/.claude/history.jsonl → sessions{} keyed by sessionId (tool: "claude")
 2. scanCodexSessions() → merge into sessions{} (tool: "codex")
-3. scanOpenCodeSessions() → merge (tool: "opencode")
-4. scanCursorSessions() → merge (tool: "cursor")
-5. scanKiroSessions() → merge (tool: "kiro")
-5a. scanCopilotSessions() → merge (tool: "copilot-chat")
-6. Enrich Claude sessions with detail files:
+3. scanPiSessions() → merge (tool: "pi")
+4. scanOpenCodeSessions() → merge (tool: "opencode")
+5. scanCursorSessions() → merge (tool: "cursor")
+6. scanKiroSessions() → merge (tool: "kiro")
+7. scanCopilotSessions() → merge (tool: "copilot-chat")
+8. Enrich Claude sessions with detail files:
    - Count messages, get file size
    - Check entrypoint → change tool to "claude-ext" if not "cli"
-7. Scan orphan sessions from ~/.claude/projects/ (Claude Extension)
-8. Sort by last_ts DESC, format dates
+9. Scan orphan sessions from ~/.claude/projects/ (Claude Extension)
+10. Sort by last_ts DESC, format dates
 ```
 
 ### Search Index
@@ -271,12 +288,13 @@ cost = input_tokens * input_price
 
 Model pricing in `MODEL_PRICING` object (per-token rates for opus, sonnet, haiku, codex-mini, gpt-5).
 Codex fallback: estimate from file size (~4 bytes per token).
+OhMyPi / Pi uses `usage.cost.total` when present; otherwise it uses mapped token counts only when the model has known pricing.
 
 ### Active Session Detection
 
 ```
 1. Read ~/.claude/sessions/*.json → PID-to-session map
-2. ps aux | grep "claude|codex|opencode|kiro-cli|cursor-agent"
+2. ps aux | grep "claude|codex|qwen|omp|opencode|kiro-cli|cursor-agent|kilo"
 3. For each process: parse PID, CPU%, memory, state
 4. Status: "active" (CPU >= 1%) or "waiting" (sleeping/stopped)
 5. Map PID → sessionId via PID files

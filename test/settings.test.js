@@ -102,6 +102,7 @@ test('validateAgentId rejects unknown agents', () => {
   assert.equal(s.isKnownAgent('kiro'), true);
   assert.equal(s.isKnownAgent('kilo'), true);
   assert.equal(s.isKnownAgent('qwen'), true);
+  assert.equal(s.isKnownAgent('pi'), true);
   assert.equal(s.isKnownAgent('copilot'), true);
   assert.equal(s.isKnownAgent('copilot-chat'), true);
   assert.equal(s.isKnownAgent('bogus'), false);

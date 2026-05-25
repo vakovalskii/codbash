@@ -1,6 +1,6 @@
 # Codbash
 
-Control room for AI coding sessions. Search, replay, and resume Claude Code, Codex, Qwen, Cursor, OpenCode, Kiro, Kilo, and Copilot Chat sessions without digging through scattered logs.
+Control room for AI coding sessions. Search, replay, and resume Claude Code, Codex, Qwen, Pi, Oh My Pi, Cursor, OpenCode, Kiro, Kilo, and Copilot Chat sessions without digging through scattered logs.
 
 [Russian / Русский](docs/README_RU.md) | [Chinese / 中文](docs/README_ZH.md)
 
@@ -21,6 +21,8 @@ codbash run
 |-------|----------|---------|--------|-------------|---------|---------|--------|
 | Claude Code | JSONL | Yes | Yes | Yes | Yes | Yes | Terminal / cmux |
 | Codex CLI | JSONL | Yes | Yes | Yes | Yes | Yes | Terminal |
+| Pi | JSONL | Yes | Yes | Yes | - | Yes | Terminal |
+| Oh My Pi | JSONL | Yes | Yes | Yes | - | Yes | Terminal |
 | Cursor | JSONL | Yes | Yes | Yes | - | Yes | Open in Cursor |
 | OpenCode | SQLite | Yes | Yes | Yes | - | Yes | Terminal |
 | Kiro CLI | SQLite | Yes | Yes | Yes | - | Yes | Terminal |
@@ -32,7 +34,7 @@ Also detects Claude Code running inside Cursor (via `claude-vscode` entrypoint).
 
 **Browser Dashboard**
 - Grid and List view with project grouping
-- Trigram fuzzy search + full-text deep search across all messages
+- Trigram fuzzy search + full-text deep search across all supported message logs
 - Filter by agent, tags, date range
 - Star/pin sessions, tag with labels
 - GitHub-style SVG activity heatmap with streak stats
@@ -41,21 +43,21 @@ Also detects Claude Code running inside Cursor (via `claude-vscode` entrypoint).
 - Themes: Dark, Light, System
 
 **Live Monitoring**
-- LIVE/WAITING badges on all agent types
+- LIVE/WAITING badges for terminal-launched agents when their processes can be matched
 - Animated border on active session cards
 - Running view with CPU, Memory, PID, Uptime
 - Focus Terminal / Open in Cursor buttons
 - Polling every 5 seconds
 
 **Cost Analytics**
-- Real cost from actual token usage (input, output, cache)
+- Real cost from actual token usage when agents record usage (input, output, cache)
 - Per-model pricing: Opus, Sonnet, Haiku, Codex, GPT-5
 - Daily cost chart, cost by project, most expensive sessions
 
 **Cross-Agent**
-- Convert sessions between Claude Code and Codex
-- Handoff: generate context document to continue in any agent
-- Install Agents: one-click install commands for all agents
+- Convert sessions between Claude Code, Codex, and Qwen formats
+- Handoff: generate context document from any session with readable messages
+- Install Agents: one-click install commands for supported agent CLIs
 
 **CLI**
 ```bash
@@ -63,7 +65,7 @@ codbash run [--port=N] [--no-browser]
 codbash search <query>
 codbash show <session-id>
 codbash handoff <id> [target] [--verbosity=full] [--out=file.md]
-codbash convert <id> claude|codex
+codbash convert <id> claude|codex|qwen
 codbash list [limit]
 codbash stats
 codbash export [file.tar.gz]
@@ -81,6 +83,8 @@ codbash stop
 ~/.claude/                              Claude Code sessions + PID tracking
 ~/.codex/                               Codex CLI sessions
 ~/.cursor/projects/*/agent-transcripts/ Cursor agent sessions
+~/.pi/agent/sessions/**/*.jsonl         Pi coding-agent sessions
+~/.omp/agent/sessions/**/*.jsonl        Oh My Pi coding-agent sessions
 ~/.local/share/opencode/opencode.db     OpenCode (SQLite)
 ~/Library/Application Support/kiro-cli/ Kiro CLI (SQLite)
 <vscode-user-data>/workspaceStorage/    Copilot Chat (JSON/JSONL)
@@ -97,6 +101,9 @@ Zero dependencies. Everything runs on `localhost`.
 curl -fsSL https://claude.ai/install.sh | bash          # Claude Code
 npm i -g @openai/codex                                   # Codex CLI
 curl -fsSL https://cli.kiro.dev/install | bash           # Kiro CLI
+npm i -g @earendil-works/pi-coding-agent                 # Pi
+curl -fsSL https://omp.sh/install | sh                    # Oh My Pi
+bun install -g @oh-my-pi/pi-coding-agent                  # Oh My Pi (Bun)
 curl -fsSL https://opencode.ai/install | bash            # OpenCode
 ```
 

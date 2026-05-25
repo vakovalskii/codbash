@@ -76,7 +76,7 @@ async function openDetail(s) {
   } else if (activeSessions[s.id]) {
     infoHtml += '<button class="launch-btn" style="background:var(--accent-green);color:#000" onclick="focusSession(\'' + jsId + '\')">Focus Terminal</button>';
   } else {
-    infoHtml += '<button class="launch-btn" onclick="launchSession(\'' + jsId + '\',\'' + jsTool + '\',\'' + jsProject + '\')">Resume</button>';
+    infoHtml += '<button class="launch-btn" onclick="launchPiSession(\'' + jsId + '\',\'' + jsTool + '\',\'' + jsProject + '\')">Resume</button>';
     if (s.tool === 'claude') {
       infoHtml += '<button class="launch-btn" style="background:var(--accent-orange);color:#000" onclick="launchDangerous(\'' + jsId + '\',\'' + jsProject + '\')" title="--dangerously-skip-permissions">Resume (skip perms)</button>';
     }
@@ -417,13 +417,14 @@ function launchDangerous(sessionId, project) {
   launchSession(sessionId, 'claude', project, ['skip-permissions']);
 }
 
-function launchSession(sessionId, tool, project, flags) {
+function launchSession(sessionId, tool, project, flags, resumeTarget) {
   var terminal = localStorage.getItem('codedash-terminal') || '';
   fetch('/api/launch', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       sessionId: sessionId,
+      resumeTarget: resumeTarget || '',
       tool: tool,
       flags: flags || [],
       project: project,
@@ -441,8 +442,13 @@ function launchSession(sessionId, tool, project, flags) {
 
 function copyResume(sessionId, tool) {
   var s = allSessions.find(function(x) { return x.id === sessionId; });
-  var cmd = getResumeCommand(tool, sessionId, s && s.project ? s.project : '');
+  var cmd = getResumeCommand(tool, sessionId, s && s.project ? s.project : '', s);
   copyText(cmd, 'Copied: ' + cmd);
+}
+
+function launchPiSession(sessionId, tool, project) {
+  var s = allSessions.find(function(x) { return x.id === sessionId; });
+  launchSession(sessionId, tool, project, [], s && s.resume_target ? s.resume_target : '');
 }
 
 function exportMd(sessionId, project) {
