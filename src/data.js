@@ -372,7 +372,7 @@ function parseKiloMcpServer(toolName) {
 }
 
 // Disk cache for parsed Claude session files (keyed by path + mtime + size)
-const PARSED_CACHE_FILE = path.join(os.tmpdir(), 'codedash-parsed-cache-v2.json');
+const PARSED_CACHE_FILE = path.join(os.tmpdir(), 'codbash-parsed-cache.json');
 let _parsedDiskCache = null;
 let _parsedDiskCacheDirty = false;
 // Reverse index: file path -> cache key (avoids repeated fs.statSync)
@@ -1805,7 +1805,7 @@ function loadKiroDetail(conversationId) {
 
 // Build workspace-hash -> project path mapping for VS Code workspaceStorage
 let _copilotWsMapCache = null;
-const COPILOT_WS_MAP_CACHE_FILE = path.join(os.tmpdir(), 'codedash-copilot-ws-map.json');
+const COPILOT_WS_MAP_CACHE_FILE = path.join(os.tmpdir(), 'codbash-copilot-ws-map.json');
 const COPILOT_WS_MAP_TTL = 600000; // 10 minutes
 
 function buildCopilotWorkspaceMap() {
@@ -1899,7 +1899,7 @@ function parseCopilotJson(filePath) {
 }
 
 // Disk cache for Copilot session metadata (avoids re-scanning large files)
-const COPILOT_PARSED_CACHE_FILE = path.join(os.tmpdir(), 'codedash-copilot-parsed-cache.json');
+const COPILOT_PARSED_CACHE_FILE = path.join(os.tmpdir(), 'codbash-copilot-parsed-cache.json');
 let _copilotParsedCache = null;
 
 function _loadCopilotParsedCache() {
@@ -2214,7 +2214,7 @@ function decodeCursorProjectFolderKey(proj) {
 // Build composerId -> project path mapping from Cursor workspace storage
 // Uses disk cache to avoid querying 190+ SQLite files on every startup
 let _cursorWsMapCache = null;
-const CURSOR_WS_MAP_CACHE_FILE = path.join(os.tmpdir(), 'codedash-cursor-ws-map.json');
+const CURSOR_WS_MAP_CACHE_FILE = path.join(os.tmpdir(), 'codbash-cursor-ws-map.json');
 const CURSOR_WS_MAP_TTL = 600000; // 10 minutes
 
 function buildCursorWorkspaceMap() {
@@ -2717,7 +2717,7 @@ function scanCodexSessions() {
 
 const _gitRootCache = {};
 // v2: collapses worktrees to main repo + ignores $HOME-as-git-root.
-const GIT_ROOT_CACHE_FILE = path.join(os.tmpdir(), 'codedash-gitroot-cache-v2.json');
+const GIT_ROOT_CACHE_FILE = path.join(os.tmpdir(), 'codbash-gitroot-cache.json');
 let _gitRootDiskCache = null;
 
 function _loadGitRootDiskCache() {
@@ -4811,7 +4811,7 @@ function getModelPricing(model) {
 // ── Compute real cost from session file token usage ────────
 
 // Disk cache for computed session costs
-const COST_CACHE_FILE = path.join(os.tmpdir(), 'codedash-cost-cache.json');
+const COST_CACHE_FILE = path.join(os.tmpdir(), 'codbash-cost-cache.json');
 let _costDiskCache = null;
 
 function _loadCostDiskCache() {
@@ -5180,7 +5180,7 @@ function computeSessionCost(sessionId, project) {
 // ── Cost analytics ────────────────────────────────────────
 
 // Analytics result cache — avoids recomputing 31k sessions every request
-const ANALYTICS_CACHE_FILE = path.join(os.tmpdir(), 'codedash-analytics-cache.json');
+const ANALYTICS_CACHE_FILE = path.join(os.tmpdir(), 'codbash-analytics-cache.json');
 let _analyticsCacheResult = null;
 let _analyticsCacheKey = null;
 
@@ -5856,7 +5856,7 @@ function computeCurrentStreak(daily, today = getLocalToday()) {
 }
 
 // Disk cache for per-session daily message breakdown
-const DAILY_STATS_CACHE_FILE = path.join(os.tmpdir(), 'codedash-daily-stats-cache.json');
+const DAILY_STATS_CACHE_FILE = path.join(os.tmpdir(), 'codbash-daily-stats-cache.json');
 let _dailyStatsDiskCache = null;
 
 function _loadDailyStatsDiskCache() {
@@ -5958,7 +5958,7 @@ function _computeSessionDailyBreakdown(s, found) {
 }
 
 // Daily stats result cache
-const DAILY_RESULT_CACHE_FILE = path.join(os.tmpdir(), 'codedash-daily-result-cache-v2.json');
+const DAILY_RESULT_CACHE_FILE = path.join(os.tmpdir(), 'codbash-daily-result-cache.json');
 let _dailyResultCache = null;
 let _dailyResultCacheKey = null;
 
