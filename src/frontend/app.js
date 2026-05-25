@@ -547,7 +547,7 @@ function getResumeCommand(tool, sessionId, project, session) {
   if (tool === 'qwen') return 'qwen -r ' + sessionId;
   if (tool === 'pi') {
     var target = session && session.resume_target ? session.resume_target : sessionId;
-    return getPiCommand() === 'omp'
+    return session && session.agent_variant === 'ohmypi'
       ? 'omp --resume ' + quoteShellArg(target)
       : 'pi --session ' + quoteShellArg(target);
   }

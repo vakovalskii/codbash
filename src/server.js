@@ -22,14 +22,22 @@ const pathLib = require('path');
 const { repoRefreshManager } = require('./repo-refresh');
 const { handleRepoRefreshRoute } = require('./repo-refresh-routes');
 
-function isValidPiResumeTarget(sessionId, resumeTarget) {
-  if (typeof sessionId !== 'string' || !/^[A-Za-z0-9._-]{1,128}$/.test(sessionId)) return false;
-  if (typeof resumeTarget !== 'string' || !resumeTarget.endsWith('.jsonl')) return false;
-  if (/['`$\\\n\r\0]/.test(resumeTarget)) return false;
-  const resolvedTarget = pathLib.resolve(resumeTarget);
-  const found = dataApi.findSessionFile(sessionId);
-  if (!found || found.format !== 'pi' || !found.file) return false;
-  return pathLib.resolve(found.file) === resolvedTarget;
+const SAFE_SESSION_ID = /^[A-Za-z0-9._-]{1,128}$/;
+
+function getValidatedPiResumeTarget(sessionId, resumeTarget, project) {
+  if (typeof sessionId !== 'string' || !SAFE_SESSION_ID.test(sessionId)) return '';
+  if (typeof resumeTarget !== 'string' || !resumeTarget.endsWith('.jsonl')) return '';
+  if (/['`$\\\n\r\0]/.test(resumeTarget)) return '';
+  const found = dataApi.findSessionFile(sessionId, project);
+  if (!found || found.format !== 'pi' || !found.file) return '';
+  try {
+    if (fs.lstatSync(found.file).isSymbolicLink()) return '';
+  } catch {
+    return '';
+  }
+  const resolvedFound = pathLib.resolve(found.file);
+  if (pathLib.resolve(resumeTarget) !== resolvedFound) return '';
+  return resolvedFound;
 }
 
 // ── Logging ──────────────────────────────────
@@ -178,11 +186,12 @@ function startServer(host, port, openBrowser = true) {
             const parsed = JSON.parse(body);
             const { sessionId, resumeTarget, tool, flags, project, terminal, mode, autoRegister } = parsed;
             const fresh = mode === 'fresh';
+            let piResumeTarget = '';
             if (!fresh) {
-              const isSafeId = /^[A-Za-z0-9._-]{1,128}$/.test(String(sessionId || ''));
+              const isSafeId = SAFE_SESSION_ID.test(String(sessionId || ''));
               const hasResumeTarget = resumeTarget !== undefined && resumeTarget !== null && resumeTarget !== '';
-              const isSafePiTarget = tool === 'pi' && hasResumeTarget && isValidPiResumeTarget(sessionId, resumeTarget);
-              if (!isSafeId || (hasResumeTarget && !isSafePiTarget)) throw new Error('invalid sessionId');
+              piResumeTarget = tool === 'pi' && hasResumeTarget ? getValidatedPiResumeTarget(sessionId, resumeTarget, project) : '';
+              if (!isSafeId || (hasResumeTarget && !piResumeTarget)) throw new Error('invalid sessionId');
             }
             if (fresh && !project) {
               throw new Error('project path required for fresh session');
@@ -199,7 +208,7 @@ function startServer(host, port, openBrowser = true) {
             const knownTool = settingsApi.isKnownAgent(tool);
             const detectedAgent = detection.agents.find(a => a.id === tool);
             if (knownTool && !detectedAgent) {
-              throw new Error('agent not installed: ' + tool);
+              throw new Error('agent not installed');
             }
             const resolvedTool = knownTool ? tool : 'claude';
             // Explicit allowlist for flags — element-level. Defense-in-depth in
@@ -212,7 +221,7 @@ function startServer(host, port, openBrowser = true) {
               ? detectedAgent.command
               : undefined;
             log('LAUNCH', `mode=${fresh ? 'fresh' : 'resume'} session=${sessionId || '(none)'} tool=${resolvedTool} terminal=${terminal || 'default'} project=${project || '(none)'} flags=${safeFlags.join(',') || '(none)'}`);
-            openInTerminal(fresh ? '' : sessionId, resolvedTool, safeFlags, project || '', terminal || '', fresh ? 'fresh' : 'resume', launchCommand, fresh ? '' : (resumeTarget || ''));
+            openInTerminal(fresh ? '' : sessionId, resolvedTool, safeFlags, project || '', terminal || '', fresh ? 'fresh' : 'resume', launchCommand, fresh ? '' : piResumeTarget);
 
             // Auto-register: when a fresh launch fires for a path under $HOME
             // that is either a git repo or has been launched ≥2 times, add it
