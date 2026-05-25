@@ -2,6 +2,26 @@
 
 const CHANGELOG = [
   {
+    version: '7.5.0',
+    date: '2026-05-25',
+    title: 'Five new agents, project launcher, subscriptions',
+    changes: [
+      'New agents: Qwen Code, GitHub Copilot Chat (VS Code), GitHub Copilot CLI, Pi, Oh My Pi',
+      'Project launcher: ▶ New / ⟳ Last buttons, GitHub repo onboarding (clone & add)',
+      'Projects view split into Projects (launcher) + History subtabs with per-launch agent picker',
+      'Subscriptions management in Analytics → History: track paid plans + API deposits for all agents',
+      'Background git fetch worker — auto-refresh connected repos on new chat, manual button, or startup',
+      'Sidebar reorganised into collapsible Workspace / Agents / Tools groups + Settings → Sidebar tab',
+      'Codex Desktop import dedup: imported Claude sessions no longer appear twice in the dashboard',
+      'Codex cache invalidation now watches ~/.codex/sessions for new files (no more restart needed)',
+      'Active-session mapping no longer misattributes processes to the wrong session via fallback-latest',
+      'Worktrees collapse to main repo; $HOME-as-git-root no longer leaks dotfiles remote onto sessions',
+      'Windows: Resume preserves backslash paths via Start-Process -WorkingDirectory; PowerShell launcher hardened',
+      'Structured message rendering for Codex and Claude Code session details',
+      'Cloud Sync: project paths now remap across machines via git remote',
+    ],
+  },
+  {
     version: '7.2.0',
     date: '2026-04-17',
     title: 'Recap titles, sort toggle, analytics sub-tabs',
