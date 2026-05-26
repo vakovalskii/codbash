@@ -10,43 +10,60 @@
 
 :root {
     color-scheme: dark;
-    --bg-primary: #1a1d23;
-    --bg-secondary: #22262e;
-    --bg-card: #2a2e37;
-    --bg-card-hover: #333842;
-    --bg-input: #2a2e37;
-    --text-primary: #e4e7eb;
-    --text-secondary: #8b919a;
-    --text-muted: #5f6571;
-    --accent-green: #4ade80;
+    /* Neuraldeep dark palette — deep cool blacks + neon brand green.
+       Tokens kept as hex for legacy compatibility; rgb triplet aliases below
+       enable alpha-modulation via `rgb(var(--c-accent) / 0.12)`. */
+    --bg-primary: #08090c;
+    --bg-secondary: #121418;
+    --bg-card: #121418;
+    --bg-card-hover: #1a1d23;
+    --bg-input: #121418;
+    --text-primary: #ebedf0;
+    --text-secondary: #b6bcc8;
+    --text-muted: #9499a5;
+    --accent-green: #00ff88;
     --accent-blue: #60a5fa;
     --accent-orange: #fb923c;
     --accent-purple: #c084fc;
     --accent-red: #f87171;
     --accent-cyan: #22d3ee;
-    --border: #363b44;
-    --sidebar-bg: #1e2128;
+    --border: #2a2d33;
+    --sidebar-bg: #08090c;
+    --c-accent: 0 255 136;
+    --c-bg: 8 9 12;
+    --c-panel: 18 20 24;
+    --c-border: 42 45 51;
+    --c-fg: 235 237 240;
+    --c-muted: 148 153 165;
 }
 
 /* ── Light Theme ───────────────────────────────────────────────── */
 
 [data-theme="light"] {
-    --bg-primary: #f5f5f7;
+    color-scheme: light;
+    /* Cool off-white + AA-safe deeper accent — neuraldeep light palette. */
+    --bg-primary: #fafbfc;
     --bg-secondary: #ffffff;
     --bg-card: #ffffff;
-    --bg-card-hover: #f0f0f2;
+    --bg-card-hover: #f3f4f6;
     --bg-input: #ffffff;
-    --text-primary: #1d1d1f;
-    --text-secondary: #6e6e73;
-    --text-muted: #a1a1a6;
-    --accent-green: #34c759;
+    --text-primary: #111827;
+    --text-secondary: #57606d;
+    --text-muted: #6b7280;
+    --accent-green: #10804a;
     --accent-blue: #007aff;
     --accent-orange: #ff9500;
     --accent-purple: #af52de;
     --accent-red: #ff3b30;
     --accent-cyan: #00b4d8;
-    --border: #d2d2d7;
-    --sidebar-bg: #f5f5f7;
+    --border: #e1e4e8;
+    --sidebar-bg: #f3f4f6;
+    --c-accent: 16 128 74;
+    --c-bg: 250 251 252;
+    --c-panel: 255 255 255;
+    --c-border: 225 228 232;
+    --c-fg: 17 24 39;
+    --c-muted: 87 96 109;
 }
 
 /* ── Monokai Theme ─────────────────────────────────────────────── */
@@ -70,10 +87,50 @@
     --sidebar-bg: #1e1f1c;
 }
 
+/* ── Theme transitions ─────────────────────────────────────────────
+   Smooth 180ms cross-fade when switching dark/light/monokai. Class
+   toggled by the theme switcher in app.js; bare CSS would otherwise
+   transition every hover, which feels mushy. */
+html.theme-transition,
+html.theme-transition * {
+    transition: background-color 180ms ease, color 180ms ease, border-color 180ms ease;
+}
+
+/* ── CTA pulse — subtle attention without seizing the eye ────────── */
+@keyframes accent-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(var(--c-accent) / 0); }
+    50%      { box-shadow: 0 0 0 8px rgba(var(--c-accent) / 0.12); }
+}
+.cta-pulse {
+    animation: accent-pulse 2.4s ease-in-out infinite;
+}
+
+/* ── Reveal-on-scroll — session cards fade+slide on entry ─────────
+   Activated only when JS sets `html.js-reveal`; without JS the
+   elements stay visible (no flash-of-hidden-content for crawlers). */
+html.js-reveal [data-reveal]:not([data-revealed="true"]) {
+    opacity: 0;
+    transform: translateY(14px);
+}
+[data-reveal] {
+    transition: opacity 500ms cubic-bezier(0.22, 1, 0.36, 1),
+                transform 500ms cubic-bezier(0.22, 1, 0.36, 1);
+    will-change: opacity, transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    html.theme-transition,
+    html.theme-transition * { transition: none !important; }
+    [data-reveal] { opacity: 1 !important; transform: none !important; transition: none !important; }
+    .cta-pulse { animation: none !important; }
+}
+
 /* ── Body & Layout ─────────────────────────────────────────────── */
 
 body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
     background: var(--bg-primary);
     color: var(--text-primary);
     height: 100vh;
