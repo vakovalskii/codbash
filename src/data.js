@@ -187,6 +187,7 @@ const VSCODE_APP_DATA = process.platform === 'darwin'
 const VSCODE_WORKSPACE_STORAGE = path.join(VSCODE_APP_DATA, 'User', 'workspaceStorage');
 const HISTORY_FILE = path.join(CLAUDE_DIR, 'history.jsonl');
 const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
+const SAFE_LOCAL_SESSION_ID = /^[A-Za-z0-9._-]{1,128}$/;
 
 // Scan Claude desktop app's local-agent-mode-sessions for embedded .claude dirs
 // Structure: ~/Library/Application Support/Claude/local-agent-mode-sessions/<id>/<id>/local_<id>/.claude/
@@ -2577,6 +2578,187 @@ function parseCodexSessionFile(sessionFile) {
   };
 }
 
+function getCodexDeleteBackupRoot() {
+  if (process.env.CODEBASH_DELETE_BACKUP_DIR) {
+    return path.resolve(process.env.CODEBASH_DELETE_BACKUP_DIR);
+  }
+
+  const userBackup = path.join(ALL_HOMES[0], 'backup', 'codex');
+  if (fs.existsSync(userBackup)) return path.join(userBackup, 'codbash-deleted');
+
+  return path.join(CODEX_DIR, 'backups', 'codbash-deleted');
+}
+
+function codexLineSessionId(line) {
+  try {
+    const entry = JSON.parse(line);
+    return entry.session_id || entry.sessionId || entry.id || '';
+  } catch {
+    return '';
+  }
+}
+
+function collectJsonlLinesForSession(filePath, sessionId) {
+  if (!fs.existsSync(filePath)) return [];
+  const matches = [];
+  for (const line of readLines(filePath)) {
+    if (codexLineSessionId(line) === sessionId) matches.push(line);
+  }
+  return matches;
+}
+
+function removeJsonlLinesForSession(filePath, sessionId) {
+  if (!fs.existsSync(filePath)) return 0;
+  const lines = readLines(filePath);
+  const filtered = lines.filter(line => codexLineSessionId(line) !== sessionId);
+  const removed = lines.length - filtered.length;
+  if (removed > 0) {
+    fs.writeFileSync(filePath, filtered.length ? filtered.join('\n') + '\n' : '');
+  }
+  return removed;
+}
+
+function codexSessionReferencesExist(sessionId) {
+  return collectJsonlLinesForSession(path.join(CODEX_DIR, 'history.jsonl'), sessionId).length > 0 ||
+    collectJsonlLinesForSession(path.join(CODEX_DIR, 'session_index.jsonl'), sessionId).length > 0;
+}
+
+function writeLinesIfAny(filePath, lines) {
+  if (!lines || lines.length === 0) return;
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, lines.join('\n') + '\n', { mode: 0o600 });
+}
+
+function copyFileIfExists(source, target) {
+  if (!source || !fs.existsSync(source)) return false;
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.copyFileSync(source, target);
+  try { fs.chmodSync(target, 0o600); } catch {}
+  return true;
+}
+
+function safeSqlString(value) {
+  if (!SAFE_LOCAL_SESSION_ID.test(String(value || ''))) return '';
+  return String(value);
+}
+
+function backupCodexThreadRow(sessionId, backupDir) {
+  const safeId = safeSqlString(sessionId);
+  if (!safeId) return false;
+  const stateDb = path.join(CODEX_DIR, 'state_5.sqlite');
+  if (!fs.existsSync(stateDb)) return false;
+  try {
+    const rows = execFileSync('sqlite3', ['-json', stateDb, `SELECT * FROM threads WHERE id = '${safeId}';`], {
+      encoding: 'utf8',
+      timeout: 5000,
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim();
+    if (!rows || rows === '[]') return false;
+    fs.writeFileSync(path.join(backupDir, 'state-thread.json'), rows + '\n', { mode: 0o600 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function backupCodexDeleteArtifacts(sessionId, sessionFile, project) {
+  const root = getCodexDeleteBackupRoot();
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const backupDir = path.join(root, `${stamp}-${sessionId.slice(0, 8)}`);
+  fs.mkdirSync(backupDir, { recursive: true, mode: 0o700 });
+
+  const manifest = {
+    sessionId,
+    project: project || '',
+    deletedAt: new Date().toISOString(),
+    codexDir: CODEX_DIR,
+    artifacts: [],
+  };
+
+  if (copyFileIfExists(sessionFile, path.join(backupDir, 'session.jsonl'))) {
+    manifest.artifacts.push({ type: 'session', source: sessionFile, backup: 'session.jsonl' });
+  }
+
+  const historyFile = path.join(CODEX_DIR, 'history.jsonl');
+  const historyLines = collectJsonlLinesForSession(historyFile, sessionId);
+  if (historyLines.length) {
+    writeLinesIfAny(path.join(backupDir, 'history.jsonl'), historyLines);
+    manifest.artifacts.push({ type: 'history', source: historyFile, backup: 'history.jsonl', lines: historyLines.length });
+  }
+
+  const indexFile = path.join(CODEX_DIR, 'session_index.jsonl');
+  const indexLines = collectJsonlLinesForSession(indexFile, sessionId);
+  if (indexLines.length) {
+    writeLinesIfAny(path.join(backupDir, 'session_index.jsonl'), indexLines);
+    manifest.artifacts.push({ type: 'session_index', source: indexFile, backup: 'session_index.jsonl', lines: indexLines.length });
+  }
+
+  if (backupCodexThreadRow(sessionId, backupDir)) {
+    manifest.artifacts.push({ type: 'state_thread', source: path.join(CODEX_DIR, 'state_5.sqlite'), backup: 'state-thread.json' });
+  }
+
+  atomicWriteJson(path.join(backupDir, 'manifest.json'), manifest, { mode: 0o600 });
+  return backupDir;
+}
+
+function pruneEmptyDirsUntil(dir, stopDir) {
+  let current = dir;
+  const stop = path.resolve(stopDir);
+  while (current && path.resolve(current) !== stop && path.resolve(current).startsWith(stop + path.sep)) {
+    try {
+      if (!fs.existsSync(current) || fs.readdirSync(current).length > 0) return;
+      fs.rmdirSync(current);
+      current = path.dirname(current);
+    } catch {
+      return;
+    }
+  }
+}
+
+function deleteCodexSession(sessionId, project, found) {
+  const deleted = [];
+  if (!SAFE_LOCAL_SESSION_ID.test(String(sessionId || ''))) return deleted;
+
+  const sessionFile = found && found.file && fs.existsSync(found.file) ? found.file : '';
+  const backupDir = backupCodexDeleteArtifacts(sessionId, sessionFile, project);
+  deleted.push('backup: ' + backupDir);
+
+  if (sessionFile && fs.existsSync(sessionFile)) {
+    fs.unlinkSync(sessionFile);
+    deleted.push('codex session file');
+    pruneEmptyDirsUntil(path.dirname(sessionFile), path.join(CODEX_DIR, 'sessions'));
+  }
+
+  const historyRemoved = removeJsonlLinesForSession(path.join(CODEX_DIR, 'history.jsonl'), sessionId);
+  if (historyRemoved > 0) deleted.push(`${historyRemoved} codex history entries`);
+
+  const indexRemoved = removeJsonlLinesForSession(path.join(CODEX_DIR, 'session_index.jsonl'), sessionId);
+  if (indexRemoved > 0) deleted.push(`${indexRemoved} codex index entries`);
+
+  const safeId = safeSqlString(sessionId);
+  const stateDb = path.join(CODEX_DIR, 'state_5.sqlite');
+  if (safeId && fs.existsSync(stateDb)) {
+    try {
+      execFileSync('sqlite3', [stateDb, `DELETE FROM threads WHERE id = '${safeId}';`], {
+        timeout: 5000,
+        windowsHide: true,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      deleted.push('codex state thread');
+    } catch {}
+  }
+
+  _sessionsCache = null;
+  _sessionsCacheTs = 0;
+  _sessionFileIndex = null;
+  _sessionFileIndexTs = 0;
+  _codexDayDirMtimesPending = null;
+  _codexSessionsDirMtimes = {};
+
+  return deleted;
+}
+
 function scanCodexSessions() {
   const sessions = [];
   const codexTitles = parseCodexSessionIndex(CODEX_DIR);
@@ -3643,6 +3825,10 @@ function loadSessionDetail(sessionId, project) {
 function deleteSession(sessionId, project) {
   const deleted = [];
   let found = findSessionFile(sessionId, project);
+
+  if ((found && found.format === 'codex') || (!found && codexSessionReferencesExist(sessionId))) {
+    return deleteCodexSession(sessionId, project, found);
+  }
 
   if (found && found.format === 'qwen' && fs.existsSync(found.file)) {
     fs.unlinkSync(found.file);
