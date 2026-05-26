@@ -58,6 +58,27 @@ test('initProjectMemory writes the required manifest fields', () => {
   }
 });
 
+test('initProjectMemory writes empty index and cluster metadata for the project', () => {
+  const { root, project } = makeProject();
+  try {
+    codexMemory.initProjectMemory(project);
+
+    const index = JSON.parse(fs.readFileSync(path.join(project, '.codex-memory', 'sessions.index.json'), 'utf8'));
+    assert.equal(index.version, 1);
+    assert.equal(index.projectPath, project);
+    assert.equal(typeof index.updatedAt, 'string');
+    assert.deepEqual(index.sessions, []);
+
+    const clusters = JSON.parse(fs.readFileSync(path.join(project, '.codex-memory', 'clusters.json'), 'utf8'));
+    assert.equal(clusters.version, 1);
+    assert.equal(clusters.projectPath, project);
+    assert.equal(typeof clusters.updatedAt, 'string');
+    assert.deepEqual(clusters.clusters, []);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('initProjectMemory writes and deduplicates the .gitignore entry without overwriting existing content', () => {
   const { root, project } = makeProject();
   try {
