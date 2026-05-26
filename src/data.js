@@ -252,10 +252,30 @@ function parseTimestamp(value) {
   if (typeof value === 'string') {
     const trimmed = value.trim();
     if (!trimmed) return NaN;
-    if (/^\d+$/.test(trimmed)) return Number(trimmed);
+    if (/^\d+(\.\d+)?$/.test(trimmed)) return Number(trimmed);
     return Date.parse(trimmed);
   }
   return NaN;
+}
+
+// Epoch seconds stay below this cutoff until 2286; millisecond epochs are larger.
+const EPOCH_SECONDS_CUTOFF = 10000000000;
+
+function normalizeTimestampMs(ts) {
+  if (!Number.isFinite(ts)) return NaN;
+  return ts > 0 && ts < EPOCH_SECONDS_CUTOFF ? ts * 1000 : ts;
+}
+
+function parseTimestampMs(value) {
+  return normalizeTimestampMs(parseTimestamp(value));
+}
+
+function parseEntryTimestampMs(entry) {
+  if (!entry || typeof entry !== 'object') return NaN;
+  const timestampTs = parseTimestampMs(entry.timestamp);
+  if (Number.isFinite(timestampTs) && timestampTs > 0) return timestampTs;
+  const fallbackTs = parseTimestampMs(entry.ts);
+  return Number.isFinite(fallbackTs) && fallbackTs > 0 ? fallbackTs : NaN;
 }
 
 function shortenHomePath(value, homes = ALL_HOMES) {
@@ -352,7 +372,7 @@ function parseKiloMcpServer(toolName) {
 }
 
 // Disk cache for parsed Claude session files (keyed by path + mtime + size)
-const PARSED_CACHE_FILE = path.join(os.tmpdir(), 'codedash-parsed-cache-v2.json');
+const PARSED_CACHE_FILE = path.join(os.tmpdir(), 'codbash-parsed-cache.json');
 let _parsedDiskCache = null;
 let _parsedDiskCacheDirty = false;
 // Reverse index: file path -> cache key (avoids repeated fs.statSync)
@@ -1790,7 +1810,7 @@ function loadKiroDetail(conversationId) {
 
 // Build workspace-hash -> project path mapping for VS Code workspaceStorage
 let _copilotWsMapCache = null;
-const COPILOT_WS_MAP_CACHE_FILE = path.join(os.tmpdir(), 'codedash-copilot-ws-map.json');
+const COPILOT_WS_MAP_CACHE_FILE = path.join(os.tmpdir(), 'codbash-copilot-ws-map.json');
 const COPILOT_WS_MAP_TTL = 600000; // 10 minutes
 
 function buildCopilotWorkspaceMap() {
@@ -1884,7 +1904,7 @@ function parseCopilotJson(filePath) {
 }
 
 // Disk cache for Copilot session metadata (avoids re-scanning large files)
-const COPILOT_PARSED_CACHE_FILE = path.join(os.tmpdir(), 'codedash-copilot-parsed-cache.json');
+const COPILOT_PARSED_CACHE_FILE = path.join(os.tmpdir(), 'codbash-copilot-parsed-cache.json');
 let _copilotParsedCache = null;
 
 function _loadCopilotParsedCache() {
@@ -2199,7 +2219,7 @@ function decodeCursorProjectFolderKey(proj) {
 // Build composerId -> project path mapping from Cursor workspace storage
 // Uses disk cache to avoid querying 190+ SQLite files on every startup
 let _cursorWsMapCache = null;
-const CURSOR_WS_MAP_CACHE_FILE = path.join(os.tmpdir(), 'codedash-cursor-ws-map.json');
+const CURSOR_WS_MAP_CACHE_FILE = path.join(os.tmpdir(), 'codbash-cursor-ws-map.json');
 const CURSOR_WS_MAP_TTL = 600000; // 10 minutes
 
 function buildCursorWorkspaceMap() {
@@ -2523,15 +2543,15 @@ function parseCodexSessionFile(sessionFile) {
   let msgCount = 0;
   let userMsgCount = 0;
   let firstMsg = '';
-  let firstTs = stat.mtimeMs;
-  let lastTs = stat.mtimeMs;
+  let firstTs = Infinity;
+  let lastTs = -Infinity;
   const mcpSet = new Set();
 
   for (const line of lines) {
     try {
       const entry = JSON.parse(line);
-      const ts = parseTimestamp(entry.timestamp || entry.ts);
-      if (Number.isFinite(ts)) {
+      const ts = parseEntryTimestampMs(entry);
+      if (Number.isFinite(ts) && ts > 0) {
         if (ts < firstTs) firstTs = ts;
         if (ts > lastTs) lastTs = ts;
       }
@@ -2565,6 +2585,10 @@ function parseCodexSessionFile(sessionFile) {
     } catch {}
   }
 
+  const fallbackTs = Number.isFinite(stat.mtimeMs) ? stat.mtimeMs : Date.now();
+  if (!Number.isFinite(firstTs)) firstTs = fallbackTs;
+  if (!Number.isFinite(lastTs)) lastTs = firstTs;
+
   return {
     projectPath,
     msgCount,
@@ -2591,7 +2615,8 @@ function scanCodexSessions() {
         const sid = d.session_id || d.sessionId || d.id;
         if (!sid) continue;
         if (importedFromClaude.has(sid)) continue; // skip — original Claude file loaded separately
-        const ts = d.ts ? d.ts * 1000 : (d.timestamp || Date.now());
+        const parsedTs = parseEntryTimestampMs(d);
+        const ts = Number.isFinite(parsedTs) && parsedTs > 0 ? parsedTs : Date.now();
         if (!sessions.find(s => s.id === sid)) {
           sessions.push({
             id: sid,
@@ -2697,7 +2722,7 @@ function scanCodexSessions() {
 
 const _gitRootCache = {};
 // v2: collapses worktrees to main repo + ignores $HOME-as-git-root.
-const GIT_ROOT_CACHE_FILE = path.join(os.tmpdir(), 'codedash-gitroot-cache-v2.json');
+const GIT_ROOT_CACHE_FILE = path.join(os.tmpdir(), 'codbash-gitroot-cache.json');
 let _gitRootDiskCache = null;
 
 function _loadGitRootDiskCache() {
@@ -4793,7 +4818,7 @@ function getModelPricing(model) {
 // ── Compute real cost from session file token usage ────────
 
 // Disk cache for computed session costs
-const COST_CACHE_FILE = path.join(os.tmpdir(), 'codedash-cost-cache.json');
+const COST_CACHE_FILE = path.join(os.tmpdir(), 'codbash-cost-cache.json');
 let _costDiskCache = null;
 
 function _loadCostDiskCache() {
@@ -5162,7 +5187,7 @@ function computeSessionCost(sessionId, project) {
 // ── Cost analytics ────────────────────────────────────────
 
 // Analytics result cache — avoids recomputing 31k sessions every request
-const ANALYTICS_CACHE_FILE = path.join(os.tmpdir(), 'codedash-analytics-cache.json');
+const ANALYTICS_CACHE_FILE = path.join(os.tmpdir(), 'codbash-analytics-cache.json');
 let _analyticsCacheResult = null;
 let _analyticsCacheKey = null;
 
@@ -5366,8 +5391,9 @@ function _computeCostAnalytics(sessions) {
     globalContextTurnCount += costData.contextTurnCount;
 
     // Date range
-    const day = s.date || 'unknown';
-    if (s.date) {
+    const hasValidDate = isValidLocalDay(s.date);
+    const day = hasValidDate ? s.date : 'unknown';
+    if (hasValidDate) {
       if (!firstDate || s.date < firstDate) firstDate = s.date;
       if (!lastDate || s.date > lastDate) lastDate = s.date;
     }
@@ -5377,11 +5403,11 @@ function _computeCostAnalytics(sessions) {
     byDay[day].tokens += tokens;
 
     // By week
-    if (s.date) {
-      const d = new Date(s.date);
+    if (hasValidDate) {
+      const d = parseLocalDayStart(s.date);
       const weekStart = new Date(d);
       weekStart.setDate(d.getDate() - d.getDay());
-      const weekKey = weekStart.toISOString().slice(0, 10);
+      const weekKey = fmtLocalDay(weekStart.getTime());
       if (!byWeek[weekKey]) byWeek[weekKey] = { cost: 0, sessions: 0 };
       byWeek[weekKey].cost += cost;
       byWeek[weekKey].sessions++;
@@ -5394,20 +5420,20 @@ function _computeCostAnalytics(sessions) {
     byProject[proj].sessions++;
     byProject[proj].tokens += tokens;
 
-    sessionCosts.push({ id: s.id, cost, project: proj, date: s.date, last_ts: s.last_ts || 0 });
+    sessionCosts.push({ id: s.id, cost, project: proj, date: hasValidDate ? s.date : '', last_ts: s.last_ts || 0 });
   }
 
   // Sort top sessions by cost
   sessionCosts.sort((a, b) => b.cost - a.cost);
 
   const days = firstDate && lastDate
-    ? Math.max(1, Math.round((new Date(lastDate) - new Date(firstDate)) / 86400000) + 1)
+    ? Math.max(1, Math.round((parseLocalDayStart(lastDate) - parseLocalDayStart(firstDate)) / 86400000) + 1)
     : 1;
 
   // Burn rate: derived from already-computed sessionCosts — no extra IO
   const now = Date.now();
-  const todayStr = new Date().toISOString().slice(0, 10);
-  const hoursElapsedToday = (now - new Date(todayStr).getTime()) / 3600000;
+  const todayStr = getLocalToday();
+  const hoursElapsedToday = (now - parseLocalDayStart(todayStr).getTime()) / 3600000;
   let last1hCost = 0;
   let todayCost = 0;
   for (const sc of sessionCosts) {
@@ -5786,9 +5812,58 @@ function leaderboardAgentKey(session) {
   return session.tool || 'unknown';
 }
 
+function getLocalToday() {
+  return fmtLocalDay(Date.now());
+}
+
+function parseLocalDayStart(day) {
+  if (typeof day !== 'string') return new Date(NaN);
+  const match = day.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return new Date(NaN);
+  const parsed = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  if (
+    parsed.getFullYear() !== Number(match[1]) ||
+    parsed.getMonth() !== Number(match[2]) - 1 ||
+    parsed.getDate() !== Number(match[3])
+  ) {
+    return new Date(NaN);
+  }
+  return parsed;
+}
+
+function isValidLocalDay(day) {
+  return !Number.isNaN(parseLocalDayStart(day).getTime());
+}
+
+function getLocalTimezone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+  } catch {
+    return '';
+  }
+}
+
+function getUtcOffsetMinutes(ts = Date.now()) {
+  return -new Date(ts).getTimezoneOffset();
+}
+
+function computeCurrentStreak(daily, today = getLocalToday()) {
+  const activeDays = new Set((daily || []).map(d => d && d.date).filter(Boolean));
+  const dt = parseLocalDayStart(today);
+  if (Number.isNaN(dt.getTime())) return 0;
+
+  let streak = 0;
+  for (let i = 0; i < 365; i++) {
+    const day = fmtLocalDay(dt.getTime());
+    if (!activeDays.has(day)) break;
+    streak++;
+    dt.setDate(dt.getDate() - 1);
+  }
+  return streak;
+}
 
 // Disk cache for per-session daily message breakdown
-const DAILY_STATS_CACHE_FILE = path.join(os.tmpdir(), 'codedash-daily-stats-cache.json');
+const DAILY_STATS_CACHE_FILE = path.join(os.tmpdir(), 'codbash-daily-stats-cache.json');
 let _dailyStatsDiskCache = null;
 
 function _loadDailyStatsDiskCache() {
@@ -5813,10 +5888,13 @@ function _computeSessionDailyBreakdown(s, found) {
   const tsByDay = {};
 
   const addMsg = (day, ts) => {
+    if (!day) return;
     msgsByDay[day] = (msgsByDay[day] || 0) + 1;
-    if (!tsByDay[day]) tsByDay[day] = { first: ts, last: ts };
-    if (ts < tsByDay[day].first) tsByDay[day].first = ts;
-    if (ts > tsByDay[day].last) tsByDay[day].last = ts;
+    const normalizedTs = typeof ts === 'number' ? normalizeTimestampMs(ts) : parseTimestampMs(ts);
+    if (!Number.isFinite(normalizedTs) || normalizedTs <= 0) return;
+    if (!tsByDay[day]) tsByDay[day] = { first: normalizedTs, last: normalizedTs };
+    if (normalizedTs < tsByDay[day].first) tsByDay[day].first = normalizedTs;
+    if (normalizedTs > tsByDay[day].last) tsByDay[day].last = normalizedTs;
   };
 
   try {
@@ -5867,16 +5945,19 @@ function _computeSessionDailyBreakdown(s, found) {
         } else if (found.format === 'codex') {
           if (entry.type === 'response_item' && entry.payload && entry.payload.role === 'user') {
             isUser = true;
-            ts = s.first_ts;
-            const c = entry.payload.content;
-            if (Array.isArray(c)) { for (const p of c) { if ((p.text || '').trim()) { hasText = true; break; } } }
+            ts = parseEntryTimestampMs(entry);
+            const content = extractContent(entry.payload.content);
+            hasText = !!(content && content.trim() && !isSystemMessage(content));
           } else continue;
         }
 
         if (!isUser || !hasText) continue;
-        if (!ts || ts < 1000000000000) ts = s.first_ts;
-        const day = (found.format === 'claude' && ts) ? fmtLocalDay(ts) : (s.date || fmtLocalDay(s.last_ts));
-        addMsg(day, ts || s.first_ts);
+        const normalizedTs = normalizeTimestampMs(ts);
+        const fallbackTs = Number.isFinite(s.first_ts) && s.first_ts > 0 ? s.first_ts : NaN;
+        const effectiveTs = Number.isFinite(normalizedTs) && normalizedTs > 0 ? normalizedTs : fallbackTs;
+        const fallbackDay = isValidLocalDay(s.date) ? s.date : (Number.isFinite(s.last_ts) && s.last_ts > 0 ? fmtLocalDay(s.last_ts) : '');
+        const day = Number.isFinite(effectiveTs) && effectiveTs > 0 ? fmtLocalDay(effectiveTs) : fallbackDay;
+        addMsg(day, effectiveTs);
       } catch {}
     }
   } catch {}
@@ -5884,7 +5965,7 @@ function _computeSessionDailyBreakdown(s, found) {
 }
 
 // Daily stats result cache
-const DAILY_RESULT_CACHE_FILE = path.join(os.tmpdir(), 'codedash-daily-result-cache-v2.json');
+const DAILY_RESULT_CACHE_FILE = path.join(os.tmpdir(), 'codbash-daily-result-cache.json');
 let _dailyResultCache = null;
 let _dailyResultCacheKey = null;
 
@@ -5965,7 +6046,7 @@ function _computeDailyStats(sessions) {
     }
 
     // Fallback for non-Claude or sessions without detail: single-day attribution
-    const day = s.date || fmtLocalDay(s.last_ts);
+    const day = isValidLocalDay(s.date) ? s.date : (Number.isFinite(s.last_ts) ? fmtLocalDay(s.last_ts) : 'unknown');
     const d = ensureDay(day);
     d.sessions++;
     // Use exact user_messages count if available, otherwise estimate
@@ -6018,21 +6099,11 @@ function getLeaderboardStats() {
   }
 
   // Today
-  const today = new Date().toISOString().slice(0, 10);
+  const today = getLocalToday();
   const todayStats = daily.find(d => d.date === today) || { sessions: 0, messages: 0, hours: 0, cost: 0, agents: {} };
 
   // Streak (consecutive days with sessions)
-  let streak = 0;
-  const dt = new Date();
-  for (let i = 0; i < 365; i++) {
-    const day = dt.toISOString().slice(0, 10);
-    if (daily.find(d => d.date === day)) {
-      streak++;
-      dt.setDate(dt.getDate() - 1);
-    } else {
-      break;
-    }
-  }
+  const streak = computeCurrentStreak(daily, today);
 
   const result = {
     anon,
@@ -6042,6 +6113,8 @@ function getLeaderboardStats() {
     streak,
     daily: daily.slice(0, 30), // last 30 days
     activeDays: daily.length,
+    timezone: getLocalTimezone(),
+    utcOffsetMinutes: getUtcOffsetMinutes(),
   };
   _lbCache = result;
   _lbCacheTs = Date.now();
@@ -6099,6 +6172,14 @@ module.exports = {
     parseClaudeStructuredMessage,
     parseStructuredMessage,
     isFilteredClaudeStructuredMessage,
+    parseCodexSessionFile,
+    _computeSessionDailyBreakdown,
+    fmtLocalDay,
+    getLocalToday,
+    parseLocalDayStart,
+    getLocalTimezone,
+    getUtcOffsetMinutes,
+    computeCurrentStreak,
     _parseMainWorktree,
     resolveGitRoot,
     ALL_HOMES,
