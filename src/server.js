@@ -12,6 +12,7 @@ const { CHANGELOG } = require('./changelog');
 const { getHTML } = require('./html');
 const projectsApi = require('./projects');
 const settingsApi = require('./settings');
+const codexMemory = require('./codex-memory');
 // Element-level allowlist for launch flags. terminals.js currently only checks
 // for 'skip-permissions'; this set is the surface area we accept from clients.
 const ALLOWED_LAUNCH_FLAGS = new Set(['skip-permissions']);
@@ -140,6 +141,11 @@ function startServer(host, port, openBrowser = true) {
       manager: repoRefreshManager,
       getKnownGitRoots: getKnownGitRoots,
     })) {
+      // handled
+    }
+
+    // ── Codex Memory API ───────────────────
+    else if (pathname.startsWith('/api/codex-memory/') && handleCodexMemoryRoute(req, res, parsed, jsonLog)) {
       // handled
     }
 
@@ -1216,6 +1222,40 @@ async function handleCloudProxy(req, res, pathname) {
 }
 
 // ── Helpers ─────────────────────────────────
+function handleCodexMemoryRoute(req, res, parsed, sendJson = json) {
+  const pathname = parsed.pathname;
+
+  if (req.method === 'GET' && pathname === '/api/codex-memory/status') {
+    try {
+      const project = parsed.searchParams.get('project') || '';
+      sendJson(res, codexMemory.getProjectMemoryStatus(project));
+    } catch (e) {
+      sendJson(res, { ok: false, error: e.message }, 400);
+    }
+    return true;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/codex-memory/init') {
+    readBody(req, body => {
+      try {
+        const payload = JSON.parse(body || '{}');
+        const result = codexMemory.initProjectMemory(payload.project);
+        sendJson(res, {
+          ok: true,
+          memoryDir: result.memoryDir,
+          created: result.created,
+          gitignoreUpdated: result.gitignoreUpdated,
+        });
+      } catch (e) {
+        sendJson(res, { ok: false, error: e.message }, 400);
+      }
+    });
+    return true;
+  }
+
+  return false;
+}
+
 function json(res, data, status = 200) {
   res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(data));
@@ -1728,4 +1768,4 @@ ${conversation}`;
   });
 }
 
-module.exports = { startServer, getKnownGitRoots };
+module.exports = { startServer, getKnownGitRoots, handleCodexMemoryRoute };
