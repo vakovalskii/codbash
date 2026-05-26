@@ -2,6 +2,18 @@
 
 const CHANGELOG = [
   {
+    version: '7.5.1',
+    date: '2026-05-26',
+    title: 'Neuraldeep visual identity + Pi hardening',
+    changes: [
+      'New brand palette: deeper dark backgrounds (#08090C) + neon green accent (#00FF88)',
+      'Inter font + crisper text rendering (antialiased smoothing)',
+      'Smooth 180ms theme cross-fade when switching dark / light / monokai',
+      'Pi / Oh My Pi: tightened resume-target handling — non-Pi Resume buttons no longer routed through Pi-specific helper, /api/launch only forwards resumeTarget for Pi sessions',
+      'CSP relaxed precisely for fonts.googleapis.com / fonts.gstatic.com (no other change)',
+    ],
+  },
+  {
     version: '7.5.0',
     date: '2026-05-25',
     title: 'Five new agents, project launcher, subscriptions',
