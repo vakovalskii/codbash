@@ -104,7 +104,10 @@ function startServer(host, port, openBrowser = true) {
         'Content-Security-Policy': [
           "default-src 'self'",
           "script-src 'self' 'unsafe-inline'",
-          "style-src 'self' 'unsafe-inline'",
+          // fonts.googleapis.com serves the stylesheet, gstatic.com serves the
+          // actual woff2 — both required by the Inter font link in index.html
+          "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+          "font-src 'self' https://fonts.gstatic.com",
           "connect-src 'self'",
           "img-src 'self' data:",
           "frame-ancestors 'none'",

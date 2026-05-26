@@ -2447,6 +2447,9 @@ function clearGitProjectFilter() {
 // ── Themes ─────────────────────────────────────────────────────
 
 function setTheme(theme) {
+  // Add transition class briefly so theme swap cross-fades smoothly.
+  // Removing it afterward keeps individual hover/click transitions snappy.
+  document.documentElement.classList.add('theme-transition');
   if (theme === 'dark') {
     document.body.removeAttribute('data-theme');
   } else if (theme === 'system') {
@@ -2460,6 +2463,9 @@ function setTheme(theme) {
     document.body.setAttribute('data-theme', theme);
   }
   localStorage.setItem('codedash-theme', theme);
+  setTimeout(function () {
+    document.documentElement.classList.remove('theme-transition');
+  }, 220);
 }
 
 function saveThemePref(val) {
