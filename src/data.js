@@ -655,6 +655,7 @@ function listPiSessionFiles(agentDir) {
     try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
     for (const entry of entries) {
       const fullPath = path.join(dir, entry.name);
+      if (entry.isSymbolicLink()) continue;
       if (entry.isFile() && entry.name.endsWith('.jsonl')) {
         files.push(fullPath);
       } else if (entry.isDirectory() && depth < 3) {
@@ -705,6 +706,9 @@ function normalizePiUsage(usage) {
   };
 }
 
+const SAFE_PI_SESSION_ID = /^[A-Za-z0-9._-]{1,128}$/;
+
+
 function parsePiSessionFile(sessionFile) {
   if (!fs.existsSync(sessionFile)) return null;
 
@@ -723,6 +727,7 @@ function parsePiSessionFile(sessionFile) {
   if (!header || header.type !== 'session' || !header.id) return null;
 
   let sessionId = String(header.id);
+  if (!SAFE_PI_SESSION_ID.test(sessionId)) return null;
   let projectPath = typeof header.cwd === 'string' ? header.cwd : '';
   let title = typeof header.title === 'string' ? header.title.trim().slice(0, 200) : '';
   let msgCount = 0;
@@ -2832,8 +2837,8 @@ let _codexSessionsDirMtimes = {}; // { dayDirPath: mtimeMs } — shallow leaf di
 // check. Reused by _updateScanMarkers() to avoid a second filesystem walk
 // (which would race against the first and yield inconsistent snapshots).
 let _codexDayDirMtimesPending = null;
-let _ompSessionDirMtimes = {};
-let _ompSessionDirMtimesPending = null;
+let _piOmpSessionDirMtimes = {};
+let _piOmpSessionDirMtimesPending = null;
 
 function _piSessionDirMtimes(agentDirs) {
   const out = {};
@@ -2843,15 +2848,17 @@ function _piSessionDirMtimes(agentDirs) {
     function walk(dir, depth) {
       let entries;
       try {
-        const st = fs.statSync(dir);
+        const st = fs.lstatSync(dir);
+        if (st.isSymbolicLink()) return;
         out[dir] = st.mtimeMs;
         entries = fs.readdirSync(dir, { withFileTypes: true });
       } catch { return; }
       for (const entry of entries) {
         const fullPath = path.join(dir, entry.name);
+        if (entry.isSymbolicLink()) continue;
         if (entry.isFile() && entry.name.endsWith('.jsonl')) {
           try {
-            const st = fs.statSync(fullPath);
+            const st = fs.lstatSync(fullPath);
             out[fullPath] = st.mtimeMs + ':' + st.size;
           } catch {}
         } else if (entry.isDirectory() && depth < 3) {
@@ -2950,12 +2957,12 @@ function _sessionsNeedRescan() {
       if (dayMtimes[k] !== _codexSessionsDirMtimes[k]) return true;
     }
     const piDirMtimes = _piSessionDirMtimes([PI_AGENT_DIR, OMP_AGENT_DIR].concat(EXTRA_PI_AGENT_DIRS, EXTRA_OMP_AGENT_DIRS));
-    _ompSessionDirMtimesPending = piDirMtimes;
-    const prevPiKeys = Object.keys(_ompSessionDirMtimes);
+    _piOmpSessionDirMtimesPending = piDirMtimes;
+    const prevPiKeys = Object.keys(_piOmpSessionDirMtimes);
     const curPiKeys = Object.keys(piDirMtimes);
     if (prevPiKeys.length !== curPiKeys.length) return true;
     for (const k of curPiKeys) {
-      if (piDirMtimes[k] !== _ompSessionDirMtimes[k]) return true;
+      if (piDirMtimes[k] !== _piOmpSessionDirMtimes[k]) return true;
     }
   } catch {}
   return false;
@@ -3011,8 +3018,8 @@ function _updateScanMarkers() {
     // otherwise (first call / direct invocation) walk now.
     _codexSessionsDirMtimes = _codexDayDirMtimesPending || _codexDayDirMtimes();
     _codexDayDirMtimesPending = null;
-    _ompSessionDirMtimes = _ompSessionDirMtimesPending || _piSessionDirMtimes([PI_AGENT_DIR, OMP_AGENT_DIR].concat(EXTRA_PI_AGENT_DIRS, EXTRA_OMP_AGENT_DIRS));
-    _ompSessionDirMtimesPending = null;
+    _piOmpSessionDirMtimes = _piOmpSessionDirMtimesPending || _piSessionDirMtimes([PI_AGENT_DIR, OMP_AGENT_DIR].concat(EXTRA_PI_AGENT_DIRS, EXTRA_OMP_AGENT_DIRS));
+    _piOmpSessionDirMtimesPending = null;
   } catch {}
 }
 

@@ -84,6 +84,18 @@ test('parsePiSessionFile reads OMP header and message summary', () => {
   assert.equal(summary.lastTs, Date.parse('2026-05-24T10:00:04.000Z'));
 });
 
+test('parsePiSessionFile rejects unsafe header ids', () => {
+  const dir = tmpDir();
+  const file = path.join(dir, 'sessions', '--tmp--project--', 'bad.jsonl');
+  writeJsonl(file, [
+    { type: 'session', id: '../../claude-session', cwd: '/tmp/project', timestamp: '2026-05-24T10:00:00.000Z' },
+    { type: 'message', timestamp: '2026-05-24T10:00:01.000Z', message: { role: 'user', content: 'bad id' } },
+  ]);
+
+  assert.equal(parsePiSessionFile(file), null);
+});
+
+
 test('loadPiDetail returns role-compatible display messages with tokens', () => {
   const dir = tmpDir();
   const file = path.join(dir, 'sessions', '--tmp--project--', '2026_pi-session-2.jsonl');
@@ -123,6 +135,20 @@ test('scanPiSessions ignores malformed and non-OMP files', () => {
   assert.equal(sessions[0].project, '/tmp/project');
   assert.equal(sessions[0].first_message, 'find me');
   assert.equal(sessions[0].agent_variant, 'pi');
+});
+
+test('scanPiSessions ignores symlinked session files', () => {
+  const agentDir = tmpDir();
+  const outside = path.join(tmpDir(), 'outside.jsonl');
+  writeJsonl(outside, [
+    { type: 'session', id: 'pi-symlink', cwd: '/tmp/project', timestamp: '2026-05-24T10:00:00.000Z' },
+    { type: 'message', timestamp: '2026-05-24T10:00:01.000Z', message: { role: 'user', content: 'outside' } },
+  ]);
+  const link = path.join(agentDir, 'sessions', '--tmp--project--', 'link.jsonl');
+  fs.mkdirSync(path.dirname(link), { recursive: true });
+  fs.symlinkSync(outside, link);
+
+  assert.deepEqual(scanPiSessions(agentDir), []);
 });
 
 test('scanPiSessions marks OhMyPi variant when scanning omp directory', () => {

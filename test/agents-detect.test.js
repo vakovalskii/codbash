@@ -106,6 +106,7 @@ test('detect prefers pi and falls back to omp for Pi', async () => {
   assert.ok(fallbackPi, 'Pi should be detected by omp fallback binary');
   assert.equal(fallbackPi.binPath, '/usr/local/bin/omp');
   assert.equal(fallbackPi.command, 'omp');
+  assert.equal(fallbackPi.label, 'Pi/OhMyPi');
   assert.deepEqual(fallbackPi.commands, ['omp']);
 });
 

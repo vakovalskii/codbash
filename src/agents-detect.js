@@ -33,7 +33,7 @@ const AGENT_DEFS = Object.freeze([
   { id: 'codex',        label: 'Codex',        bin: 'codex' },
   { id: 'cursor',       label: 'Cursor',       bin: 'cursor-agent', appBundle: 'Cursor.app' },
   { id: 'qwen',         label: 'Qwen Code',    bin: 'qwen' },
-  { id: 'pi',           label: 'OhMyPi',        customCheck: 'piPath' },
+  { id: 'pi',           label: 'Pi/OhMyPi',     customCheck: 'piPath' },
   { id: 'kilo',         label: 'Kilo',         bin: 'kilo' },
   { id: 'kiro',         label: 'Kiro CLI',     bin: 'kiro-cli' },
   { id: 'opencode',     label: 'OpenCode',     bin: 'opencode' },

@@ -76,7 +76,11 @@ async function openDetail(s) {
   } else if (activeSessions[s.id]) {
     infoHtml += '<button class="launch-btn" style="background:var(--accent-green);color:#000" onclick="focusSession(\'' + jsId + '\')">Focus Terminal</button>';
   } else {
-    infoHtml += '<button class="launch-btn" onclick="launchPiSession(\'' + jsId + '\',\'' + jsTool + '\',\'' + jsProject + '\')">Resume</button>';
+    if (s.tool === 'pi') {
+      infoHtml += '<button class="launch-btn" onclick="launchPiSession(\'' + jsId + '\',\'' + jsTool + '\',\'' + jsProject + '\')">Resume</button>';
+    } else {
+      infoHtml += '<button class="launch-btn" onclick="launchSession(\'' + jsId + '\',\'' + jsTool + '\',\'' + jsProject + '\')">Resume</button>';
+    }
     if (s.tool === 'claude') {
       infoHtml += '<button class="launch-btn" style="background:var(--accent-orange);color:#000" onclick="launchDangerous(\'' + jsId + '\',\'' + jsProject + '\')" title="--dangerously-skip-permissions">Resume (skip perms)</button>';
     }
