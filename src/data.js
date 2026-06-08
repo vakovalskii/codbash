@@ -164,6 +164,7 @@ const OMP_AGENT_DIR = process.env.OMP_CODING_AGENT_DIR || path.join(ALL_HOMES[0]
 const PI_SESSIONS_DIR = path.join(PI_AGENT_DIR, 'sessions');
 const OMP_SESSIONS_DIR = path.join(OMP_AGENT_DIR, 'sessions');
 const KIRO_DB = path.join(ALL_HOMES[0], 'Library', 'Application Support', 'kiro-cli', 'data.sqlite3');
+const KIRO_SESSIONS_DIR = path.join(ALL_HOMES[0], '.kiro', 'sessions', 'cli');
 const COPILOT_SESSION_DIR = path.join(ALL_HOMES[0], '.copilot', 'session-state');
 const COPILOT_JB_DIR = path.join(ALL_HOMES[0], '.copilot', 'jb');
 const KILO_DB = path.join(ALL_HOMES[0], '.local', 'share', 'kilo', 'kilo.db');
@@ -1807,6 +1808,84 @@ function loadKiroDetail(conversationId) {
   }
 }
 
+// ── Kiro CLI (new format: ~/.kiro/sessions/cli/, since ~May 2026) ─────────────
+
+function scanKiroCliSessions() {
+  const sessions = [];
+  if (!fs.existsSync(KIRO_SESSIONS_DIR)) return sessions;
+
+  let files;
+  try { files = fs.readdirSync(KIRO_SESSIONS_DIR); } catch { return sessions; }
+
+  for (const f of files) {
+    if (!f.endsWith('.json')) continue;
+    const sessionId = f.slice(0, -5);
+    // skip if not a UUID-like name
+    if (!/^[0-9a-f-]{36}$/.test(sessionId)) continue;
+
+    try {
+      const meta = JSON.parse(fs.readFileSync(path.join(KIRO_SESSIONS_DIR, f), 'utf8'));
+      const createdMs = meta.created_at ? new Date(meta.created_at).getTime() : 0;
+      const updatedMs = meta.updated_at ? new Date(meta.updated_at).getTime() : 0;
+      const jsonlPath = path.join(KIRO_SESSIONS_DIR, sessionId + '.jsonl');
+      const fileSize = fs.existsSync(jsonlPath) ? fs.statSync(jsonlPath).size : 0;
+
+      sessions.push({
+        id: sessionId,
+        tool: 'kiro',
+        format: 'kiro-cli',
+        project: meta.cwd || '',
+        project_short: (meta.cwd || '').replace(os.homedir(), '~'),
+        first_ts: createdMs || Date.now(),
+        last_ts: updatedMs || Date.now(),
+        messages: fileSize > 0 ? Math.max(2, Math.floor(fileSize / 3000)) : 0,
+        first_message: meta.title || '',
+        has_detail: fs.existsSync(jsonlPath),
+        file_size: fileSize,
+        detail_messages: 0,
+      });
+    } catch {}
+  }
+
+  return sessions;
+}
+
+function loadKiroCliDetail(sessionId) {
+  const jsonlPath = path.join(KIRO_SESSIONS_DIR, sessionId + '.jsonl');
+  if (!fs.existsSync(jsonlPath)) return { messages: [] };
+
+  const messages = [];
+  try {
+    const lines = fs.readFileSync(jsonlPath, 'utf8').split('\n');
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      let entry;
+      try { entry = JSON.parse(line); } catch { continue; }
+
+      const { kind, data } = entry;
+      if (!data) continue;
+
+      if (kind === 'Prompt') {
+        // data.content is array of {kind, data} blocks
+        const text = (data.content || [])
+          .filter(b => b.kind === 'text')
+          .map(b => b.data || '')
+          .join('').trim();
+        if (text) messages.push({ role: 'user', content: text.slice(0, 2000), uuid: data.message_id || '' });
+
+      } else if (kind === 'AssistantMessage') {
+        const text = (data.content || [])
+          .filter(b => b.kind === 'text')
+          .map(b => b.data || '')
+          .join('').trim();
+        if (text) messages.push({ role: 'assistant', content: text.slice(0, 2000), uuid: data.message_id || '' });
+      }
+    }
+  } catch {}
+
+  return { messages: messages.slice(0, 200) };
+}
+
 // ── Copilot Chat (VS Code extension) ─────────────────────────
 
 // Build workspace-hash -> project path mapping for VS Code workspaceStorage
@@ -3293,6 +3372,14 @@ function loadSessions() {
     }
 } catch {}
 
+  // Load Kiro CLI sessions (new format: ~/.kiro/sessions/cli/, since ~May 2026)
+  try {
+    const kiroCliSessions = scanKiroCliSessions();
+    for (const ks of kiroCliSessions) {
+      sessions[ks.id] = ks;
+    }
+  } catch {}
+
 // Load Copilot CLI sessions
   try {
     const copilotSessions = scanCopilotCliSessions();
@@ -3562,6 +3649,9 @@ function loadSessionDetail(sessionId, project) {
   if (found.format === 'kiro') {
     return loadKiroDetail(sessionId);
   }
+  if (found.format === 'kiro-cli') {
+    return loadKiroCliDetail(sessionId);
+  }
 
 // Copilot CLI uses JSONL events
   if (found.format === 'copilot') {
@@ -3794,6 +3884,7 @@ function exportSessionMarkdown(sessionId, project) {
       found.format === 'cursor' ? loadCursorDetail(sessionId) :
       found.format === 'opencode' ? loadOpenCodeDetail(sessionId) :
       found.format === 'kiro' ? loadKiroDetail(sessionId) :
+      found.format === 'kiro-cli' ? loadKiroCliDetail(sessionId) :
       found.format === 'kilo' ? loadKiloCliDetail(sessionId) :
       found.format === 'qwen' ? loadQwenDetail(sessionId, found.file) :
       found.format === 'pi' ? loadPiDetail(sessionId, found.file) :
@@ -4438,6 +4529,12 @@ function getSessionPreview(sessionId, project, limit) {
       return { role: m.role, content: m.content.slice(0, 300) };
     });
   }
+  if (found.format === 'kiro-cli') {
+    var detail = loadKiroCliDetail(sessionId);
+    return detail.messages.slice(0, limit).map(function(m) {
+      return { role: m.role, content: m.content.slice(0, 300) };
+    });
+  }
 
   // OpenCode: use loadOpenCodeDetail and slice
   if (found.format === 'opencode') {
@@ -4565,6 +4662,13 @@ function buildSearchIndex(sessions) {
         }
       } else if (found.format === 'kiro') {
         const detail = loadKiroDetail(s.id);
+        for (const msg of detail.messages) {
+          if (msg.content && !isSystemMessage(msg.content)) {
+            texts.push({ role: msg.role, content: msg.content.slice(0, 500) });
+          }
+        }
+      } else if (found.format === 'kiro-cli') {
+        const detail = loadKiroCliDetail(s.id);
         for (const msg of detail.messages) {
           if (msg.content && !isSystemMessage(msg.content)) {
             texts.push({ role: msg.role, content: msg.content.slice(0, 500) });
@@ -4705,6 +4809,18 @@ function getSessionReplay(sessionId, project) {
     }
   } else if (found.format === 'kiro') {
     const detail = loadKiroDetail(sessionId);
+    for (const msg of detail.messages) {
+      if (msg.content && !isSystemMessage(msg.content)) {
+        messages.push({
+          role: msg.role,
+          content: msg.content.slice(0, 3000),
+          timestamp: 0,
+          ms: 0,
+        });
+      }
+    }
+  } else if (found.format === 'kiro-cli') {
+    const detail = loadKiroCliDetail(sessionId);
     for (const msg of detail.messages) {
       if (msg.content && !isSystemMessage(msg.content)) {
         messages.push({
