@@ -84,6 +84,20 @@ test('parsePiSessionFile reads OMP header and message summary', () => {
   assert.equal(summary.lastTs, Date.parse('2026-05-24T10:00:04.000Z'));
 });
 
+test('parsePiSessionFile reads title line before OMP session header', () => {
+  const dir = tmpDir();
+  const file = path.join(dir, 'sessions', '--tmp--project--', '2026-05-24T10-00-00.000Z_pi-session-title.jsonl');
+  writeJsonl(file, [
+    { type: 'title', title: 'brief-improve' },
+    { type: 'session', version: 3, id: 'pi-session-title', timestamp: '2026-05-24T10:00:00.000Z', cwd: '/tmp/project' },
+    { type: 'message', timestamp: '2026-05-24T10:00:02.000Z', message: { role: 'user', content: [{ type: 'text', text: 'Please fix this' }] } },
+  ]);
+
+  const summary = parsePiSessionFile(file);
+  assert.equal(summary.sessionId, 'pi-session-title');
+  assert.equal(summary.title, 'brief-improve');
+});
+
 test('parsePiSessionFile rejects unsafe header ids', () => {
   const dir = tmpDir();
   const file = path.join(dir, 'sessions', '--tmp--project--', 'bad.jsonl');
