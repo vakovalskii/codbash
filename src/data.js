@@ -2851,6 +2851,25 @@ let _projectsDirMtime = 0;
 let _copilotDirMtime = 0;
 let _copilotJbDirMtime = 0;
 let _projectsSubDirMtimes = {}; // { subDirPath: mtimeMs }
+let _projectFileMtimes = {}; // { filePath: mtimeMs }
+let _projectFileSizes = {};  // { filePath: size }
+let _cursorGlobalDbMtime = 0;
+let _cursorGlobalDbSize = 0;
+let _cursorProjectsDirMtime = 0;
+let _opencodeDbMtime = 0;
+let _opencodeDbSize = 0;
+let _extraOpencodeDbMtimes = {};
+let _extraOpencodeDbSizes = {};
+let _kiloDbMtime = 0;
+let _kiloDbSize = 0;
+let _extraKiloDbMtimes = {};
+let _extraKiloDbSizes = {};
+let _kiroDbMtime = 0;
+let _kiroDbSize = 0;
+let _extraKiroDbMtimes = {};
+let _extraKiroDbSizes = {};
+let _qwenFileMtimes = {};
+let _qwenFileSizes = {};
 let _codexHistoryMtime = 0;
 let _codexHistorySize = 0;
 let _codexIndexMtime = 0;
@@ -2925,7 +2944,6 @@ function _codexDayDirMtimes() {
 }
 
 function _sessionsNeedRescan() {
-  // Check if history.jsonl or projects dir changed since last scan
   try {
     if (fs.existsSync(HISTORY_FILE)) {
       const st = fs.statSync(HISTORY_FILE);
@@ -2934,13 +2952,17 @@ function _sessionsNeedRescan() {
     if (fs.existsSync(PROJECTS_DIR)) {
       const st = fs.statSync(PROJECTS_DIR);
       if (st.mtimeMs !== _projectsDirMtime) return true;
-      // Also check subdirectory mtimes — new sessions in existing project dirs
-      // don't change PROJECTS_DIR mtime, only their parent subdir mtime
       for (const entry of fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })) {
         if (!entry.isDirectory()) continue;
         const subDir = path.join(PROJECTS_DIR, entry.name);
         const subSt = fs.statSync(subDir);
         if (subSt.mtimeMs !== (_projectsSubDirMtimes[subDir] || 0)) return true;
+        for (const fileEntry of fs.readdirSync(subDir, { withFileTypes: true })) {
+          if (!fileEntry.isFile() || !fileEntry.name.endsWith('.jsonl')) continue;
+          const filePath = path.join(subDir, fileEntry.name);
+          const fileSt = fs.statSync(filePath);
+          if (fileSt.mtimeMs !== (_projectFileMtimes[filePath] || 0) || fileSt.size !== (_projectFileSizes[filePath] || 0)) return true;
+        }
       }
     }
     if (fs.existsSync(COPILOT_SESSION_DIR)) {
@@ -2951,7 +2973,53 @@ function _sessionsNeedRescan() {
       const st = fs.statSync(COPILOT_JB_DIR);
       if (st.mtimeMs !== _copilotJbDirMtime) return true;
     }
-    // Codex history.jsonl + session_index.jsonl + per-day session dirs
+    if (fs.existsSync(CURSOR_GLOBAL_DB)) {
+      const st = fs.statSync(CURSOR_GLOBAL_DB);
+      if (st.mtimeMs !== _cursorGlobalDbMtime || st.size !== _cursorGlobalDbSize) return true;
+    }
+    if (fs.existsSync(CURSOR_PROJECTS)) {
+      const st = fs.statSync(CURSOR_PROJECTS);
+      if (st.mtimeMs !== _cursorProjectsDirMtime) return true;
+    }
+    if (fs.existsSync(OPENCODE_DB)) {
+      const st = fs.statSync(OPENCODE_DB);
+      if (st.mtimeMs !== _opencodeDbMtime || st.size !== _opencodeDbSize) return true;
+    }
+    for (const db of EXTRA_OPENCODE_DBS) {
+      if (fs.existsSync(db)) {
+        const st = fs.statSync(db);
+        if (st.mtimeMs !== (_extraOpencodeDbMtimes[db] || 0) || st.size !== (_extraOpencodeDbSizes[db] || 0)) return true;
+      }
+    }
+    if (fs.existsSync(KILO_DB)) {
+      const st = fs.statSync(KILO_DB);
+      if (st.mtimeMs !== _kiloDbMtime || st.size !== _kiloDbSize) return true;
+    }
+    for (const db of EXTRA_KILO_DBS) {
+      if (fs.existsSync(db)) {
+        const st = fs.statSync(db);
+        if (st.mtimeMs !== (_extraKiloDbMtimes[db] || 0) || st.size !== (_extraKiloDbSizes[db] || 0)) return true;
+      }
+    }
+    if (fs.existsSync(KIRO_DB)) {
+      const st = fs.statSync(KIRO_DB);
+      if (st.mtimeMs !== _kiroDbMtime || st.size !== _kiroDbSize) return true;
+    }
+    for (const db of EXTRA_KIRO_DBS) {
+      if (fs.existsSync(db)) {
+        const st = fs.statSync(db);
+        if (st.mtimeMs !== (_extraKiroDbMtimes[db] || 0) || st.size !== (_extraKiroDbSizes[db] || 0)) return true;
+      }
+    }
+    if (fs.existsSync(QWEN_DIR)) {
+      const qwenFiles = listQwenSessionFiles(QWEN_DIR);
+      if (qwenFiles.length !== Object.keys(_qwenFileMtimes).length) return true;
+      for (const f of qwenFiles) {
+        if (!fs.existsSync(f)) return true;
+        const st = fs.statSync(f);
+        if (st.mtimeMs !== (_qwenFileMtimes[f] || 0) || st.size !== (_qwenFileSizes[f] || 0)) return true;
+      }
+    }
     const codexHistory = path.join(CODEX_DIR, 'history.jsonl');
     if (fs.existsSync(codexHistory)) {
       const st = fs.statSync(codexHistory);
@@ -2962,10 +3030,6 @@ function _sessionsNeedRescan() {
       const st = fs.statSync(codexIndex);
       if (st.mtimeMs !== _codexIndexMtime || st.size !== _codexIndexSize) return true;
     }
-    // Codex Desktop's external-import ledger drives Claude-vs-Codex attribution.
-    // Watching it guarantees a rescan after a two-phase import (rollout/index
-    // written first, ledger appended a tick later) instead of waiting for an
-    // unrelated mtime change.
     const codexLedger = path.join(CODEX_DIR, 'external_agent_session_imports.json');
     if (fs.existsSync(codexLedger)) {
       const st = fs.statSync(codexLedger);
@@ -2974,7 +3038,7 @@ function _sessionsNeedRescan() {
       return true;
     }
     const dayMtimes = _codexDayDirMtimes();
-    _codexDayDirMtimesPending = dayMtimes; // reuse in _updateScanMarkers
+    _codexDayDirMtimesPending = dayMtimes;
     const prevKeys = Object.keys(_codexSessionsDirMtimes);
     const curKeys = Object.keys(dayMtimes);
     if (prevKeys.length !== curKeys.length) return true;
@@ -3003,10 +3067,23 @@ function _updateScanMarkers() {
     if (fs.existsSync(PROJECTS_DIR)) {
       _projectsDirMtime = fs.statSync(PROJECTS_DIR).mtimeMs;
       _projectsSubDirMtimes = {};
+      _projectFileMtimes = {};
+      _projectFileSizes = {};
       for (const entry of fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })) {
         if (!entry.isDirectory()) continue;
         const subDir = path.join(PROJECTS_DIR, entry.name);
-        try { _projectsSubDirMtimes[subDir] = fs.statSync(subDir).mtimeMs; } catch {}
+        try {
+          _projectsSubDirMtimes[subDir] = fs.statSync(subDir).mtimeMs;
+          for (const fileEntry of fs.readdirSync(subDir, { withFileTypes: true })) {
+            if (!fileEntry.isFile() || !fileEntry.name.endsWith('.jsonl')) continue;
+            const filePath = path.join(subDir, fileEntry.name);
+            try {
+              const fileSt = fs.statSync(filePath);
+              _projectFileMtimes[filePath] = fileSt.mtimeMs;
+              _projectFileSizes[filePath] = fileSt.size;
+            } catch {}
+          }
+        } catch {}
       }
     }
     if (fs.existsSync(COPILOT_SESSION_DIR)) {
@@ -3014,6 +3091,76 @@ function _updateScanMarkers() {
     }
     if (fs.existsSync(COPILOT_JB_DIR)) {
       _copilotJbDirMtime = fs.statSync(COPILOT_JB_DIR).mtimeMs;
+    }
+    if (fs.existsSync(CURSOR_GLOBAL_DB)) {
+      const st = fs.statSync(CURSOR_GLOBAL_DB);
+      _cursorGlobalDbMtime = st.mtimeMs;
+      _cursorGlobalDbSize = st.size;
+    }
+    if (fs.existsSync(CURSOR_PROJECTS)) {
+      _cursorProjectsDirMtime = fs.statSync(CURSOR_PROJECTS).mtimeMs;
+    }
+    if (fs.existsSync(OPENCODE_DB)) {
+      const st = fs.statSync(OPENCODE_DB);
+      _opencodeDbMtime = st.mtimeMs;
+      _opencodeDbSize = st.size;
+    }
+    _extraOpencodeDbMtimes = {};
+    _extraOpencodeDbSizes = {};
+    for (const db of EXTRA_OPENCODE_DBS) {
+      if (fs.existsSync(db)) {
+        try {
+          const st = fs.statSync(db);
+          _extraOpencodeDbMtimes[db] = st.mtimeMs;
+          _extraOpencodeDbSizes[db] = st.size;
+        } catch {}
+      }
+    }
+    if (fs.existsSync(KILO_DB)) {
+      const st = fs.statSync(KILO_DB);
+      _kiloDbMtime = st.mtimeMs;
+      _kiloDbSize = st.size;
+    }
+    _extraKiloDbMtimes = {};
+    _extraKiloDbSizes = {};
+    for (const db of EXTRA_KILO_DBS) {
+      if (fs.existsSync(db)) {
+        try {
+          const st = fs.statSync(db);
+          _extraKiloDbMtimes[db] = st.mtimeMs;
+          _extraKiloDbSizes[db] = st.size;
+        } catch {}
+      }
+    }
+    if (fs.existsSync(KIRO_DB)) {
+      const st = fs.statSync(KIRO_DB);
+      _kiroDbMtime = st.mtimeMs;
+      _kiroDbSize = st.size;
+    }
+    _extraKiroDbMtimes = {};
+    _extraKiroDbSizes = {};
+    for (const db of EXTRA_KIRO_DBS) {
+      if (fs.existsSync(db)) {
+        try {
+          const st = fs.statSync(db);
+          _extraKiroDbMtimes[db] = st.mtimeMs;
+          _extraKiroDbSizes[db] = st.size;
+        } catch {}
+      }
+    }
+    _qwenFileMtimes = {};
+    _qwenFileSizes = {};
+    if (fs.existsSync(QWEN_DIR)) {
+      try {
+        const qwenFiles = listQwenSessionFiles(QWEN_DIR);
+        for (const f of qwenFiles) {
+          try {
+            const st = fs.statSync(f);
+            _qwenFileMtimes[f] = st.mtimeMs;
+            _qwenFileSizes[f] = st.size;
+          } catch {}
+        }
+      } catch {}
     }
     const codexHistory = path.join(CODEX_DIR, 'history.jsonl');
     if (fs.existsSync(codexHistory)) {
@@ -3039,8 +3186,6 @@ function _updateScanMarkers() {
     } else {
       _codexImportsLedgerMtime = 0; _codexImportsLedgerSize = 0;
     }
-    // Reuse the walk performed by _sessionsNeedRescan() when present;
-    // otherwise (first call / direct invocation) walk now.
     _codexSessionsDirMtimes = _codexDayDirMtimesPending || _codexDayDirMtimes();
     _codexDayDirMtimesPending = null;
     _piOmpSessionDirMtimes = _piOmpSessionDirMtimesPending || _piSessionDirMtimes([PI_AGENT_DIR, OMP_AGENT_DIR].concat(EXTRA_PI_AGENT_DIRS, EXTRA_OMP_AGENT_DIRS));
@@ -3666,6 +3811,9 @@ function loadSessionDetail(sessionId, project) {
 }
 
 function deleteSession(sessionId, project) {
+  if (!sessionId || typeof sessionId !== 'string' || sessionId.trim() === '' || sessionId === '.' || sessionId === '..') {
+    throw new Error('Invalid session ID specified for deletion');
+  }
   const deleted = [];
   let found = findSessionFile(sessionId, project);
 
@@ -6193,5 +6341,7 @@ module.exports = {
     _piSessionDirMtimes,
     extractPiResumeTargetFromCommand,
     findPiSessionByResumeTarget,
+    _sessionsNeedRescan,
+    _updateScanMarkers,
   },
 };
