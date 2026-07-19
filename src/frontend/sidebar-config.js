@@ -46,6 +46,54 @@
     'install-agents': true
   };
 
+  // One-line "what it is & why" help for each sidebar item, keyed by the item's
+  // data-key (preferred) or data-view (fallback). Surfaced as a hover tooltip
+  // in the browser (see applyNavTooltips in app.js). Kept here so it's covered
+  // by the sidebar-config unit test (every KNOWN_ITEM_KEY must have help).
+  var NAV_HELP = {
+    // Workspace
+    'sessions': 'Every AI coding session across all agents, in one place',
+    'projects': 'Browse sessions grouped by project folder',
+    'timeline': 'Your sessions laid out on a chronological timeline',
+    'activity': 'GitHub-style heatmap of your coding activity and streaks',
+    'running': 'Live sessions right now — CPU, memory, uptime',
+    'analytics': 'Token cost & usage broken down by day, project and agent',
+    'starred': 'Sessions you’ve pinned for quick access',
+    'leaderboard': 'Ranking of projects and agents by activity',
+    'cloud': 'Sync your sessions across machines',
+    // Agents (filter the session list to one agent)
+    'claude-only': 'Show only Claude Code sessions',
+    'codex-only': 'Show only Codex sessions',
+    'qwen-only': 'Show only Qwen Code sessions',
+    'pi-original-only': 'Show only Pi sessions',
+    'ohmypi-only': 'Show only Oh My Pi sessions',
+    'kiro-only': 'Show only Kiro sessions',
+    'cursor-only': 'Show only Cursor sessions',
+    'copilot-chat-only': 'Show only Copilot Chat sessions',
+    'copilot-only': 'Show only Copilot CLI sessions',
+    'opencode-only': 'Show only OpenCode sessions',
+    'kilo-only': 'Show only Kilo sessions',
+    // Tools
+    'export-import': 'Back up or restore your sessions as an archive',
+    'changelog': 'What’s new in each codbash release',
+    'settings': 'Themes, sidebar layout and other preferences',
+    // Install agents (copy the install command)
+    'install:claude': 'Copy the install command for Claude Code',
+    'install:codex': 'Copy the install command for Codex CLI',
+    'install:qwen': 'Copy the install command for Qwen Code',
+    'install:pi': 'Copy the install command for Pi',
+    'install:ohmypi': 'Copy the install command for Oh My Pi',
+    'install:kiro': 'Copy the install command for Kiro CLI',
+    'install:opencode': 'Copy the install command for OpenCode',
+    'install:kilo': 'Copy the install command for Kilo CLI',
+    'install:copilot': 'Copy the install command for Copilot CLI'
+  };
+
+  function navHelpFor(key) {
+    if (typeof key !== 'string') return '';
+    return Object.prototype.hasOwnProperty.call(NAV_HELP, key) ? NAV_HELP[key] : '';
+  }
+
   function defaults() {
     return { v: CURRENT_VERSION, hidden: {}, collapsed: {} };
   }
@@ -168,6 +216,8 @@
   return {
     STORAGE_KEY: STORAGE_KEY,
     KNOWN_ITEM_KEYS: KNOWN_ITEM_KEYS,
+    NAV_HELP: NAV_HELP,
+    navHelpFor: navHelpFor,
     SETTINGS_KEY: SETTINGS_KEY,
     parseSidebarConfig: parseSidebarConfig,
     serializeSidebarConfig: serializeSidebarConfig,

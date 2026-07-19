@@ -365,3 +365,29 @@ test('clearStorage tolerates a throwing removeItem', () => {
   const throwingStorage = { removeItem() { throw new Error('boom'); } };
   assert.doesNotThrow(() => m.clearStorage(throwingStorage));
 });
+
+// ── NAV_HELP tooltips ───────────────────────────────────────────
+
+test('every known item key (plus settings) has a NAV_HELP entry', () => {
+  const m = loadModule();
+  const keys = m.KNOWN_ITEM_KEYS.concat([m.SETTINGS_KEY]);
+  for (const key of keys) {
+    const help = m.navHelpFor(key);
+    assert.ok(typeof help === 'string' && help.length > 0,
+      `missing NAV_HELP for "${key}"`);
+  }
+});
+
+test('navHelpFor returns empty string for unknown or non-string keys', () => {
+  const m = loadModule();
+  assert.equal(m.navHelpFor('does-not-exist'), '');
+  assert.equal(m.navHelpFor(undefined), '');
+  assert.equal(m.navHelpFor(null), '');
+  assert.equal(m.navHelpFor(42), '');
+});
+
+test('navHelpFor does not leak inherited Object.prototype keys', () => {
+  const m = loadModule();
+  assert.equal(m.navHelpFor('toString'), '');
+  assert.equal(m.navHelpFor('constructor'), '');
+});
