@@ -2,6 +2,16 @@
 
 const CHANGELOG = [
   {
+    version: '7.5.2',
+    date: '2026-07-19',
+    title: 'Reliable self-update restart',
+    changes: [
+      'Fix: "Update Now" no longer leaves the server dead after installing the new version — the restart now spawns a fully-detached process instead of an unreliable process.on("exit") handler',
+      'Self-update restarter reclaims the same port/host and skips reopening the browser (the existing tab reloads itself)',
+      'npm install timeout during self-update raised from 60s to 120s for slower connections',
+    ],
+  },
+  {
     version: '7.5.1',
     date: '2026-05-26',
     title: 'Neuraldeep visual identity + Pi hardening',
