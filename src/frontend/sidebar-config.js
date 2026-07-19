@@ -36,7 +36,7 @@
     'claude-only', 'codex-only', 'qwen-only', 'pi-original-only', 'ohmypi-only', 'kiro-only', 'cursor-only',
     'copilot-chat-only', 'copilot-only', 'opencode-only', 'kilo-only',
     // Tools (Settings is intentionally absent — always visible)
-    'export-import', 'changelog',
+    'export-import', 'recommended', 'changelog',
     // Install agents
     'install:claude', 'install:codex', 'install:qwen', 'install:pi', 'install:ohmypi',
     'install:kiro', 'install:opencode', 'install:kilo', 'install:copilot'
@@ -75,6 +75,7 @@
     'kilo-only': 'Show only Kilo sessions',
     // Tools
     'export-import': 'Back up or restore your sessions as an archive',
+    'recommended': 'Handpicked companion apps that pair well with codbash',
     'changelog': 'What’s new in each codbash release',
     'settings': 'Themes, sidebar layout and other preferences',
     // Install agents (copy the install command)

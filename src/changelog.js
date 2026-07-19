@@ -2,6 +2,16 @@
 
 const CHANGELOG = [
   {
+    version: '7.6.0',
+    date: '2026-07-19',
+    title: 'Recommended tools',
+    changes: [
+      'New "Recommended" view: handpicked companion apps that pair well with codbash — Copyosity, ccstatusline, RustDesk, iTerm2',
+      'Tick tools you already have; the "installed" state is remembered per browser',
+      'The tool list is a simple config array, so new tools are easy to add',
+    ],
+  },
+  {
     version: '7.5.3',
     date: '2026-07-19',
     title: 'Sidebar hover tooltips',

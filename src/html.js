@@ -14,6 +14,7 @@ const JS_FILES = [
   'analytics.js',
   'leaderboard.js',
   'cloud.js',
+  'recommended.js',
 ];
 
 function buildHTML() {
