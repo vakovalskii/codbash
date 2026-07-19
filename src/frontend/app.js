@@ -2513,6 +2513,68 @@ function applySidebarConfig() {
   _updateSidebarEmptySectionHints();
 }
 
+// Attach a one-line "what it is & why" tooltip to every sidebar item, keyed by
+// data-key (preferred) or data-view. The sidebar has overflow-x:hidden, so a
+// pure-CSS ::after tooltip would be clipped — instead we render a single shared
+// element appended to <body> and position it fixed on hover (same approach as
+// the agent-picker popover). aria-label keeps it accessible to screen readers.
+var _navTooltipEl = null;
+var _navTooltipTimer = null;
+
+function _getNavTooltipEl() {
+  if (_navTooltipEl) return _navTooltipEl;
+  var el = document.createElement('div');
+  el.className = 'nav-tooltip';
+  el.setAttribute('role', 'tooltip');
+  el.setAttribute('aria-hidden', 'true');
+  document.body.appendChild(el);
+  _navTooltipEl = el;
+  return el;
+}
+
+function _hideNavTooltip() {
+  clearTimeout(_navTooltipTimer);
+  if (!_navTooltipEl) return;
+  _navTooltipEl.classList.remove('visible');
+  _navTooltipEl.setAttribute('aria-hidden', 'true');
+}
+
+function _onNavItemEnter(e) {
+  var item = e.currentTarget;
+  var help = item.getAttribute('data-tooltip');
+  if (!help) return;
+  clearTimeout(_navTooltipTimer);
+  _navTooltipTimer = setTimeout(function() {
+    var tip = _getNavTooltipEl();
+    tip.textContent = help;
+    // Show invisibly first to measure height, then clamp within the viewport.
+    tip.style.visibility = 'hidden';
+    tip.classList.add('visible');
+    var r = item.getBoundingClientRect();
+    var th = tip.offsetHeight;
+    var top = r.top + (r.height - th) / 2;
+    top = Math.max(8, Math.min(top, window.innerHeight - th - 8));
+    tip.style.top = top + 'px';
+    tip.style.left = (r.right + 10) + 'px';
+    tip.style.visibility = '';
+    tip.setAttribute('aria-hidden', 'false');
+  }, 350);
+}
+
+function applyNavTooltips() {
+  if (typeof SidebarConfig === 'undefined' || !SidebarConfig.navHelpFor) return;
+  document.querySelectorAll('.sidebar-item').forEach(function(el) {
+    var key = el.getAttribute('data-key') || el.getAttribute('data-view');
+    var help = SidebarConfig.navHelpFor(key);
+    if (!help) return;
+    el.setAttribute('data-tooltip', help);
+    if (!el.getAttribute('aria-label')) el.setAttribute('aria-label', help);
+    el.addEventListener('mouseenter', _onNavItemEnter);
+    el.addEventListener('mouseleave', _hideNavTooltip);
+    el.addEventListener('click', _hideNavTooltip);
+  });
+}
+
 // When a user hides every togglable item inside a section the body becomes
 // visually empty. Inject a small inline hint so the section doesn't look
 // broken. The hint is removed automatically when any item becomes visible
@@ -4256,6 +4318,7 @@ function _onProjectsHashChange() {
   // user never sees a flash of hidden items.
   applySidebarConfig();
   _bindSidebarHeaders();
+  applyNavTooltips();
 
   // Load data
   loadSessions();

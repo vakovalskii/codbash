@@ -2,6 +2,16 @@
 
 const CHANGELOG = [
   {
+    version: '7.5.3',
+    date: '2026-07-19',
+    title: 'Sidebar hover tooltips',
+    changes: [
+      'Every sidebar item now shows a one-line "what it is & why" tooltip on hover — easier to learn what each view and agent filter does',
+      'Tooltips render as a single shared element positioned outside the sidebar, so they are never clipped, and adapt to dark / light / monokai themes',
+      'Tooltip text doubles as an aria-label for screen-reader accessibility',
+    ],
+  },
+  {
     version: '7.5.2',
     date: '2026-07-19',
     title: 'Reliable self-update restart',

@@ -199,6 +199,30 @@ body {
 
 .sidebar-divider { height: 1px; background: var(--border); margin: 12px 20px; }
 
+/* Sidebar hover tooltips — a single shared element positioned fixed by JS
+   (see applyNavTooltips in app.js), so it escapes the sidebar's overflow. */
+.nav-tooltip {
+    position: fixed;
+    z-index: 200;
+    max-width: 240px;
+    padding: 8px 11px;
+    background: var(--bg-card);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+    font-size: 12px;
+    line-height: 1.4;
+    pointer-events: none;
+    opacity: 0;
+    transform: translateX(-4px);
+    transition: opacity 0.12s ease, transform 0.12s ease;
+}
+.nav-tooltip.visible {
+    opacity: 1;
+    transform: translateX(0);
+}
+
 .sidebar-section {
     padding: 8px 20px 6px;
     font-size: 10px;
