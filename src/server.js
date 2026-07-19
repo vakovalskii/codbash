@@ -795,17 +795,27 @@ function startServer(host, port, openBrowser = true) {
       json(res, { ok: true, message: 'Updating... Page will reload.' });
       // Run update in background after response is sent
       setTimeout(() => {
-        const { execSync } = require('child_process');
+        const { execSync, spawn } = require('child_process');
         try {
-          execSync('npm i -g codbash-app@latest', { stdio: 'inherit', timeout: 60000 });
-          log('UPDATE', 'Updated. Restarting...');
-          // Restart the process
-          process.on('exit', () => {
-            require('child_process').spawn(process.argv[0], process.argv.slice(1), {
-              detached: true, stdio: 'inherit'
-            }).unref();
-          });
-          process.exit(0);
+          execSync('npm i -g codbash-app@latest', { stdio: 'inherit', timeout: 120000 });
+          log('UPDATE', 'Update installed. Restarting server...');
+          // Spawn a FULLY-detached restarter BEFORE exiting. Spawning inside a
+          // `process.on('exit')` handler is unreliable — the event loop is already
+          // draining, so the child frequently never survives and the server ends
+          // up dead (nothing reclaims the port). Instead: detach + unref + ignore
+          // stdio so the child outlives us, become its own process-group leader
+          // (so the restarter's `lsof … | kill -9` on the port can't take it down),
+          // then exit cleanly. The restarter loads the freshly-installed code from
+          // the same argv[1] path that npm just overwrote.
+          const child = spawn(
+            process.argv[0],
+            [process.argv[1], 'restart', `--port=${port}`, `--host=${host}`, '--no-browser'],
+            { detached: true, stdio: 'ignore' }
+          );
+          child.unref();
+          // Give the OS a tick to fully spawn the detached child before we exit
+          // and release the port for the restarter to grab.
+          setTimeout(() => process.exit(0), 250);
         } catch (e) {
           log('ERROR', `Update failed: ${e.message}`);
         }
