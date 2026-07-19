@@ -2750,6 +2750,100 @@ body {
 
 .changelog-container { padding: 20px; max-width: 700px; }
 
+/* ── Recommended tools view ────────────────────────────────── */
+.tools-intro {
+    color: var(--text-secondary);
+    font-size: 13px;
+    margin: 4px 0 20px;
+}
+.tools-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 14px;
+}
+.tool-card {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 16px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+.tool-card:hover {
+    border-color: var(--accent-blue);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+}
+.tool-card.installed {
+    border-color: var(--accent-green);
+}
+.tool-card-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+}
+.tool-name { font-size: 15px; font-weight: 600; color: var(--text-primary); }
+.tool-platform {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+.tool-tagline { font-size: 12.5px; line-height: 1.5; color: var(--text-secondary); flex: 1; }
+.tool-card-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 2px;
+}
+.tool-link {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent-blue);
+    text-decoration: none;
+}
+.tool-link:hover { text-decoration: underline; }
+.tool-installed-check {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 9px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    color: var(--text-secondary);
+    font-size: 11.5px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.tool-installed-check:hover { color: var(--text-primary); border-color: var(--text-muted); }
+.tool-check-box {
+    width: 14px;
+    height: 14px;
+    border: 1.5px solid var(--text-muted);
+    border-radius: 4px;
+    flex-shrink: 0;
+    position: relative;
+    transition: all 0.15s;
+}
+.tool-card.installed .tool-installed-check { color: var(--accent-green); border-color: var(--accent-green); }
+.tool-card.installed .tool-check-box { background: var(--accent-green); border-color: var(--accent-green); }
+.tool-card.installed .tool-check-box::after {
+    content: '';
+    position: absolute;
+    left: 4px;
+    top: 1px;
+    width: 4px;
+    height: 8px;
+    border: solid var(--bg-card);
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+}
+
 .changelog-entry {
     border-left: 2px solid var(--border);
     padding: 0 0 24px 20px;

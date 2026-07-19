@@ -1660,6 +1660,11 @@ function render() {
     return;
   }
 
+  if (currentView === 'recommended') {
+    renderRecommended(content);
+    return;
+  }
+
   if (currentView === 'settings') {
     renderSettings(content);
     return;
