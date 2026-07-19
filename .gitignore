@@ -7,3 +7,4 @@ node_modules/
 .agent-memory/
 hooks/
 .tmp/
+package-lock.json

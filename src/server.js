@@ -12,6 +12,7 @@ const { CHANGELOG } = require('./changelog');
 const { getHTML } = require('./html');
 const projectsApi = require('./projects');
 const settingsApi = require('./settings');
+const terminal = require('./terminal');
 // Element-level allowlist for launch flags. terminals.js currently only checks
 // for 'skip-permissions'; this set is the surface area we accept from clients.
 const ALLOWED_LAUNCH_FLAGS = new Set(['skip-permissions']);
@@ -116,7 +117,8 @@ function startServer(host, port, openBrowser = true) {
           // actual woff2 — both required by the Inter font link in index.html
           "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
           "font-src 'self' https://fonts.gstatic.com",
-          "connect-src 'self'",
+          // ws:/wss: for the browser terminal (same-origin WebSocket to /ws/terminal)
+          "connect-src 'self' ws: wss:",
           "img-src 'self' data:",
           "frame-ancestors 'none'",
           "base-uri 'self'",
@@ -133,6 +135,40 @@ function startServer(host, port, openBrowser = true) {
       const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="6" fill="#60a5fa"/><path d="M8 8l8 4 8-4v16l-8 4-8-4z" fill="none" stroke="#fff" stroke-width="2"/></svg>';
       res.writeHead(200, { 'Content-Type': 'image/svg+xml' });
       res.end(svg);
+    }
+
+    // ── Vendored terminal assets (xterm.js) ──
+    // Served lazily so the base dashboard never carries the ~490KB xterm bundle;
+    // the Workspace view injects these on demand. Strict filename allowlist so
+    // this can never read arbitrary files.
+    else if (req.method === 'GET' && pathname.startsWith('/vendor/')) {
+      const VENDOR_FILES = {
+        'xterm.js': 'application/javascript; charset=utf-8',
+        'addon-fit.js': 'application/javascript; charset=utf-8',
+        'xterm.css': 'text/css; charset=utf-8',
+      };
+      const name = pathname.slice('/vendor/'.length);
+      const ctype = VENDOR_FILES[name];
+      if (!ctype) {
+        res.writeHead(404); res.end('Not found');
+      } else {
+        try {
+          const body = fs.readFileSync(pathLib.join(__dirname, 'frontend', 'vendor', name));
+          res.writeHead(200, { 'Content-Type': ctype, 'Cache-Control': 'public, max-age=86400' });
+          res.end(body);
+        } catch (e) {
+          res.writeHead(404); res.end('Not found');
+        }
+      }
+    }
+
+    // ── Browser terminal status (+ per-process WS token) ──
+    else if (req.method === 'GET' && pathname === '/api/terminal/status') {
+      // Token is only readable same-origin (the Host-header guard + no CORS
+      // headers mean a cross-origin page cannot read this response), and it is
+      // what gates the WS shell — see terminal.verifyUpgradeAuth.
+      const status = terminal.terminalStatus();
+      jsonLog(res, { available: status.available, error: status.error, hint: status.hint, token: terminal.getToken() });
     }
 
     // ── Repo Auto-Refresh API ───────────────
@@ -826,6 +862,25 @@ function startServer(host, port, openBrowser = true) {
     else {
       res.writeHead(404);
       res.end('Not found');
+    }
+  });
+
+  // ── Browser terminal WebSocket (Workspace) ──
+  // Hand-rolled upgrade on the stdlib server (no `ws` dependency). The terminal
+  // grants shell access, so handleUpgrade enforces the per-process token +
+  // same-origin Origin check before spawning a pty. cwd is restricted to paths
+  // that pass the same safety bar as launching a session.
+  server.on('upgrade', (req, socket, head) => {
+    try {
+      terminal.handleUpgrade(req, socket, head, {
+        isSafeCwd: (dir) => {
+          try { return projectsApi.isSafeLaunchPath(dir); } catch (_e) { return false; }
+        },
+        log,
+      });
+    } catch (err) {
+      log('ERROR', 'terminal upgrade failed: ' + (err && err.message));
+      try { socket.destroy(); } catch (_e) {}
     }
   });
 

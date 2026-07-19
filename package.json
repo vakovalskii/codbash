@@ -1,6 +1,6 @@
 {
   "name": "codbash-app",
-  "version": "7.6.0",
+  "version": "7.7.0",
   "description": "Dashboard + CLI for AI coding agents — Claude Code, Codex, Cursor, OpenCode, Kiro. View, search, resume, convert, sync sessions.",
   "bin": {
     "codbash": "./bin/cli.js",
@@ -38,5 +38,9 @@
   "license": "MIT",
   "engines": {
     "node": ">=18"
+  },
+  "comment:optionalDependencies": "Browser terminal (Workspace) only. @lydell/node-pty ships prebuilt binaries and never invokes node-gyp; if no prebuilt exists for the platform it is simply skipped and the dashboard still runs — the terminal feature stays disabled with a friendly notice. The core dashboard remains dependency-free.",
+  "optionalDependencies": {
+    "@lydell/node-pty": "^1.2.0-beta.12"
   }
 }

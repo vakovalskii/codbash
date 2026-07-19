@@ -30,7 +30,7 @@
 
   var KNOWN_ITEM_KEYS = [
     // Workspace
-    'sessions', 'projects', 'timeline', 'activity', 'running',
+    'sessions', 'workspace', 'projects', 'timeline', 'activity', 'running',
     'analytics', 'starred', 'leaderboard', 'cloud',
     // Agents
     'claude-only', 'codex-only', 'qwen-only', 'pi-original-only', 'ohmypi-only', 'kiro-only', 'cursor-only',
@@ -53,6 +53,7 @@
   var NAV_HELP = {
     // Workspace
     'sessions': 'Every AI coding session across all agents, in one place',
+    'workspace': 'A live terminal in your browser — run shells and agents without leaving codbash',
     'projects': 'Browse sessions grouped by project folder',
     'timeline': 'Your sessions laid out on a chronological timeline',
     'activity': 'GitHub-style heatmap of your coding activity and streaks',
