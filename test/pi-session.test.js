@@ -130,6 +130,20 @@ test('loadPiDetail returns role-compatible display messages with tokens', () => 
   assert.equal(detail.messages[1].tokens.cacheCreateTokens, 4);
 });
 
+test('loadPiDetail starts messages after delayed OMP session header', () => {
+  const dir = tmpDir();
+  const file = path.join(dir, 'sessions', '--tmp--project--', '2026_pi-session-detail-title.jsonl');
+  writeJsonl(file, [
+    { type: 'title', title: 'brief-improve' },
+    { type: 'session', id: 'pi-session-detail-title', cwd: '/tmp/project', timestamp: '2026-05-24T10:00:00.000Z' },
+    { type: 'message', timestamp: '2026-05-24T10:00:01.000Z', message: { role: 'user', content: 'hello' } },
+  ]);
+
+  const detail = loadPiDetail('pi-session-detail-title', file, { maxMessages: 10 });
+  assert.equal(detail.messages.length, 1);
+  assert.equal(detail.messages[0].content, 'hello');
+});
+
 test('scanPiSessions ignores malformed and non-OMP files', () => {
   const agentDir = tmpDir();
   const valid = path.join(agentDir, 'sessions', '--tmp--project--', '2026_pi-session-3.jsonl');

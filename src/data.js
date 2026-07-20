@@ -729,6 +729,17 @@ function normalizePiUsage(usage) {
 const SAFE_PI_SESSION_ID = /^[A-Za-z0-9._-]{1,128}$/;
 
 
+function findPiSessionHeaderLine(lines) {
+  for (let i = 0; i < Math.min(lines.length, 50); i++) {
+    try {
+      const entry = JSON.parse(lines[i]);
+      if (entry && entry.type === 'session' && entry.id) return { header: entry, line: i };
+    } catch {}
+  }
+  return { header: null, line: -1 };
+}
+
+
 function parsePiSessionFile(sessionFile) {
   if (!fs.existsSync(sessionFile)) return null;
 
@@ -742,18 +753,9 @@ function parsePiSessionFile(sessionFile) {
   }
   if (lines.length === 0) return null;
 
-  let header;
-  let headerLine = -1;
-  for (let i = 0; i < Math.min(lines.length, 50); i++) {
-    try {
-      const entry = JSON.parse(lines[i]);
-      if (entry && entry.type === 'session' && entry.id) {
-        header = entry;
-        headerLine = i;
-        break;
-      }
-    } catch {}
-  }
+  const foundHeader = findPiSessionHeaderLine(lines);
+  const header = foundHeader.header;
+  const headerLine = foundHeader.line;
   if (!header) return null;
 
   let sessionId = String(header.id);
@@ -844,7 +846,8 @@ function loadPiDetail(sessionId, filePath, options) {
   let lines;
   try { lines = readLines(filePath); } catch { return { messages }; }
 
-  for (let i = 1; i < lines.length; i++) {
+  const headerLine = findPiSessionHeaderLine(lines).line;
+  for (let i = Math.max(headerLine + 1, 1); i < lines.length; i++) {
     if (maxMessages && messages.length >= maxMessages) break;
     try {
       const entry = JSON.parse(lines[i]);
