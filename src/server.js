@@ -130,7 +130,9 @@ function startServer(host, port, openBrowser = true) {
           "font-src 'self' https://fonts.gstatic.com",
           // ws:/wss: for the browser terminal (same-origin WebSocket to /ws/terminal)
           "connect-src 'self' ws: wss:",
-          "img-src 'self' data:",
+          // avatars.githubusercontent.com serves GitHub profile avatars shown in
+          // the cloud profile and leaderboard (avatar_url from the GitHub API)
+          "img-src 'self' data: https://avatars.githubusercontent.com",
           "frame-ancestors 'none'",
           "base-uri 'self'",
         ].join('; '),
