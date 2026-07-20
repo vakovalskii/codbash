@@ -2,6 +2,18 @@
 
 const CHANGELOG = [
   {
+    version: '7.10.0',
+    date: '2026-07-20',
+    title: 'Workspace — save & relaunch layouts',
+    changes: [
+      'New "Save layout" button snapshots the whole workspace — every tab, its panes, and each pane\'s start command',
+      'New "Layouts ▾" menu relaunches a saved workspace in one click: it rebuilds the tabs/panes and auto-runs each command',
+      'Saving under an existing name overwrites it (no duplicates); "Manage…" lists and deletes saved layouts',
+      'Stored on your machine at ~/.codedash/workspace-layouts.json (mode 0600), not in the browser',
+      'Fix: leaving and returning to the Workspace view no longer resets it — tabs, panes and their running shells are kept alive (detached, then re-attached intact)',
+    ],
+  },
+  {
     version: '7.9.0',
     date: '2026-07-20',
     title: 'Workspace — saved start commands',

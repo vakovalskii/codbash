@@ -1594,10 +1594,11 @@ function render() {
   var stats = document.getElementById('stats');
   if (!content) return;
 
-  // Tear down the live terminal when navigating away from the Workspace view
-  // so the pty + WebSocket don't leak in the background.
-  if (currentView !== 'workspace' && typeof teardownWorkspaceIfActive === 'function') {
-    teardownWorkspaceIfActive();
+  // Detach (don't destroy) the live terminal when navigating away from the
+  // Workspace view: its panes/ptys keep running in a hidden holder and are
+  // re-attached intact on return.
+  if (currentView !== 'workspace' && typeof detachWorkspaceIfMounted === 'function') {
+    detachWorkspaceIfMounted();
   }
 
   // Preserve scroll + collapsed state across re-renders

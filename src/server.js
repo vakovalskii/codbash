@@ -14,6 +14,7 @@ const projectsApi = require('./projects');
 const settingsApi = require('./settings');
 const terminal = require('./terminal');
 const workspaceCommands = require('./workspace-commands');
+const workspaceLayouts = require('./workspace-layouts');
 // Element-level allowlist for launch flags. terminals.js currently only checks
 // for 'skip-permissions'; this set is the surface area we accept from clients.
 const ALLOWED_LAUNCH_FLAGS = new Set(['skip-permissions']);
@@ -188,6 +189,25 @@ function startServer(host, port, openBrowser = true) {
       const id = pathname.slice('/api/terminal/commands/'.length);
       workspaceCommands.removeCommand(id)
         .then((list) => jsonLog(res, { ok: true, commands: list }))
+        .catch((err) => jsonLog(res, { ok: false, error: err.message }, 400));
+    }
+
+    // ── Saved Workspace layouts (whole tab/pane/command snapshots; stored 0600) ──
+    else if (pathname === '/api/terminal/layouts' && req.method === 'GET') {
+      jsonLog(res, { layouts: workspaceLayouts.loadLayouts() });
+    }
+    else if (pathname === '/api/terminal/layouts' && req.method === 'POST') {
+      readBody(req, (body) => {
+        let data; try { data = JSON.parse(body || '{}'); } catch (e) { data = {}; }
+        workspaceLayouts.saveLayout(data.name, data.tabs)
+          .then((layout) => jsonLog(res, { ok: true, layout }))
+          .catch((err) => jsonLog(res, { ok: false, error: err.message }, 400));
+      });
+    }
+    else if (pathname.startsWith('/api/terminal/layouts/') && req.method === 'DELETE') {
+      const id = pathname.slice('/api/terminal/layouts/'.length);
+      workspaceLayouts.removeLayout(id)
+        .then((list) => jsonLog(res, { ok: true, layouts: list }))
         .catch((err) => jsonLog(res, { ok: false, error: err.message }, 400));
     }
 
