@@ -14,6 +14,13 @@
 
 var MAX_WS_PANES = 4;
 
+// Split-layout icons (glyph chars like ▯ render as tofu in many fonts).
+var _WS_SVG = 'width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"';
+var _WS_ICON_1 = '<svg ' + _WS_SVG + '><rect x="2" y="3" width="12" height="10" rx="1"/></svg>';
+var _WS_ICON_2 = '<svg ' + _WS_SVG + '><rect x="2" y="3" width="5" height="10" rx="1"/><rect x="9" y="3" width="5" height="10" rx="1"/></svg>';
+var _WS_ICON_3 = '<svg ' + _WS_SVG + '><rect x="1.5" y="3" width="3.6" height="10" rx="1"/><rect x="6.2" y="3" width="3.6" height="10" rx="1"/><rect x="10.9" y="3" width="3.6" height="10" rx="1"/></svg>';
+var _WS_ICON_4 = '<svg ' + _WS_SVG + '><rect x="2" y="2.5" width="5" height="5" rx="1"/><rect x="9" y="2.5" width="5" height="5" rx="1"/><rect x="2" y="8.5" width="5" height="5" rx="1"/><rect x="9" y="8.5" width="5" height="5" rx="1"/></svg>';
+
 var WORKSPACE_AGENTS = [
   { label: 'Claude Code', cmd: 'claude' },
   { label: 'Codex', cmd: 'codex' },
@@ -353,10 +360,10 @@ async function renderWorkspace(container) {
       '<div class="ws-tabbar" id="wsTabbar"></div>' +
       '<div class="workspace-bar">' +
         '<div class="ws-layouts" role="group" aria-label="Split layout">' +
-          '<button class="toolbar-btn" id="wsLayout-1" title="1 pane" onclick="setWorkspaceLayout(1)">▯</button>' +
-          '<button class="toolbar-btn" id="wsLayout-2" title="2 panes" onclick="setWorkspaceLayout(2)">▯▯</button>' +
-          '<button class="toolbar-btn" id="wsLayout-3" title="3 panes" onclick="setWorkspaceLayout(3)">▯▯▯</button>' +
-          '<button class="toolbar-btn" id="wsLayout-4" title="4 panes (2×2)" onclick="setWorkspaceLayout(4)">⊞</button>' +
+          '<button class="toolbar-btn ws-layout-btn" id="wsLayout-1" title="1 pane" aria-label="1 pane" onclick="setWorkspaceLayout(1)">' + _WS_ICON_1 + '</button>' +
+          '<button class="toolbar-btn ws-layout-btn" id="wsLayout-2" title="2 panes" aria-label="2 panes" onclick="setWorkspaceLayout(2)">' + _WS_ICON_2 + '</button>' +
+          '<button class="toolbar-btn ws-layout-btn" id="wsLayout-3" title="3 panes" aria-label="3 panes" onclick="setWorkspaceLayout(3)">' + _WS_ICON_3 + '</button>' +
+          '<button class="toolbar-btn ws-layout-btn" id="wsLayout-4" title="4 panes (2×2)" aria-label="4 panes" onclick="setWorkspaceLayout(4)">' + _WS_ICON_4 + '</button>' +
         '</div>' +
         '<button class="toolbar-btn" id="wsAddPane" title="Add a pane to this tab" onclick="addWorkspacePane(null)">+ Pane</button>' +
         '<span style="flex:1"></span>' +
