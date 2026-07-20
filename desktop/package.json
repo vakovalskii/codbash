@@ -11,9 +11,14 @@
     "start": "electron .",
     "smoke": "CODBASH_SMOKE=1 electron .",
     "dist:mac": "electron-builder --mac dmg",
+    "release:mac": "electron-builder --mac dmg --publish always",
     "pack": "electron-builder --dir"
   },
+  "dependencies": {
+    "electron-updater": "^6.3.9"
+  },
   "devDependencies": {
+    "@electron/notarize": "^2.5.0",
     "electron": "^33.2.0",
     "electron-builder": "^25.1.8"
   },
@@ -21,9 +26,11 @@
     "appId": "dev.codbash.desktop",
     "productName": "codbash",
     "asar": true,
+    "afterSign": "scripts/notarize.js",
     "files": [
       "main.js",
-      "preload.js"
+      "preload.js",
+      "node_modules/**/*"
     ],
     "extraResources": [
       { "from": "../bin", "to": "app/bin" },
@@ -31,12 +38,19 @@
       { "from": "../package.json", "to": "app/package.json" },
       { "from": "../node_modules/@lydell", "to": "app/node_modules/@lydell" }
     ],
+    "publish": [
+      { "provider": "github", "owner": "vakovalskii", "repo": "codbash" }
+    ],
     "mac": {
       "category": "public.app-category.developer-tools",
       "target": [
         { "target": "dmg", "arch": ["arm64", "x64"] }
       ],
-      "icon": "build/icon.icns"
+      "icon": "build/icon.png",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
     },
     "dmg": {
       "title": "codbash ${version}"
