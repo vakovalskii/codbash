@@ -22,9 +22,11 @@ function generateHandoff(sessionId, project, options) {
   const session = sessions.find(s => s.id === sessionId || s.id.startsWith(sessionId));
   if (!session) return { ok: false, error: 'Session not found' };
 
-  // Load messages
+  // Load messages. `allMessages` is the full session (used for the genuine
+  // first task); `messages` is the recent-window tail used for the transcript.
   const detail = loadSessionDetail(session.id, session.project || project);
-  const messages = (detail.messages || []).slice(-msgLimit);
+  const allMessages = detail.messages || [];
+  const messages = allMessages.slice(-msgLimit);
   const cost = computeSessionCost(session.id, session.project || project);
   const costLabel = cost.unavailable
     ? `unavailable (${cost.model || 'unknown model'})`
@@ -42,8 +44,10 @@ function generateHandoff(sessionId, project, options) {
 
   // Summary of what was being worked on
   if (messages.length > 0) {
-    // First user message = original task
-    const firstUser = messages.find(m => m.role === 'user');
+    // Original task = the FIRST user message of the whole session, not merely
+    // the first within the truncated recent window (which mislabels the task
+    // for any session longer than msgLimit).
+    const firstUser = allMessages.find(m => m.role === 'user');
     if (firstUser) {
       lines.push('## Original Task');
       lines.push('');

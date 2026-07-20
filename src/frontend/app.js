@@ -1170,10 +1170,12 @@ async function pollActiveSessions() {
       }
     });
 
-    // Check if anything changed — skip DOM work if not
+    // Check if anything changed — skip DOM work if not. Note: _prevActiveKey is
+    // set at the END of this function, not here, because render() (invoked below
+    // for the running view, and elsewhere on navigation) resets it to '' to force
+    // a badge re-apply; setting it last means that reset can't spin a re-render.
     var newKey = data.map(function(a) { return (a.sessionId || a.pid) + ':' + a.status; }).sort().join(',');
     if (newKey === _prevActiveKey) return;
-    _prevActiveKey = newKey;
 
     activeSessions = newActive;
 
@@ -1181,6 +1183,9 @@ async function pollActiveSessions() {
     // the sidebar running-agents tree (which is driven by activeSessions now).
     if (typeof _ovRefreshIfCurrent === 'function') _ovRefreshIfCurrent();
     if (typeof _wsRenderRunningTree === 'function') _wsRenderRunningTree();
+    // The Running (Agent Board) view is built from activeSessions but isn't a
+    // per-card diff, so rebuild it when the active set changes.
+    if (currentView === 'running') render();
 
     // Only touch cards that changed
     document.querySelectorAll('.card').forEach(function(card) {
@@ -1232,6 +1237,10 @@ async function pollActiveSessions() {
         }
       }
     });
+
+    // Record the applied state last, so a render()-triggered reset above is
+    // superseded and the next unchanged poll can early-return.
+    _prevActiveKey = newKey;
   } catch {}
 }
 
@@ -1654,6 +1663,11 @@ function render() {
   // sense over a session list — e.g. the session toolbar (Search/Group/Select/
   // AI Titles/Refresh + count) is meaningless in the Terminal and Overview views.
   document.body.setAttribute('data-view', currentView);
+
+  // Rebuilding content wipes the live/active badges the active-poll diff added.
+  // Reset the diff key so the next poll re-applies them (it otherwise early-
+  // returns on an unchanged active set and the badges never come back).
+  _prevActiveKey = '';
 
   // Detach (don't destroy) the live terminal when navigating away from the
   // Workspace view: its panes/ptys keep running in a hidden holder and are
@@ -2391,16 +2405,20 @@ function closeConfirm() {
 
 async function confirmDelete() {
   if (!pendingDelete) return;
+  // Capture the target now: pendingDelete is a mutable global that Escape
+  // (closeConfirm) nulls, so reading it after the awaits below would throw and
+  // surface a false "Delete failed" if the user dismissed mid-request.
+  var target = pendingDelete;
   try {
-    var resp = await fetch('/api/session/' + pendingDelete.id, {
+    var resp = await fetch('/api/session/' + target.id, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ project: pendingDelete.project })
+      body: JSON.stringify({ project: target.project })
     });
     var data = await resp.json();
     if (data.ok) {
       showToast('Session deleted');
-      allSessions = allSessions.filter(function(s) { return s.id !== pendingDelete.id; });
+      allSessions = allSessions.filter(function(s) { return s.id !== target.id; });
       // Clear search if no more results
       if (searchQuery) {
         var remaining = allSessions.filter(function(s) {
@@ -2908,7 +2926,7 @@ function isInput(e) {
 }
 
 function moveFocus(delta) {
-  var cards = document.querySelectorAll('.card');
+  var cards = document.querySelectorAll('.card, .list-row');
   if (cards.length === 0) return;
   focusedIndex = Math.max(0, Math.min(cards.length - 1, focusedIndex + delta));
   cards.forEach(function(c, i) {
@@ -2920,7 +2938,7 @@ function moveFocus(delta) {
 }
 
 function openFocusedCard() {
-  var cards = document.querySelectorAll('.card');
+  var cards = document.querySelectorAll('.card, .list-row');
   if (focusedIndex < 0 || focusedIndex >= cards.length) return;
   var id = cards[focusedIndex].getAttribute('data-id');
   if (!id) return;
@@ -2935,14 +2953,14 @@ function openFocusedCard() {
 }
 
 function toggleStarFocused() {
-  var cards = document.querySelectorAll('.card');
+  var cards = document.querySelectorAll('.card, .list-row');
   if (focusedIndex < 0 || focusedIndex >= cards.length) return;
   var id = cards[focusedIndex].getAttribute('data-id');
   if (id) toggleStar(id);
 }
 
 function deleteFocused() {
-  var cards = document.querySelectorAll('.card');
+  var cards = document.querySelectorAll('.card, .list-row');
   if (focusedIndex < 0 || focusedIndex >= cards.length) return;
   var id = cards[focusedIndex].getAttribute('data-id');
   if (!id) return;

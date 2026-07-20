@@ -68,7 +68,13 @@ function startServer(host, port, openBrowser = true) {
   const allowedHosts = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
   const server = http.createServer((req, res) => {
     if (isLoopbackBind) {
-      const hostName = String(req.headers.host || '').toLowerCase().split(':')[0];
+      // IPv6-aware: a bracketed host like "[::1]:3847" must keep the "[::1]"
+      // group, not split at the first ':' (which would yield "[" and 403 a
+      // legitimate IPv6 loopback request).
+      const rawHost = String(req.headers.host || '').toLowerCase();
+      const hostName = rawHost.startsWith('[')
+        ? rawHost.slice(0, rawHost.indexOf(']') + 1)
+        : rawHost.split(':')[0];
       if (hostName && !allowedHosts.has(hostName)) {
         res.writeHead(403, { 'Content-Type': 'text/plain' });
         res.end('Forbidden: host header must be localhost');
@@ -81,6 +87,9 @@ function startServer(host, port, openBrowser = true) {
     const pathname = parsed.pathname;
     const reqStart = Date.now();
 
+    // A synchronous throw in any route (e.g. a malformed id reaching fs.*) must
+    // return 500 — it must never crash the single-process dashboard.
+    try {
     // Log all API requests (skip static & frequent polls)
     const isApi = pathname.startsWith('/api/');
     const isFrequent = pathname === '/api/active' || pathname === '/api/version';
@@ -396,7 +405,11 @@ function startServer(host, port, openBrowser = true) {
 
     // ── Delete ──────────────────────────────
     else if (req.method === 'DELETE' && pathname.startsWith('/api/session/')) {
-      const sessionId = pathname.split('/').pop();
+      const sessionId = decodeURIComponent(pathname.split('/').pop());
+      if (!SAFE_SESSION_ID.test(sessionId)) {
+        json(res, { ok: false, error: 'invalid session id' }, 400);
+        return;
+      }
       readBody(req, body => {
         try {
           const { project } = JSON.parse(body || '{}');
@@ -413,8 +426,13 @@ function startServer(host, port, openBrowser = true) {
       readBody(req, body => {
         try {
           const { sessions } = JSON.parse(body); // [{id, project}, ...]
+          if (!Array.isArray(sessions)) throw new Error('sessions must be an array');
           const results = [];
           for (const s of sessions) {
+            if (!s || typeof s.id !== 'string' || !SAFE_SESSION_ID.test(s.id)) {
+              results.push({ id: s && s.id, deleted: false, error: 'invalid session id' });
+              continue;
+            }
             const deleted = deleteSession(s.id, s.project || '');
             results.push({ id: s.id, deleted });
           }
@@ -902,6 +920,13 @@ function startServer(host, port, openBrowser = true) {
     else {
       res.writeHead(404);
       res.end('Not found');
+    }
+    } catch (e) {
+      log('ERROR', `Route ${req.method} ${pathname} threw: ${(e && e.stack) || e}`);
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'internal error' }));
+      }
     }
   });
 

@@ -931,9 +931,13 @@ function parseClaudeSessionFile(sessionFile) {
       if (entry.type === 'user' || entry.type === 'assistant') msgCount++;
       if (entry.type === 'user') totalUserMsgs++;
       if (isRealUserPrompt(entry)) userMsgCount++;
-      if (entry.timestamp) {
-        if (entry.timestamp < firstTs) firstTs = entry.timestamp;
-        if (entry.timestamp > lastTs) lastTs = entry.timestamp;
+      // entry.timestamp is an ISO 8601 string; firstTs/lastTs are ms numbers
+      // (init'd to stat.mtimeMs). Comparing string<number is always NaN-false,
+      // so normalize to ms first or the min/max never updates from the entries.
+      var entryTs = parseEntryTimestampMs(entry);
+      if (Number.isFinite(entryTs)) {
+        if (entryTs < firstTs) firstTs = entryTs;
+        if (entryTs > lastTs) lastTs = entryTs;
       }
       if (!projectPath && entry.type === 'user' && entry.cwd) {
         projectPath = entry.cwd;
@@ -4092,8 +4096,13 @@ function _buildSessionFileIndex() {
 function findSessionFile(sessionId, project) {
   _buildSessionFileIndex();
 
-  // Fast index lookup
-  if (_sessionFileIndex[sessionId]) return _sessionFileIndex[sessionId];
+  // Fast index lookup. Use hasOwnProperty so a prototype key like '__proto__'
+  // or 'constructor' can't return Object.prototype (a truthy non-record) and
+  // crash callers that then read .file/.format off it.
+  if (typeof sessionId === 'string' &&
+      Object.prototype.hasOwnProperty.call(_sessionFileIndex, sessionId)) {
+    return _sessionFileIndex[sessionId];
+  }
 
   // Try Claude projects dir (direct path if project known)
   if (project) {
@@ -4731,6 +4740,17 @@ function buildSearchIndex(sessions) {
             texts.push({ role: msg.role, content: msg.content.slice(0, 500) });
           }
         }
+      } else if (found.format === 'copilot-chat' || found.format === 'copilot') {
+        // Copilot Chat (VS Code JSON) and Copilot CLI use bespoke loaders; the
+        // generic JSONL branch below would mis-parse them and index nothing.
+        const detail = found.format === 'copilot'
+          ? loadCopilotCliDetail(s.id)
+          : loadCopilotDetail(s.id);
+        for (const msg of (detail.messages || [])) {
+          if (msg.content && !isSystemMessage(msg.content)) {
+            texts.push({ role: msg.role, content: msg.content.slice(0, 500) });
+          }
+        }
       } else {
         const lines = readLines(found.file);
 
@@ -5003,8 +5023,6 @@ const EMPTY_COST = {
 const _costMemCache = {};
 
 function computeSessionCost(sessionId, project) {
-  if (_costMemCache[sessionId] !== undefined) return _costMemCache[sessionId];
-
   const found = findSessionFile(sessionId, project);
   if (!found) { _costMemCache[sessionId] = EMPTY_COST; return EMPTY_COST; }
 
@@ -5031,6 +5049,11 @@ function computeSessionCost(sessionId, project) {
       } catch {}
     }
   }
+  // In-memory fast layer, keyed by the SAME fingerprint as the disk cache
+  // (file+mtime+size) — NOT by sessionId — so a still-growing session's cost is
+  // recomputed on change instead of frozen at its first read.
+  const memKey = cacheKey || ('sid:' + sessionId);
+  if (_costMemCache[memKey] !== undefined) return _costMemCache[memKey];
   if (cacheKey && _costDiskCache[cacheKey]) return _costDiskCache[cacheKey];
 
   let totalCost = 0;
@@ -5260,7 +5283,7 @@ function computeSessionCost(sessionId, project) {
       unavailable,
     };
     if (cacheKey) _costDiskCache[cacheKey] = result;
-    _costMemCache[sessionId] = result;
+    _costMemCache[memKey] = result;
     return result;
   }
 
@@ -5328,7 +5351,7 @@ function computeSessionCost(sessionId, project) {
     unavailable,
   };
   if (cacheKey) _costDiskCache[cacheKey] = result;
-  _costMemCache[sessionId] = result;
+  _costMemCache[memKey] = result;
   return result;
 }
 

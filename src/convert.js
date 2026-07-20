@@ -236,7 +236,9 @@ function writeCodex(canonical, targetProject) {
       payload: {
         type: 'message',
         role: msg.role,
-        content: [{ type: 'input_text', text: msg.content }],
+        // Codex tags assistant turns as output_text and user turns as
+        // input_text; using input_text for everything makes malformed rollouts.
+        content: [{ type: msg.role === 'assistant' ? 'output_text' : 'input_text', text: msg.content }],
       },
     }));
   }

@@ -236,9 +236,14 @@ function setView(view) {
   // Update sidebar active state
   document.querySelectorAll('.sidebar-item').forEach(function(el) {
     var itemView = el.getAttribute('data-view');
-    var active = itemView === view;
+    var active;
+    // Tool-filter items are toggles: derive their highlight from the actual
+    // filter state, not `itemView === view` (which stays true after toggling
+    // the filter OFF, leaving the item wrongly highlighted).
     if (itemView === 'pi-original-only') active = toolFilter === 'pi' && piVariantFilter === 'pi';
     else if (itemView === 'ohmypi-only') active = toolFilter === 'pi' && piVariantFilter === 'ohmypi';
+    else if (itemView && itemView.slice(-5) === '-only') active = toolFilter === itemView.slice(0, -5);
+    else active = itemView === view;
     el.classList.toggle('active', active);
   });
 

@@ -113,7 +113,9 @@ function _wsUpdateStatusBar() {
     // The chip shows the (renamable) tab name only — clean and stable. The
     // command lands in the tooltip so it never makes the bar jitter.
     var tip = (x.pane.cwd || '') + (x.pane.cmd ? '  —  ' + _wsMaskSecrets(x.pane.cmd) : '');
-    sigParts.push(x.tab.id + ':' + x.pane.id + ':' + x.tab.name + ':' + st);
+    // Include `tip` in the signature: without it a cwd/cmd change with an
+    // unchanged tab name + status would skip the rebuild and leave a stale tooltip.
+    sigParts.push(x.tab.id + ':' + x.pane.id + ':' + x.tab.name + ':' + st + ':' + tip);
     return '<button class="ws-chip ' + meta.cls + '" title="' + escHtml(tip) + '" ' +
       'onclick="jumpToWorkspacePane(\'' + escHtml(x.tab.id) + '\',\'' + escHtml(x.pane.id) + '\')">' +
       '<span class="ws-chip-dot"></span>' + escHtml(x.tab.name) +
@@ -689,14 +691,26 @@ function renameWorkspaceTab(id) {
   input.value = tab.name;
   el.replaceWith(input);
   input.focus(); input.select();
+  // `done` guards against the blur handler re-firing after we remove the input:
+  // both Enter (commit → re-render removes input → blur) and Escape (cancel →
+  // re-render removes input → blur) would otherwise commit a second time. Escape
+  // must NOT commit at all.
+  var done = false;
   function commit() {
+    if (done) return;
+    done = true;
     var v = input.value.trim();
     if (v) { tab.name = v; tab.userNamed = true; }   // manual name wins over auto-naming
     _wsRenderTabbar();
   }
+  function cancel() {
+    if (done) return;
+    done = true;
+    _wsRenderTabbar();
+  }
   input.addEventListener('keydown', function (e) {
     if (e.key === 'Enter') { e.preventDefault(); commit(); }
-    else if (e.key === 'Escape') { _wsRenderTabbar(); }
+    else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
   });
   input.addEventListener('blur', commit);
   input.addEventListener('click', function (e) { e.stopPropagation(); });

@@ -172,8 +172,14 @@ function sendClose(socket) {
 // server so we reuse the dashboard's known-git-roots trust boundary.
 function resolveCwd(url, isSafeCwd) {
   const requested = url.searchParams.get('cwd');
-  if (requested && typeof isSafeCwd === 'function' && isSafeCwd(requested)) {
-    return requested;
+  // Expand a leading ~ before the safety check AND before handing the path to
+  // pty.spawn — a shell won't expand ~ in a cwd, so a raw "~/foo" spawns ENOENT.
+  const expanded = !requested ? requested
+    : requested === '~' ? os.homedir()
+    : requested.startsWith('~/') ? os.homedir() + requested.slice(1)
+    : requested;
+  if (expanded && typeof isSafeCwd === 'function' && isSafeCwd(expanded)) {
+    return expanded;
   }
   return os.homedir();
 }
