@@ -189,14 +189,13 @@ function _wsPaneForCwd(cwd) {
   return hit;
 }
 
-// Click a running-agent row: jump to its Workspace pane if one exists here,
-// otherwise open the session in a new pane (best-effort) or just show Workspace.
+// Click a running-agent row: jump to its Workspace pane if one is open here,
+// otherwise open a plain terminal in the project folder. The agent is ALREADY
+// running, so we must NOT prefill a resume command — that would spawn a second
+// instance. (sessionId/kind are accepted for signature stability but unused.)
 function jumpToRunningAgent(cwd, sessionId, kind) {
   var hit = _wsPaneForCwd(cwd);
   if (hit) { jumpToWorkspacePane(hit.tab.id, hit.pane.id); return; }
-  if (sessionId && typeof openSessionInWorkspace === 'function') {
-    openSessionInWorkspace(sessionId); return;
-  }
   if (cwd && typeof openInWorkspace === 'function') {
     openInWorkspace({ name: _wsProjectBasename(cwd), cwd: cwd });
   }
@@ -210,7 +209,7 @@ function _wsRenderRunningTree() {
   if (!el) return;
   var groups = _wsRunningByProject();
   var sig = groups.map(function (g) {
-    return g.name + ':' + g.items.map(function (a) {
+    return g.cwd + ':' + g.items.map(function (a) {
       return (a.sessionId || a.pid) + '=' + a.kind + '/' + a.status;
     }).join(',');
   }).join('|');
