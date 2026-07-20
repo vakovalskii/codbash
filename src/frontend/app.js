@@ -1594,6 +1594,12 @@ function render() {
   var stats = document.getElementById('stats');
   if (!content) return;
 
+  // Tear down the live terminal when navigating away from the Workspace view
+  // so the pty + WebSocket don't leak in the background.
+  if (currentView !== 'workspace' && typeof teardownWorkspaceIfActive === 'function') {
+    teardownWorkspaceIfActive();
+  }
+
   // Preserve scroll + collapsed state across re-renders
   var scrollTop = content.scrollTop;
   var collapsedGroups = new Set();
@@ -1662,6 +1668,11 @@ function render() {
 
   if (currentView === 'recommended') {
     renderRecommended(content);
+    return;
+  }
+
+  if (currentView === 'workspace') {
+    renderWorkspace(content);
     return;
   }
 

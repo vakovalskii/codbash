@@ -41,7 +41,7 @@ docs/
 
 ## Key architecture decisions
 
-- **Zero dependencies** — only Node.js stdlib + system `sqlite3` CLI for SQLite agents
+- **Zero dependencies for the core** — dashboard/CLI use only Node.js stdlib + system `sqlite3` CLI for SQLite agents. The optional browser terminal (Workspace) is the sole exception: it lazily loads `@lydell/node-pty` (declared in `optionalDependencies`, prebuilt-only, never runs node-gyp). If it is absent the dashboard still runs and the terminal reports itself disabled. Do NOT add core dependencies.
 - **Node >= 18** — minimum supported version
 - **Single process** — server + static HTML in one process
 - **Template injection** — `html.js` reads CSS/JS files and injects via `split/join` (not `String.replace` which breaks on `$` characters in JS code)

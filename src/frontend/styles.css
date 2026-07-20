@@ -2748,6 +2748,30 @@ body {
 
 /* ── Changelog ──────────────────────────────────────────────── */
 
+/* ── Workspace (browser terminal) ──────────────────────────── */
+.workspace-wrap {
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 52px);
+}
+.workspace-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-secondary);
+}
+.workspace-title { font-weight: 600; color: var(--text-primary); font-size: 13px; }
+.workspace-status { font-size: 12px; color: var(--text-muted); flex: 1; }
+.workspace-term {
+    flex: 1;
+    min-height: 0;
+    padding: 6px 8px;
+    background: #08090c;
+    overflow: hidden;
+}
+
 .changelog-container { padding: 20px; max-width: 700px; }
 
 /* ── Recommended tools view ────────────────────────────────── */

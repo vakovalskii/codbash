@@ -2,6 +2,17 @@
 
 const CHANGELOG = [
   {
+    version: '7.7.0',
+    date: '2026-07-19',
+    title: 'Workspace — browser terminal (preview)',
+    changes: [
+      'New "Workspace" view: a real terminal right in the browser (xterm.js) — run shells and agents without leaving codbash',
+      'Optional feature: the core dashboard stays dependency-free; the terminal lazily loads @lydell/node-pty, which ships prebuilt binaries (no compiler / node-gyp needed)',
+      'Secured by a per-process token + same-origin check on the WebSocket, so it is safe to run the dashboard in server mode',
+      'This is the first step (single pane); splits, reattach across reload, saved commands and per-project workspaces are coming next',
+    ],
+  },
+  {
     version: '7.6.0',
     date: '2026-07-19',
     title: 'Recommended tools',
