@@ -2831,6 +2831,41 @@ body {
 
 .workspace-tabpanes { flex: 1; min-height: 0; display: flex; }
 
+/* ── Global terminal status bar (top of .main, shown when terminals run) ── */
+.ws-statusbar {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 6px 14px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+    flex-shrink: 0;
+}
+.ws-sb-summary { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.ws-sb-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); }
+.ws-sb-count { font-size: 12px; font-weight: 700; color: var(--text-primary); }
+.ws-sb-tag { font-size: 10px; padding: 1px 6px; border-radius: 10px; }
+.ws-sb-tag.active { color: var(--accent-green); background: rgba(0,255,136,0.12); }
+.ws-sb-tag.limit { color: var(--accent-red); background: rgba(248,113,113,0.14); }
+.ws-sb-tag.exited { color: var(--text-muted); background: rgba(148,153,165,0.12); }
+.ws-sb-chips { display: flex; align-items: center; gap: 6px; }
+.ws-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 9px; font-size: 11px;
+    background: var(--bg-card); color: var(--text-secondary);
+    border: 1px solid var(--border); border-radius: 20px; cursor: pointer; white-space: nowrap;
+}
+.ws-chip:hover { color: var(--text-primary); border-color: var(--text-muted); }
+.ws-chip-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted); flex-shrink: 0; }
+.ws-chip.active .ws-chip-dot { background: var(--accent-green); box-shadow: 0 0 5px var(--accent-green); }
+.ws-chip.limit .ws-chip-dot { background: var(--accent-red); }
+.ws-chip.exited .ws-chip-dot { background: var(--text-muted); opacity: 0.5; }
+.ws-chip-st { font-size: 9px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-muted); }
+.ws-chip.active .ws-chip-st { color: var(--accent-green); }
+.ws-chip.limit { border-color: var(--accent-red); }
+.ws-chip.limit .ws-chip-st { color: var(--accent-red); }
+
 /* Saved-commands manager modal */
 .ws-cmd-modal {
     position: fixed; inset: 0; z-index: 300;

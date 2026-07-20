@@ -50,6 +50,96 @@ function _wsSetFocusedPane(id) {
   });
 }
 
+// ── Live status (top bar) ───────────────────────────────────────────────────
+// Account-limit cues we can spot in agent output (heuristic, extend freely).
+var WS_LIMIT_RE = /rate.?limit|usage limit|too many requests|\b429\b|quota (?:exceeded|reached)|limit reached|overloaded|insufficient.*(?:quota|credit)/i;
+var _wsStatusTimer = null;
+
+function _wsNow() { try { return performance.now(); } catch (e) { return 0; } }
+
+// Per-pane status: exited > limit > active (recent output) > idle.
+function _wsPaneStatus(pane) {
+  if (pane.exited || (pane.sock && pane.sock.readyState > 1)) return 'exited';
+  if (pane.flaggedLimit) return 'limit';
+  if (pane.lastOutputAt && (_wsNow() - pane.lastOutputAt) < 2500) return 'active';
+  return 'idle';
+}
+
+var WS_STATUS_META = {
+  active: { label: 'active', cls: 'active' },
+  idle: { label: 'idle', cls: 'idle' },
+  limit: { label: 'limit', cls: 'limit' },
+  exited: { label: 'exited', cls: 'exited' },
+};
+
+function _wsAllPanes() {
+  var out = [];
+  _wsTabs.forEach(function (t) { t.panes.forEach(function (p) { out.push({ tab: t, pane: p }); }); });
+  return out;
+}
+
+// The bar lives at the very top of .main so it shows on every view (not just
+// Workspace). It appears only while there are live terminal panes.
+function _wsEnsureStatusBar() {
+  var bar = document.getElementById('wsStatusBar');
+  if (bar) return bar;
+  var main = document.querySelector('.main');
+  if (!main) return null;
+  bar = document.createElement('div');
+  bar.id = 'wsStatusBar';
+  bar.className = 'ws-statusbar';
+  bar.style.display = 'none';
+  main.insertBefore(bar, main.firstChild);
+  return bar;
+}
+
+function _wsUpdateStatusBar() {
+  var bar = _wsEnsureStatusBar();
+  if (!bar) return;
+  var items = _wsAllPanes().filter(function (x) { return x.pane.sock || x.pane.exited; });
+  if (!items.length) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
+
+  var counts = { active: 0, idle: 0, limit: 0, exited: 0 };
+  var chips = items.map(function (x) {
+    var st = _wsPaneStatus(x.pane);
+    counts[st]++;
+    var meta = WS_STATUS_META[st];
+    var cmd = x.pane.cmd ? x.pane.cmd.split(/\s+/)[0].replace(/^\w+=.*/, '') || x.pane.cmd : 'shell';
+    var label = escHtml(x.tab.name) + ' · ' + escHtml(cmd);
+    return '<button class="ws-chip ' + meta.cls + '" title="' + escHtml(x.pane.cwd || '') + '" ' +
+      'onclick="jumpToWorkspacePane(\'' + escHtml(x.tab.id) + '\',\'' + escHtml(x.pane.id) + '\')">' +
+      '<span class="ws-chip-dot"></span>' + label +
+      '<span class="ws-chip-st">' + meta.label + '</span></button>';
+  }).join('');
+
+  var summary = '<span class="ws-sb-title">Terminals</span>' +
+    '<span class="ws-sb-count">' + items.length + '</span>' +
+    (counts.active ? '<span class="ws-sb-tag active">' + counts.active + ' active</span>' : '') +
+    (counts.limit ? '<span class="ws-sb-tag limit">' + counts.limit + ' limit</span>' : '') +
+    (counts.exited ? '<span class="ws-sb-tag exited">' + counts.exited + ' exited</span>' : '');
+
+  bar.innerHTML = '<div class="ws-sb-summary">' + summary + '</div><div class="ws-sb-chips">' + chips + '</div>';
+  bar.style.display = 'flex';
+}
+
+function _wsStartStatusLoop() {
+  if (_wsStatusTimer) return;
+  _wsStatusTimer = setInterval(_wsUpdateStatusBar, 1000);
+}
+
+// Jump from a status chip to that pane: show Workspace, activate its tab, focus it.
+function jumpToWorkspacePane(tabId, paneId) {
+  if (typeof setView === 'function') setView('workspace');
+  setTimeout(function () {
+    activateWorkspaceTab(tabId);
+    _wsSetFocusedPane(paneId);
+    var host = document.getElementById('wsTermHost-' + paneId);
+    var pane = _wsFindPane(paneId);
+    if (pane && pane.term) { try { pane.term.focus(); } catch (e) {} }
+    if (host && host.scrollIntoView) host.scrollIntoView({ block: 'nearest' });
+  }, 30);
+}
+
 // Mask credentials in a URL userinfo (proxy passwords) for display only.
 function _wsMaskSecrets(cmd) {
   return String(cmd).replace(/(:\/\/[^:/@\s]+:)[^@\s]+(@)/g, '$1****$2');
@@ -156,6 +246,8 @@ function teardownWorkspaceIfActive() {
   if (_wsTabs.length) _wsTabs.forEach(function (t) { t.panes.forEach(_wsTeardownPane); });
   _wsTabs = []; _wsActiveTabId = null;
   if (_wsRoot) { try { _wsRoot.remove(); } catch (e) {} _wsRoot = null; }
+  if (_wsStatusTimer) { clearInterval(_wsStatusTimer); _wsStatusTimer = null; }
+  _wsUpdateStatusBar();
 }
 
 // ── pane connection ─────────────────────────────────────────────────────────
@@ -192,22 +284,29 @@ function _wsConnectPane(pane) {
   pane.sock = sock;
 
   var enc = new TextEncoder();
+  var dec = new TextDecoder();
   function setStatus(txt) { var el = document.getElementById('wsStatus-' + pane.id); if (el) el.textContent = txt; }
 
-  sock.onopen = function () { setStatus('connected'); };
+  sock.onopen = function () { setStatus('connected'); pane.exited = false; };
   sock.onmessage = function (ev) {
     if (typeof ev.data === 'string') {
       var msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
       if (msg.t === 'ready') {
+        pane.cwd = msg.cwd;
         setStatus(_wsShortCwd(msg.cwd));
         if (pane.cmd) setTimeout(function () { if (sock.readyState === 1) sock.send(enc.encode(pane.cmd + '\r')); }, 120);
-      } else if (msg.t === 'exit') { setStatus('exited (' + msg.code + ')'); }
+      } else if (msg.t === 'exit') { pane.exited = true; setStatus('exited (' + msg.code + ')'); _wsUpdateStatusBar(); }
       else if (msg.t === 'error') { setStatus('error'); term.write('\r\n\x1b[31m' + (msg.message || 'error') + '\x1b[0m\r\n'); }
       return;
     }
+    // Raw output: mark the pane active and scan a bounded tail for account-limit
+    // cues so the top status bar can flag it.
+    pane.lastOutputAt = _wsNow();
+    var text = dec.decode(new Uint8Array(ev.data));
+    if (WS_LIMIT_RE.test(text)) pane.flaggedLimit = true;
     term.write(new Uint8Array(ev.data));
   };
-  sock.onclose = function () { setStatus('disconnected'); };
+  sock.onclose = function () { setStatus('disconnected'); pane.exited = true; _wsUpdateStatusBar(); };
   sock.onerror = function () { setStatus('connection error'); };
 
   term.onData(function (data) { if (sock.readyState === 1) sock.send(enc.encode(data)); });
@@ -411,8 +510,11 @@ function launchAgentInPane(id, cmd) {
   if (!pane || !pane.sock || pane.sock.readyState !== 1) return;
   // Remember what was launched so "Save layout" captures the running setup.
   pane.cmd = cmd;
+  pane.flaggedLimit = false;          // fresh attempt clears any prior limit flag
+  pane.lastOutputAt = _wsNow();
   pane.sock.send(new TextEncoder().encode(cmd + '\r'));
   if (pane.term) pane.term.focus();
+  _wsUpdateStatusBar();
 }
 
 // ── Saved-commands manager (modal) ──────────────────────────────────────────
@@ -711,4 +813,6 @@ async function renderWorkspace(container) {
   _wsRenderAll();
   _wsLoadCommands();
   _wsLoadLayouts();
+  _wsStartStatusLoop();
+  _wsUpdateStatusBar();
 }

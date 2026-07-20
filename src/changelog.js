@@ -2,12 +2,14 @@
 
 const CHANGELOG = [
   {
-    version: '7.10.1',
+    version: '7.11.0',
     date: '2026-07-20',
-    title: 'Workspace — focused pane targeting',
+    title: 'Workspace — live status bar + focused pane',
     changes: [
-      'Click a pane to focus it — it gets a blue border, and launched agents / saved commands now go to THAT pane instead of always the first one',
-      'The active pane is highlighted so it is always clear where a command will land',
+      'A live terminal status bar now sits at the very top whenever terminals are running — visible from any view, showing each pane\'s state (active / idle / limit / exited), its tab and command',
+      'Account-limit detection: when an agent hits a rate/usage limit, its pane is flagged "limit" in the bar (heuristic on output)',
+      'Click any status chip to jump straight to that pane',
+      'Click a pane to focus it (blue border) — launched agents / saved commands now go to THAT pane instead of always the first one',
     ],
   },
   {
