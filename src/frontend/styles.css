@@ -567,6 +567,12 @@ body.sidebar-hidden .toolbar { padding-left: 52px; }
     position: relative;
 }
 
+/* The session toolbar (search / group / select / AI titles / count) only makes
+   sense over a session list. Hide it in the Terminal and Overview views, which
+   have their own chrome and no list to act on. */
+body[data-view="workspace"] .toolbar,
+body[data-view="overview"] .toolbar { display: none; }
+
 .search-box {
     flex: 1;
     min-width: 200px;
@@ -2892,9 +2898,16 @@ body.sidebar-hidden .toolbar { padding-left: 52px; }
     border-radius: 8px; padding: 0 6px; min-width: 16px; text-align: center;
 }
 .ws-run-term {
+    position: relative;
     padding: 2px 8px 2px 22px; font-size: 11px; color: var(--text-secondary);
     cursor: pointer; border-radius: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+.ws-run-term::before {
+    content: ''; position: absolute; left: 11px; top: 50%; transform: translateY(-50%);
+    width: 5px; height: 5px; border-radius: 50%; background: var(--accent-green);
+}
+.ws-run-term.ws-run-idle { color: var(--text-muted); }
+.ws-run-term.ws-run-idle::before { background: var(--text-muted); }
 .ws-run-term:hover { background: rgba(255,255,255,0.05); color: var(--text-primary); }
 
 /* In-app prompt (codbashPrompt) — replaces window.prompt (no-op in Electron). */

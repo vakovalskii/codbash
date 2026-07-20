@@ -2,6 +2,16 @@
 
 const CHANGELOG = [
   {
+    version: '7.14.4',
+    date: '2026-07-20',
+    title: 'Layout restore fixed · agent-aware running tree · cleaner Terminal view',
+    changes: [
+      'Saved layouts now restore each pane in its original project folder and re-issue its command (including resume commands prefilled from session cards) — previously the folder and prefilled command were dropped on save',
+      'The sidebar running tree is now driven by real agent detection: it groups running agents by their actual project folder and labels each by agent name (Claude, Codex, …) with a live/idle dot, so it works even when an agent cd\'d elsewhere or was started outside the app',
+      'Hid the session toolbar (search / group / select / AI titles / count) in the Terminal and Overview views, where it has no list to act on',
+    ],
+  },
+  {
     version: '7.14.3',
     date: '2026-07-20',
     title: 'Running-projects tree moved under Terminal',

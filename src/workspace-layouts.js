@@ -34,14 +34,28 @@ function ensureDir(d) {
   if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
 }
 
-// A pane is { cmd }. cmd may be '' (a blank pane, no auto-launch). Non-empty
+// A pane is { cmd, prefill, cwd }. cmd may be '' (a blank pane, no auto-launch).
+// `prefill` is a command typed into the pane but NOT auto-executed (e.g. a
+// resume command from a session card); `cwd` is the folder the pane opened in,
+// so a restored layout reopens each pane in the same project. Non-empty
 // commands are validated like saved commands (no newlines / control chars).
+// cwd is validated the same way (a path with a control char is rejected); the
+// pty spawn re-gates it through isSafeLaunchPath, so this is belt-and-braces.
 function sanitizePane(p) {
   const raw = p && typeof p === 'object' ? p.cmd : p;
-  let cmd = typeof raw === 'string' ? raw.trim() : '';
+  const cmd = typeof raw === 'string' ? raw.trim() : '';
   if (cmd.length > MAX_COMMAND) return null;
   if (cmd && CONTROL_CHARS.test(cmd)) return null;
-  return { cmd };
+  const prefillRaw = p && typeof p === 'object' && typeof p.prefill === 'string' ? p.prefill.trim() : '';
+  if (prefillRaw.length > MAX_COMMAND) return null;
+  if (prefillRaw && CONTROL_CHARS.test(prefillRaw)) return null;
+  const cwdRaw = p && typeof p === 'object' && typeof p.cwd === 'string' ? p.cwd.trim() : '';
+  if (cwdRaw.length > MAX_COMMAND) return null;
+  if (cwdRaw && CONTROL_CHARS.test(cwdRaw)) return null;
+  const out = { cmd };
+  if (prefillRaw) out.prefill = prefillRaw;
+  if (cwdRaw) out.cwd = cwdRaw;
+  return out;
 }
 
 function sanitizeTab(t, i) {
