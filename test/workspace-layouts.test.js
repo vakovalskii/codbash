@@ -31,6 +31,35 @@ test('sanitizeLayout accepts a multi-tab, multi-pane layout', () => {
   assert.equal(l.tabs[1].panes[0].cmd, '');
 });
 
+test('sanitizeLayout preserves per-pane prefill and cwd', () => {
+  const { m } = freshModule();
+  const l = m.sanitizeLayout({
+    name: 'resume setup',
+    tabs: [{ name: 'work', panes: [{ cmd: '', prefill: 'claude --resume abc', cwd: '/Users/me/proj' }] }],
+  });
+  assert.ok(l);
+  const p = l.tabs[0].panes[0];
+  assert.equal(p.cmd, '');
+  assert.equal(p.prefill, 'claude --resume abc');
+  assert.equal(p.cwd, '/Users/me/proj');
+});
+
+test('sanitizeLayout omits empty prefill/cwd and rejects control chars in them', () => {
+  const { m } = freshModule();
+  const clean = m.sanitizeLayout({ name: 'x', tabs: [{ name: 't', panes: [{ cmd: 'claude' }] }] });
+  assert.equal('prefill' in clean.tabs[0].panes[0], false);
+  assert.equal('cwd' in clean.tabs[0].panes[0], false);
+  // a newline in prefill or cwd rejects the whole tab (→ whole layout)
+  assert.equal(
+    m.sanitizeLayout({ name: 'x', tabs: [{ name: 't', panes: [{ cmd: '', prefill: 'a\nb' }] }] }),
+    null,
+  );
+  assert.equal(
+    m.sanitizeLayout({ name: 'x', tabs: [{ name: 't', panes: [{ cmd: '', cwd: '/a\n/b' }] }] }),
+    null,
+  );
+});
+
 test('sanitizeLayout rejects no-name, no-tabs, and newline injection', () => {
   const { m } = freshModule();
   assert.equal(m.sanitizeLayout({ name: '', tabs: SAMPLE_TABS }), null);

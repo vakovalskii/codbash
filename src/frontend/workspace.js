@@ -146,51 +146,102 @@ function _wsStartStatusLoop() {
   }, 1000);
 }
 
-// Group live terminals by their project folder (skips the home dir — those
-// aren't "projects"). Used by the sidebar running-terminals tree.
+// Human label for an agent kind (the `kind` field from /api/active), e.g.
+// 'claude' → 'Claude', 'kiro' → 'Kiro'. Falls back to a capitalized kind.
+var _WS_TOOL_LABELS = {
+  claude: 'Claude', codex: 'Codex', qwen: 'Qwen', opencode: 'OpenCode',
+  kiro: 'Kiro', 'kiro-cli': 'Kiro', kilo: 'Kilo', cursor: 'Cursor',
+  copilot: 'Copilot', 'copilot-chat': 'Copilot', pi: 'Pi', gemini: 'Gemini',
+};
+function _wsToolLabel(kind) {
+  if (!kind) return 'Agent';
+  return _WS_TOOL_LABELS[kind] || (kind.charAt(0).toUpperCase() + kind.slice(1));
+}
+
+// Group *running agents* (from the live /api/active map, not Workspace panes)
+// by their real project folder — so agents launched here, in another terminal,
+// or that cd'd elsewhere are all detected correctly. Skips the home dir and
+// entries with no cwd. Used by the sidebar running-agents tree.
 function _wsRunningByProject() {
+  var map = (typeof activeSessions === 'object' && activeSessions) || {};
   var groups = {}, order = [];
-  _wsAllPanes().forEach(function (x) {
-    var p = x.pane;
-    if (!p.sock || p.exited || p.sock.readyState !== 1) return;
-    var cwd = p.cwd || '';
+  Object.keys(map).forEach(function (k) {
+    var a = map[k];
+    var cwd = (a && a.cwd) || '';
     if (!cwd || /^(\/Users\/[^/]+|\/home\/[^/]+|\/root)\/?$/.test(cwd)) return;
-    var key = _wsProjectBasename(cwd);
-    if (!groups[key]) { groups[key] = { name: key, items: [] }; order.push(key); }
-    groups[key].items.push(x);
+    var key = cwd; // group by full path so two same-named folders don't merge
+    if (!groups[key]) { groups[key] = { name: _wsProjectBasename(cwd), cwd: cwd, items: [] }; order.push(key); }
+    groups[key].items.push(a);
   });
   return order.map(function (k) { return groups[k]; });
 }
 
-// Render a compact tree at the bottom of the sidebar: each project folder that
-// has running terminals, with its terminals underneath — click to jump.
+// Find a live Workspace pane sitting in `cwd` (so clicking a running agent can
+// jump straight to its terminal when we have one). Returns {tab,pane} or null.
+function _wsPaneForCwd(cwd) {
+  var hit = null;
+  _wsAllPanes().forEach(function (x) {
+    if (hit) return;
+    var p = x.pane;
+    if (!p.sock || p.exited || p.sock.readyState !== 1) return;
+    if ((p.cwd || p.wantCwd) === cwd) hit = x;
+  });
+  return hit;
+}
+
+// Click a running-agent row: jump to its Workspace pane if one exists here,
+// otherwise open the session in a new pane (best-effort) or just show Workspace.
+function jumpToRunningAgent(cwd, sessionId, kind) {
+  var hit = _wsPaneForCwd(cwd);
+  if (hit) { jumpToWorkspacePane(hit.tab.id, hit.pane.id); return; }
+  if (sessionId && typeof openSessionInWorkspace === 'function') {
+    openSessionInWorkspace(sessionId); return;
+  }
+  if (cwd && typeof openInWorkspace === 'function') {
+    openInWorkspace({ name: _wsProjectBasename(cwd), cwd: cwd });
+  }
+}
+
+// Render a compact tree at the bottom of the sidebar: each project folder with a
+// running agent, the agents underneath labeled by agent name — click to jump.
 var _wsRunTreeSig = '';
 function _wsRenderRunningTree() {
   var el = document.getElementById('wsRunningTree');
   if (!el) return;
   var groups = _wsRunningByProject();
   var sig = groups.map(function (g) {
-    return g.name + ':' + g.items.map(function (x) { return x.pane.id + '=' + _wsPaneLabel(x.pane); }).join(',');
+    return g.name + ':' + g.items.map(function (a) {
+      return (a.sessionId || a.pid) + '=' + a.kind + '/' + a.status;
+    }).join(',');
   }).join('|');
   if (sig === _wsRunTreeSig) return;   // no change → no rebuild
   _wsRunTreeSig = sig;
 
   if (!groups.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
-  var html = '<div class="ws-run-title">Running in projects</div>';
+  var html = '<div class="ws-run-title">Running agents</div>';
   groups.forEach(function (g) {
-    var first = g.items[0];
-    html += '<div class="ws-run-proj" title="' + escHtml(g.name) + '" ' +
-      'onclick="jumpToWorkspacePane(\'' + escHtml(first.tab.id) + '\',\'' + escHtml(first.pane.id) + '\')">' +
+    html += '<div class="ws-run-proj" title="' + escHtml(g.cwd) + '" ' +
+      'onclick="jumpToRunningAgent(' + _wsJsStr(g.cwd) + ',null,null)">' +
       '<span class="ws-run-dot"></span><span class="ws-run-name">' + escHtml(g.name) + '</span>' +
       '<span class="ws-run-count">' + g.items.length + '</span></div>';
-    g.items.forEach(function (x) {
-      html += '<div class="ws-run-term" ' +
-        'onclick="jumpToWorkspacePane(\'' + escHtml(x.tab.id) + '\',\'' + escHtml(x.pane.id) + '\')">' +
-        escHtml(_wsPaneLabel(x.pane)) + '</div>';
+    g.items.forEach(function (a) {
+      var waiting = a.status === 'waiting';
+      html += '<div class="ws-run-term' + (waiting ? ' ws-run-idle' : '') + '" ' +
+        'title="' + escHtml(_wsToolLabel(a.kind) + (waiting ? ' — idle' : ' — active')) + '" ' +
+        'onclick="jumpToRunningAgent(' + _wsJsStr(g.cwd) + ',' + _wsJsStr(a.sessionId || '') + ',' + _wsJsStr(a.kind || '') + ')">' +
+        escHtml(_wsToolLabel(a.kind)) + '</div>';
     });
   });
   el.innerHTML = html;
   el.style.display = '';
+}
+
+// Safely embed a JS string literal inside a double-quoted inline onclick=""
+// attribute: JS-escape backslash/quote, then HTML-escape the attribute-breaking
+// characters so an odd path (spaces, &, quotes) can't break out of either layer.
+function _wsJsStr(s) {
+  var js = "'" + String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'";
+  return js.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 // Jump from a status chip to that pane: show Workspace, activate its tab, focus it.
@@ -813,14 +864,23 @@ function _wsLoadLayouts() {
     .catch(function () { _wsSavedLayouts = []; });
 }
 
-// Snapshot the current workspace into the { tabs:[{name,panes:[{cmd}]}] } shape
-// the server expects. A pane with no launched command is stored as cmd:''.
+// Snapshot the current workspace into the { tabs:[{name,panes}] } shape the
+// server expects. Each pane records its launched command (cmd), any typed-but-
+// not-run command (prefill, e.g. a resume line from a session card) and the
+// folder it opened in (cwd) — so restoring the layout reopens every pane in the
+// same project and re-issues the same command. A blank pane is stored as cmd:''.
 function _wsCaptureLayout() {
   return {
     tabs: _wsTabs.map(function (t) {
       return {
         name: t.name,
-        panes: t.panes.map(function (p) { return { cmd: p.cmd || '' }; }),
+        panes: t.panes.map(function (p) {
+          return {
+            cmd: p.cmd || '',
+            prefill: p.prefill || '',
+            cwd: p.cwd || p.wantCwd || '',
+          };
+        }),
       };
     }),
   };
@@ -883,7 +943,14 @@ function applyWorkspaceLayout(id) {
   _wsTabs = layout.tabs.map(function (t, ti) {
     var panes = (t.panes && t.panes.length ? t.panes : [{ cmd: '' }])
       .slice(0, MAX_WS_PANES)
-      .map(function (p) { return { id: 'p' + (++_wsPaneSeq), cmd: (p && p.cmd) || null }; });
+      .map(function (p) {
+        return {
+          id: 'p' + (++_wsPaneSeq),
+          cmd: (p && p.cmd) || null,
+          prefill: (p && p.prefill) || null,
+          wantCwd: (p && p.cwd) || null,
+        };
+      });
     return { id: 't' + (++_wsTabSeq), name: t.name || ('Tab ' + (ti + 1)), panes: panes };
   });
   _wsActiveTabId = _wsTabs[0].id;

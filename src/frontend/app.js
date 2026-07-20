@@ -1177,8 +1177,10 @@ async function pollActiveSessions() {
 
     activeSessions = newActive;
 
-    // Reflect the new active-agent count on the Overview landing.
+    // Reflect the new active-agent count on the Overview landing and refresh
+    // the sidebar running-agents tree (which is driven by activeSessions now).
     if (typeof _ovRefreshIfCurrent === 'function') _ovRefreshIfCurrent();
+    if (typeof _wsRenderRunningTree === 'function') _wsRenderRunningTree();
 
     // Only touch cards that changed
     document.querySelectorAll('.card').forEach(function(card) {
@@ -1637,6 +1639,11 @@ function render() {
   var content = document.getElementById('content');
   var stats = document.getElementById('stats');
   if (!content) return;
+
+  // Reflect the active view on <body> so CSS can hide chrome that only makes
+  // sense over a session list — e.g. the session toolbar (Search/Group/Select/
+  // AI Titles/Refresh + count) is meaningless in the Terminal and Overview views.
+  document.body.setAttribute('data-view', currentView);
 
   // Detach (don't destroy) the live terminal when navigating away from the
   // Workspace view: its panes/ptys keep running in a hidden holder and are
