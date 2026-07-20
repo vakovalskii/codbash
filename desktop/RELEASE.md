@@ -69,12 +69,23 @@ xcrun stapler validate "dist/mac-arm64/codbash.app"
 spctl -a -vvv -t install "dist/mac-arm64/codbash.app"
 ```
 
-## 4. Auto-update
+## 4. Updates
 
-The packaged app calls `autoUpdater.checkForUpdatesAndNotify()` on launch and
-every 6 hours. It reads `latest-mac.yml` from the GitHub Release, downloads a
-newer signed DMG in the background, and installs it on quit. Nothing to do
-beyond publishing each release with `--publish always`.
+Two models, depending on whether the build is signed:
+
+- **Now (unsigned): notify-only.** On launch and every 6h the app queries the
+  GitHub `releases/latest` API and, if a newer version exists, offers to open
+  the download page (`main.js` → `checkForUpdates`). This works without signing.
+  Just publish each release (`gh release create v<x> dist/*.dmg …` or
+  `--publish always`) and users get notified.
+- **Later (signed): silent auto-update.** Once a Developer ID cert is in place,
+  swap `checkForUpdates` for `electron-updater`: `npm i electron-updater`, call
+  `autoUpdater.checkForUpdatesAndNotify()`, and publish with `--publish always`
+  so `latest-mac.yml` + the signed DMG land in the Release. macOS silent
+  in-place update **requires** the signature, which is why it's gated on the cert.
+
+The first desktop release (v7.13.0, unsigned, arm64) is published at
+`https://github.com/vakovalskii/codbash/releases/tag/v7.13.0`.
 
 ## CI note
 

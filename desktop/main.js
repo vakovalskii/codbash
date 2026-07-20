@@ -113,20 +113,65 @@ async function createWindow() {
   }
 }
 
-// Auto-update from GitHub Releases (only in a packaged, signed build — a dev
-// run has nothing to update against). Failures are non-fatal.
-function initAutoUpdater() {
-  if (!app.isPackaged || SMOKE) return;
-  try {
-    const { autoUpdater } = require('electron-updater');
-    autoUpdater.autoDownload = true;
-    autoUpdater.on('error', function (err) { process.stderr.write('[updater] ' + err + '\n'); });
-    autoUpdater.checkForUpdatesAndNotify();
-    // Re-check every 6 hours while the app stays open.
-    setInterval(function () { autoUpdater.checkForUpdatesAndNotify(); }, 6 * 60 * 60 * 1000);
-  } catch (e) {
-    process.stderr.write('[updater] disabled: ' + (e && e.message) + '\n');
+// Simple semver-ish "is a newer than b" (major.minor.patch).
+function isNewerVersion(a, b) {
+  const pa = String(a).split('.').map(Number);
+  const pb = String(b).split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    if ((pa[i] || 0) > (pb[i] || 0)) return true;
+    if ((pa[i] || 0) < (pb[i] || 0)) return false;
   }
+  return false;
+}
+
+// Update check via GitHub Releases. We use a NOTIFY model (fetch the latest
+// release, and if it's newer, offer to open the download page) rather than
+// silent in-place replacement: silent auto-update on macOS requires a signed
+// build, and codbash currently ships unsigned. Once a Developer ID signing
+// identity is in place this can be swapped for electron-updater's silent flow.
+function checkForUpdates(interactive) {
+  if (SMOKE) return;
+  const current = app.getVersion();
+  const opts = {
+    host: 'api.github.com',
+    path: '/repos/vakovalskii/codbash/releases/latest',
+    headers: { 'User-Agent': 'codbash-desktop', 'Accept': 'application/vnd.github+json' },
+    timeout: 8000,
+  };
+  const req = https.get(opts, function (res) {
+    let d = '';
+    res.on('data', function (c) { d += c; });
+    res.on('end', function () {
+      let rel;
+      try { rel = JSON.parse(d); } catch (_e) { return; }
+      const latest = String(rel.tag_name || '').replace(/^v/, '');
+      if (latest && isNewerVersion(latest, current)) {
+        const { dialog } = require('electron');
+        dialog.showMessageBox({
+          type: 'info',
+          message: 'codbash ' + latest + ' is available',
+          detail: 'You have ' + current + '. Open the download page?',
+          buttons: ['Download', 'Later'],
+          defaultId: 0,
+          cancelId: 1,
+        }).then(function (r) {
+          if (r.response === 0) shell.openExternal(rel.html_url || 'https://github.com/vakovalskii/codbash/releases/latest');
+        });
+      } else if (interactive) {
+        const { dialog } = require('electron');
+        dialog.showMessageBox({ type: 'info', message: 'codbash is up to date', detail: 'Version ' + current + '.', buttons: ['OK'] });
+      }
+    });
+  });
+  req.on('error', function () {});
+  req.on('timeout', function () { req.destroy(); });
+}
+
+function initAutoUpdater() {
+  if (SMOKE) return;
+  checkForUpdates(false);
+  // Re-check every 6 hours while the app stays open.
+  setInterval(function () { checkForUpdates(false); }, 6 * 60 * 60 * 1000);
 }
 
 app.whenReady().then(async function () {
