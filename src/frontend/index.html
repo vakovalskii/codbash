@@ -46,6 +46,8 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="18" rx="2"/><polyline points="6 8 9 11 6 14"/><line x1="12" y1="15" x2="17" y2="15"/></svg>
         Terminal
     </div>
+    <!-- Live tree of projects that currently have running Workspace terminals. -->
+    <div id="wsRunningTree" class="ws-running-tree" style="display:none"></div>
 
     <!-- Sessions section -->
     <div class="sidebar-group collapsed" data-section="workspace">
@@ -223,9 +225,6 @@
             </div>
         </div>
     </div>
-
-    <!-- Live tree of projects that currently have running Workspace terminals. -->
-    <div id="wsRunningTree" class="ws-running-tree" style="display:none"></div>
 
     <span id="sidebarStatus" role="status" aria-live="polite" class="sr-only"></span>
     <div class="sidebar-author">

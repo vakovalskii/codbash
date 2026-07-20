@@ -2,6 +2,14 @@
 
 const CHANGELOG = [
   {
+    version: '7.14.3',
+    date: '2026-07-20',
+    title: 'Running-projects tree moved under Terminal',
+    changes: [
+      'The running-terminals tree now lives right under the Terminal sidebar item instead of at the bottom of the sidebar',
+    ],
+  },
+  {
     version: '7.14.2',
     date: '2026-07-20',
     title: 'Running-projects sidebar tree + safer pane labels',
