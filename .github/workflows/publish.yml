@@ -1,8 +1,12 @@
 name: Publish to npm
 
+# Manual only. Publishing is done deliberately with a short-lived npm token, so
+# this does NOT auto-fire on every GitHub release (releases are also cut for the
+# desktop DMG, which must not trigger a CLI publish). To publish: bump the
+# version, then run this workflow from the Actions tab. Requires an npm
+# automation token with publish access to `codbash-app` in the NPM_TOKEN secret.
 on:
-  release:
-    types: [published]
+  workflow_dispatch:
 
 jobs:
   publish:
@@ -20,6 +24,14 @@ jobs:
         run: |
           node bin/cli.js version
           node -c bin/cli.js
+      - name: Fail early if NPM_TOKEN is missing
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN}" ]; then
+            echo "::error::NPM_TOKEN secret is not set — add an npm automation token with publish access to codbash-app."
+            exit 1
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Publish
         run: npm publish --provenance --access public
         env:
