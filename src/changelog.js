@@ -2,6 +2,15 @@
 
 const CHANGELOG = [
   {
+    version: '7.14.2',
+    date: '2026-07-20',
+    title: 'Running-projects sidebar tree + safer pane labels',
+    changes: [
+      'The sidebar now shows a live tree of projects that have running terminals — click a project or terminal to jump straight to it',
+      'Pane title bars show the real command (e.g. "claude"), stripping leading VAR=value env prefixes so proxy credentials never appear in the header',
+    ],
+  },
+  {
     version: '7.14.1',
     date: '2026-07-20',
     title: 'Layout save fix + tidier terminal naming',
