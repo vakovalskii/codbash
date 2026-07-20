@@ -2,6 +2,21 @@
 
 const CHANGELOG = [
   {
+    version: '7.14.5',
+    date: '2026-07-20',
+    title: 'Bug-hunt sweep: crash-safety, data-loss fix, and many correctness fixes',
+    changes: [
+      'Server no longer crashes on a malformed session id (e.g. /api/session/__proto__); read routes are prototype-safe and every route now returns 500 instead of taking down the process',
+      'Import now truly merges history — it no longer overwrites your local Claude/Codex history before dedup (previously local sessions could be lost)',
+      'Fixed WSL terminal launch (a ReferenceError broke every launch on WSL)',
+      'Delete / bulk-delete now validate the session id; archive tar calls no longer go through a shell (path-injection safe)',
+      'Cost totals for a running session now update instead of freezing at first read; Copilot sessions are now included in full-text search',
+      'Live badges reappear after navigating; keyboard navigation works in List layout; the Agent Board refreshes on activity; a tool filter no longer stays highlighted after you toggle it off',
+      'Delete during an Escape no longer shows a false failure; pressing Escape while renaming a terminal tab now cancels instead of committing',
+      'Claude session first/last timestamps, IPv6 loopback access, ~ in a terminal cwd, Codex export assistant blocks, and the handoff "Original Task" section all fixed',
+    ],
+  },
+  {
     version: '7.14.4',
     date: '2026-07-20',
     title: 'Layout restore fixed · agent-aware running tree · cleaner Terminal view',

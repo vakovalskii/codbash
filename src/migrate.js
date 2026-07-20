@@ -3,10 +3,36 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { execSync } = require('child_process');
+const { execSync, execFileSync } = require('child_process');
 
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const CODEX_DIR = path.join(os.homedir(), '.codex');
+
+// Read a .jsonl file into a line array (missing/unreadable → []).
+function readJsonlLines(file) {
+  try { return fs.readFileSync(file, 'utf8').split('\n').filter(Boolean); }
+  catch { return []; }
+}
+
+// Merge a just-extracted history.jsonl with the lines that were present locally
+// BEFORE extraction (which overwrote the file), deduped by sessionId+timestamp.
+// `priorLines` come first so local entries win on tie. Without this, import
+// silently discards the machine's own history despite the "merge" promise.
+function mergeHistoryFile(file, priorLines) {
+  const merged = priorLines.concat(readJsonlLines(file));
+  if (!merged.length) return;
+  const seen = new Set();
+  const out = [];
+  for (const line of merged) {
+    let key;
+    try { const d = JSON.parse(line); key = d.sessionId + ':' + d.timestamp; }
+    catch { key = 'raw:' + line; }
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(line);
+  }
+  fs.writeFileSync(file, out.join('\n') + '\n');
+}
 
 function exportArchive(outPath) {
   const absOut = path.resolve(outPath);
@@ -97,10 +123,12 @@ function exportArchive(outPath) {
   console.log('');
   console.log('  Creating archive...');
 
-  // Create tar.gz from home directory
-  const pathArgs = paths.map(p => `"${p}"`).join(' ');
+  // Create tar.gz from home directory. execFileSync with an argument array
+  // (not a shell string) so an output path containing quotes/backticks/$ can't
+  // break quoting or inject a command.
   try {
-    execSync(`cd "${os.homedir()}" && tar -czf "${absOut}" ${pathArgs}`, {
+    execFileSync('tar', ['-czf', absOut, ...paths], {
+      cwd: os.homedir(),
       stdio: 'pipe',
     });
     const archiveSize = fs.statSync(absOut).size;
@@ -128,9 +156,9 @@ function importArchive(archivePath) {
   console.log('  \x1b[36m\x1b[1mCodBash Import\x1b[0m');
   console.log(`  Archive: ${absPath}`);
 
-  // List contents
-  const contents = execSync(`tar -tzf "${absPath}" | head -20`, { encoding: 'utf8' }).trim();
-  const lines = contents.split('\n');
+  // List contents (execFileSync — no shell, so the archive path is safe).
+  const contents = execFileSync('tar', ['-tzf', absPath], { encoding: 'utf8' }).trim();
+  const lines = contents.split('\n').slice(0, 20);
   const dirs = lines.map(l => l.split('/')[0]).filter((v,i,a) => a.indexOf(v) === i);
 
   console.log(`  Contains: ${dirs.join(', ')}`);
@@ -143,35 +171,26 @@ function importArchive(archivePath) {
 
   if (hasExisting) {
     console.log('  \x1b[33mWarning:\x1b[0m Existing session data found.');
-    console.log('  Import will \x1b[1mmerge\x1b[0m — existing files will be overwritten.');
+    console.log('  History files are \x1b[1mmerged\x1b[0m (deduped); other files are overwritten.');
     console.log('');
   }
 
-  // Extract to home directory
-  try {
-    execSync(`cd "${os.homedir()}" && tar -xzf "${absPath}"`, { stdio: 'pipe' });
+  const claudeHistory = path.join(CLAUDE_DIR, 'history.jsonl');
+  const codexHistory = path.join(CODEX_DIR, 'history.jsonl');
+  // Stash the local history lines BEFORE extraction — tar will overwrite these
+  // files, so we must capture them now to merge them back afterwards.
+  const priorClaude = readJsonlLines(claudeHistory);
+  const priorCodex = readJsonlLines(codexHistory);
 
-    // Merge history.jsonl if both exist
-    const importedHistory = path.join(CLAUDE_DIR, 'history.jsonl');
-    if (fs.existsSync(importedHistory)) {
-      // Deduplicate by sessionId+timestamp
-      const lines = fs.readFileSync(importedHistory, 'utf8').split('\n').filter(Boolean);
-      const seen = new Set();
-      const deduped = [];
-      for (const line of lines) {
-        try {
-          const d = JSON.parse(line);
-          const key = d.sessionId + ':' + d.timestamp;
-          if (!seen.has(key)) {
-            seen.add(key);
-            deduped.push(line);
-          }
-        } catch {
-          deduped.push(line);
-        }
-      }
-      fs.writeFileSync(importedHistory, deduped.join('\n') + '\n');
-    }
+  // Extract to home directory (execFileSync — no shell, path-injection safe).
+  try {
+    execFileSync('tar', ['-xzf', absPath], { cwd: os.homedir(), stdio: 'pipe' });
+
+    // Merge both history files with what was here before, so the machine's own
+    // sessions survive the import (previously Claude history was overwritten
+    // then only self-deduped, and Codex history was overwritten with no merge).
+    mergeHistoryFile(claudeHistory, priorClaude);
+    mergeHistoryFile(codexHistory, priorCodex);
 
     console.log('  \x1b[32mImport complete!\x1b[0m');
     console.log('  Run \x1b[2mcodbash run\x1b[0m to see your sessions.');

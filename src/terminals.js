@@ -348,7 +348,7 @@ function openInTerminal(sessionId, tool, flags, projectDir, terminalId, mode, co
     }
   } else if (platform === 'linux' && isWSL()) {
     let effectiveSessionId = sessionId;
-    if (fresh) {
+    if (mode === 'fresh') {
       // No session yet — generate a placeholder so window tagging still works.
       effectiveSessionId = 'fresh-' + Date.now().toString(36);
     } else {
