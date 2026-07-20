@@ -2,6 +2,17 @@
 
 const CHANGELOG = [
   {
+    version: '7.8.0',
+    date: '2026-07-20',
+    title: 'Workspace — iTerm-like tabs & splits',
+    changes: [
+      'Workspace now has named tabs (double-click to rename) — organize your terminals like in iTerm',
+      'Split each tab into 1–4 panes; every pane is an independent shell',
+      'Per-pane "Launch" dropdown types an agent command (Claude Code, Codex, Qwen, OpenCode, Kiro, Gemini) straight into that pane',
+      'Background tabs stay alive when you switch away — their shells keep running',
+    ],
+  },
+  {
     version: '7.7.0',
     date: '2026-07-19',
     title: 'Workspace — browser terminal (preview)',
