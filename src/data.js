@@ -743,13 +743,34 @@ function parsePiSessionFile(sessionFile) {
   if (lines.length === 0) return null;
 
   let header;
-  try { header = JSON.parse(lines[0]); } catch { return null; }
-  if (!header || header.type !== 'session' || !header.id) return null;
+  let headerLine = -1;
+  for (let i = 0; i < Math.min(lines.length, 50); i++) {
+    try {
+      const entry = JSON.parse(lines[i]);
+      if (entry && entry.type === 'session' && entry.id) {
+        header = entry;
+        headerLine = i;
+        break;
+      }
+    } catch {}
+  }
+  if (!header) return null;
 
   let sessionId = String(header.id);
   if (!SAFE_PI_SESSION_ID.test(sessionId)) return null;
   let projectPath = typeof header.cwd === 'string' ? header.cwd : '';
   let title = typeof header.title === 'string' ? header.title.trim().slice(0, 200) : '';
+  if (!title) {
+    for (let i = 0; i < headerLine; i++) {
+      try {
+        const entry = JSON.parse(lines[i]);
+        if (entry && entry.type === 'title' && typeof entry.title === 'string' && entry.title.trim()) {
+          title = entry.title.trim().slice(0, 200);
+          break;
+        }
+      } catch {}
+    }
+  }
   let msgCount = 0;
   let userMsgCount = 0;
   let firstMsg = '';
@@ -761,7 +782,7 @@ function parsePiSessionFile(sessionFile) {
   let hasUsage = false;
   let explicitCost = false;
 
-  for (let i = 1; i < lines.length; i++) {
+  for (let i = headerLine + 1; i < lines.length; i++) {
     try {
       const entry = JSON.parse(lines[i]);
       const ts = parseTimestamp(entry.timestamp || entry.ts);
