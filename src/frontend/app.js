@@ -5,7 +5,7 @@
 
 let allSessions = [];
 let filteredSessions = [];
-let currentView = 'sessions';  // sessions, projects, timeline, activity, starred
+let currentView = 'overview';  // overview (landing), sessions, projects, timeline, activity, starred
 let grouped = true;
 let layout = localStorage.getItem('codedash-layout') || 'grid'; // 'grid' or 'list'
 let groupingMode = normalizeGroupingMode(localStorage.getItem('codedash-grouping-mode'));
@@ -1674,6 +1674,11 @@ function render() {
 
   if (currentView === 'workspace') {
     renderWorkspace(content);
+    return;
+  }
+
+  if (currentView === 'overview') {
+    renderOverview(content);
     return;
   }
 

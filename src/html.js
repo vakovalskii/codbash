@@ -16,6 +16,7 @@ const JS_FILES = [
   'cloud.js',
   'recommended.js',
   'workspace.js',
+  'overview.js',
 ];
 
 function buildHTML() {

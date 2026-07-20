@@ -2,6 +2,17 @@
 
 const CHANGELOG = [
   {
+    version: '7.12.0',
+    date: '2026-07-20',
+    title: 'Overview landing + tidy sidebar',
+    changes: [
+      'New "Overview" view is now the landing screen — your workspace at a glance: every running terminal as a live card (tab, status, command, folder), plus quick actions to open a terminal, relaunch a saved layout or fire a saved command',
+      'Click any terminal card to jump straight into that pane in the Workspace',
+      'Cards refresh live — status (active / idle / limit / exited) updates as your agents run',
+      'The sidebar now starts with every section collapsed, so the Overview stays the focus; open only the sections you use and the app remembers your choice',
+    ],
+  },
+  {
     version: '7.11.0',
     date: '2026-07-20',
     title: 'Workspace — live status bar + focused pane',

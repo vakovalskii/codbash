@@ -2831,6 +2831,35 @@ body {
 
 .workspace-tabpanes { flex: 1; min-height: 0; display: flex; }
 
+/* ── Overview landing ── */
+.ov-wrap { padding: 24px; max-width: 900px; }
+.ov-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.ov-primary { border-color: var(--accent-blue); color: var(--accent-blue); }
+.ov-section-title {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px;
+    color: var(--text-muted); margin: 22px 0 10px;
+}
+.ov-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.ov-card {
+    display: flex; flex-direction: column; gap: 6px; text-align: left;
+    padding: 14px; background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 12px; cursor: pointer; transition: border-color 0.15s;
+}
+.ov-card:hover { border-color: var(--accent-blue); }
+.ov-card.limit { border-color: var(--accent-red); }
+.ov-card-top { display: flex; align-items: center; gap: 8px; }
+.ov-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); }
+.ov-card.active .ov-dot { background: var(--accent-green); box-shadow: 0 0 6px var(--accent-green); }
+.ov-card.limit .ov-dot { background: var(--accent-red); }
+.ov-card.exited .ov-dot { opacity: 0.5; }
+.ov-tab { font-weight: 600; color: var(--text-primary); font-size: 13px; flex: 1; }
+.ov-st { font-size: 9px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-muted); }
+.ov-card.active .ov-st { color: var(--accent-green); }
+.ov-card.limit .ov-st { color: var(--accent-red); }
+.ov-cmd { font-family: Menlo, Monaco, monospace; font-size: 12px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ov-cwd { font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ov-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+
 /* ── Global terminal status bar (top of .main, shown when terminals run) ── */
 .ws-statusbar {
     display: flex;

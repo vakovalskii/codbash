@@ -124,7 +124,11 @@ function _wsUpdateStatusBar() {
 
 function _wsStartStatusLoop() {
   if (_wsStatusTimer) return;
-  _wsStatusTimer = setInterval(_wsUpdateStatusBar, 1000);
+  _wsStatusTimer = setInterval(function () {
+    _wsUpdateStatusBar();
+    // Keep the Overview landing's cards live too.
+    if (typeof _ovRefreshIfCurrent === 'function') _ovRefreshIfCurrent();
+  }, 1000);
 }
 
 // Jump from a status chip to that pane: show Workspace, activate its tab, focus it.
