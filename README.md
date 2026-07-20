@@ -19,7 +19,7 @@ npm i -g codbash-app
 codbash run
 ```
 
-Or grab the **macOS desktop app** from [Releases](https://github.com/vakovalskii/codbash/releases/latest) (Apple Silicon).
+Or grab the **macOS desktop app** from [Releases](https://github.com/vakovalskii/codbash/releases/latest) — signed & notarized, Apple Silicon (`-arm64.dmg`) and Intel (`.dmg`). It opens with no Gatekeeper warning.
 
 ## Supported Agents
 
