@@ -2763,14 +2763,118 @@ body {
     background: var(--bg-secondary);
 }
 .workspace-title { font-weight: 600; color: var(--text-primary); font-size: 13px; }
-.workspace-status { font-size: 12px; color: var(--text-muted); flex: 1; }
-.workspace-term {
+.ws-layouts { display: flex; gap: 4px; }
+.ws-layouts .toolbar-btn { min-width: 34px; letter-spacing: 1px; }
+.workspace-hint { font-size: 11px; color: var(--text-muted); }
+
+/* ── Tab bar (iTerm-like) ── */
+.ws-tabbar {
+    display: flex;
+    align-items: stretch;
+    gap: 2px;
+    padding: 4px 8px 0;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+}
+.ws-tab {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    max-width: 200px;
+    border: 1px solid var(--border);
+    border-bottom: none;
+    border-radius: 8px 8px 0 0;
+    background: var(--bg-primary);
+    color: var(--text-secondary);
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+    user-select: none;
+}
+.ws-tab.active { background: var(--bg-card); color: var(--text-primary); border-color: var(--accent-blue); }
+.ws-tab-name { overflow: hidden; text-overflow: ellipsis; }
+.ws-tab-close {
+    font-size: 14px; line-height: 1;
+    background: transparent; border: none; color: var(--text-muted);
+    cursor: pointer; padding: 0 2px; border-radius: 4px;
+}
+.ws-tab-close:hover { color: var(--accent-red); }
+.ws-tab-add {
+    align-self: center;
+    margin-left: 4px;
+    width: 26px; height: 26px;
+    font-size: 16px; line-height: 1;
+    background: transparent; border: 1px solid var(--border);
+    color: var(--text-secondary); border-radius: 6px; cursor: pointer;
+}
+.ws-tab-add:hover { color: var(--text-primary); border-color: var(--text-muted); }
+.ws-tab-rename {
+    font-size: 12px; width: 110px;
+    background: var(--bg-input); color: var(--text-primary);
+    border: 1px solid var(--accent-blue); border-radius: 4px; padding: 2px 4px;
+}
+
+.workspace-tabpanes { flex: 1; min-height: 0; display: flex; }
+
+/* Grid of terminal panes. 1–3 panes = equal columns; 4 = 2×2. Only the active
+   tab's grid is shown; hidden grids keep their ptys alive. */
+.workspace-grid {
     flex: 1;
     min-height: 0;
-    padding: 6px 8px;
-    background: #08090c;
-    overflow: hidden;
+    display: none;
+    grid-gap: 6px;
+    gap: 6px;
+    padding: 6px;
+    background: var(--bg-primary);
 }
+.workspace-grid.active { display: grid; }
+.workspace-grid[data-count="1"] { grid-template-columns: 1fr; }
+.workspace-grid[data-count="2"] { grid-template-columns: 1fr 1fr; }
+.workspace-grid[data-count="3"] { grid-template-columns: 1fr 1fr 1fr; }
+.workspace-grid[data-count="4"] { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+
+.ws-pane {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    background: #08090c;
+}
+.ws-pane-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 6px 4px 10px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+}
+.ws-pane-status { font-size: 11px; color: var(--text-muted); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ws-pane-launch {
+    font-size: 11px;
+    background: var(--bg-input);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 3px 6px;
+    cursor: pointer;
+}
+.ws-pane-close {
+    font-size: 15px;
+    line-height: 1;
+    width: 22px; height: 22px;
+    background: transparent;
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+}
+.ws-pane-close:hover { color: var(--accent-red); border-color: var(--accent-red); }
+.ws-pane-term { flex: 1; min-height: 0; padding: 4px 6px; overflow: hidden; }
 
 .changelog-container { padding: 20px; max-width: 700px; }
 
