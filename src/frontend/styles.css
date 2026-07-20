@@ -2831,6 +2831,44 @@ body {
 
 .workspace-tabpanes { flex: 1; min-height: 0; display: flex; }
 
+/* Saved-commands manager modal */
+.ws-cmd-modal {
+    position: fixed; inset: 0; z-index: 300;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(0, 0, 0, 0.5);
+}
+.ws-cmd-dialog {
+    width: 560px; max-width: 92vw; max-height: 80vh;
+    display: flex; flex-direction: column;
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px; gap: 10px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+}
+.ws-cmd-head { display: flex; align-items: center; justify-content: space-between; font-weight: 600; color: var(--text-primary); }
+.ws-cmd-close { background: transparent; border: none; color: var(--text-muted); font-size: 20px; cursor: pointer; }
+.ws-cmd-note { font-size: 11px; color: var(--text-muted); line-height: 1.5; }
+.ws-cmd-note code { background: var(--bg-input); padding: 1px 4px; border-radius: 4px; }
+.ws-cmd-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; min-height: 40px; }
+.ws-cmd-empty { color: var(--text-muted); font-size: 12px; padding: 8px 2px; }
+.ws-cmd-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 10px; background: var(--bg-secondary);
+    border: 1px solid var(--border); border-radius: 8px;
+}
+.ws-cmd-info { flex: 1; min-width: 0; }
+.ws-cmd-name { font-size: 13px; color: var(--text-primary); font-weight: 500; }
+.ws-cmd-cmd { display: block; font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ws-cmd-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.ws-cmd-del:hover { color: var(--accent-red); border-color: var(--accent-red); }
+.ws-cmd-form { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--border); padding-top: 10px; }
+.ws-cmd-input {
+    background: var(--bg-input); color: var(--text-primary);
+    border: 1px solid var(--border); border-radius: 6px; padding: 7px 9px; font-size: 12px;
+    font-family: Menlo, Monaco, monospace;
+}
+.ws-cmd-save { align-self: flex-end; }
+.ws-cmd-error { color: var(--accent-red); font-size: 12px; min-height: 14px; }
+
 /* Grid of terminal panes. 1–3 panes = equal columns; 4 = 2×2. Only the active
    tab's grid is shown; hidden grids keep their ptys alive. */
 .workspace-grid {

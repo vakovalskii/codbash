@@ -2,6 +2,16 @@
 
 const CHANGELOG = [
   {
+    version: '7.9.0',
+    date: '2026-07-20',
+    title: 'Workspace — saved start commands',
+    changes: [
+      'Save your own agent start commands (e.g. a proxied launch: HTTPS_PROXY=… claude --dangerously-skip-permissions) and fire them into any pane from the Launch menu',
+      'New "Commands" manager to add / delete saved commands; proxy passwords are masked in the UI',
+      'Stored on your machine at ~/.codedash/workspace-commands.json (mode 0600), not in the browser',
+    ],
+  },
+  {
     version: '7.8.0',
     date: '2026-07-20',
     title: 'Workspace — iTerm-like tabs & splits',

@@ -13,6 +13,7 @@ const { getHTML } = require('./html');
 const projectsApi = require('./projects');
 const settingsApi = require('./settings');
 const terminal = require('./terminal');
+const workspaceCommands = require('./workspace-commands');
 // Element-level allowlist for launch flags. terminals.js currently only checks
 // for 'skip-permissions'; this set is the surface area we accept from clients.
 const ALLOWED_LAUNCH_FLAGS = new Set(['skip-permissions']);
@@ -169,6 +170,25 @@ function startServer(host, port, openBrowser = true) {
       // what gates the WS shell — see terminal.verifyUpgradeAuth.
       const status = terminal.terminalStatus();
       jsonLog(res, { available: status.available, error: status.error, hint: status.hint, token: terminal.getToken() });
+    }
+
+    // ── Saved Workspace commands (may contain proxy secrets; stored 0600) ──
+    else if (pathname === '/api/terminal/commands' && req.method === 'GET') {
+      jsonLog(res, { commands: workspaceCommands.loadCommands() });
+    }
+    else if (pathname === '/api/terminal/commands' && req.method === 'POST') {
+      readBody(req, (body) => {
+        let data; try { data = JSON.parse(body || '{}'); } catch (e) { data = {}; }
+        workspaceCommands.addCommand(data.name, data.command)
+          .then((cmd) => jsonLog(res, { ok: true, command: cmd }))
+          .catch((err) => jsonLog(res, { ok: false, error: err.message }, 400));
+      });
+    }
+    else if (pathname.startsWith('/api/terminal/commands/') && req.method === 'DELETE') {
+      const id = pathname.slice('/api/terminal/commands/'.length);
+      workspaceCommands.removeCommand(id)
+        .then((list) => jsonLog(res, { ok: true, commands: list }))
+        .catch((err) => jsonLog(res, { ok: false, error: err.message }, 400));
     }
 
     // ── Repo Auto-Refresh API ───────────────

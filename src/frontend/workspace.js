@@ -36,6 +36,40 @@ var _wsTabSeq = 0;
 var _wsPaneSeq = 0;
 var _wsToken = null;
 var _wsVendorLoaded = false;
+var _wsSavedCommands = [];   // [{ id, name, command }]
+
+// Mask credentials in a URL userinfo (proxy passwords) for display only.
+function _wsMaskSecrets(cmd) {
+  return String(cmd).replace(/(:\/\/[^:/@\s]+:)[^@\s]+(@)/g, '$1****$2');
+}
+
+function _wsLoadCommands() {
+  return fetch('/api/terminal/commands')
+    .then(function (r) { return r.json(); })
+    .then(function (d) { _wsSavedCommands = (d && d.commands) || []; _wsRefreshLaunchers(); })
+    .catch(function () { _wsSavedCommands = []; });
+}
+
+// <option>s for a pane's Launch menu: built-in agents + saved commands.
+function _wsLaunchOptionsHtml() {
+  var html = '<option value="">Launch ▾</option>';
+  html += '<optgroup label="Agents">';
+  WORKSPACE_AGENTS.forEach(function (a) { html += '<option value="' + escHtml(a.cmd) + '">' + escHtml(a.label) + '</option>'; });
+  html += '</optgroup>';
+  if (_wsSavedCommands.length) {
+    html += '<optgroup label="Saved">';
+    _wsSavedCommands.forEach(function (c) { html += '<option value="' + escHtml(c.command) + '">' + escHtml(c.name) + '</option>'; });
+    html += '</optgroup>';
+  }
+  return html;
+}
+
+// Refresh every open pane's Launch menu in place (after commands change).
+function _wsRefreshLaunchers() {
+  Array.prototype.forEach.call(document.querySelectorAll('.ws-pane-launch'), function (sel) {
+    sel.innerHTML = _wsLaunchOptionsHtml();
+  });
+}
 
 // ── vendor ──────────────────────────────────────────────────────────────────
 function _loadWorkspaceVendor() {
@@ -149,14 +183,12 @@ function _wsConnectPane(pane) {
 
 // ── markup ──────────────────────────────────────────────────────────────────
 function _wsPaneMarkup(pane) {
-  var opts = '<option value="">Launch ▾</option>';
-  WORKSPACE_AGENTS.forEach(function (a) { opts += '<option value="' + escHtml(a.cmd) + '">' + escHtml(a.label) + '</option>'; });
   return '' +
     '<div class="ws-pane" data-pane-id="' + escHtml(pane.id) + '">' +
       '<div class="ws-pane-bar">' +
         '<span class="ws-pane-status" id="wsStatus-' + escHtml(pane.id) + '">connecting…</span>' +
-        '<select class="ws-pane-launch" title="Launch an agent in this pane" ' +
-          'onchange="launchAgentInPane(\'' + escHtml(pane.id) + '\', this.value); this.selectedIndex=0;">' + opts + '</select>' +
+        '<select class="ws-pane-launch" title="Launch an agent or saved command in this pane" ' +
+          'onchange="launchAgentInPane(\'' + escHtml(pane.id) + '\', this.value); this.selectedIndex=0;">' + _wsLaunchOptionsHtml() + '</select>' +
         '<button class="ws-pane-close" title="Close pane" onclick="closeWorkspacePane(\'' + escHtml(pane.id) + '\')">&times;</button>' +
       '</div>' +
       '<div class="ws-pane-term" id="wsTermHost-' + escHtml(pane.id) + '"></div>' +
@@ -332,6 +364,92 @@ function launchAgentInPane(id, cmd) {
   if (pane.term) pane.term.focus();
 }
 
+// ── Saved-commands manager (modal) ──────────────────────────────────────────
+function _wsActivePaneId() {
+  var tab = _wsActiveTab();
+  return tab && tab.panes[0] ? tab.panes[0].id : null;
+}
+
+function _wsCommandsListHtml() {
+  if (!_wsSavedCommands.length) return '<div class="ws-cmd-empty">No saved commands yet.</div>';
+  return _wsSavedCommands.map(function (c) {
+    return '<div class="ws-cmd-row">' +
+      '<div class="ws-cmd-info">' +
+        '<div class="ws-cmd-name">' + escHtml(c.name) + '</div>' +
+        '<code class="ws-cmd-cmd">' + escHtml(_wsMaskSecrets(c.command)) + '</code>' +
+      '</div>' +
+      '<div class="ws-cmd-actions">' +
+        '<button class="toolbar-btn" title="Run in the active pane" onclick="runSavedCommand(\'' + escHtml(c.id) + '\')">Run</button>' +
+        '<button class="toolbar-btn ws-cmd-del" title="Delete" onclick="deleteWorkspaceCommand(\'' + escHtml(c.id) + '\')">&times;</button>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+function _wsRenderCommandsModalBody() {
+  var el = document.getElementById('wsCmdList');
+  if (el) el.innerHTML = _wsCommandsListHtml();
+}
+
+function openWorkspaceCommands() {
+  var existing = document.getElementById('wsCmdModal');
+  if (existing) existing.remove();
+  var modal = document.createElement('div');
+  modal.id = 'wsCmdModal';
+  modal.className = 'ws-cmd-modal';
+  modal.innerHTML =
+    '<div class="ws-cmd-dialog">' +
+      '<div class="ws-cmd-head"><span>Saved commands</span>' +
+        '<button class="ws-cmd-close" onclick="closeWorkspaceCommands()">&times;</button></div>' +
+      '<div class="ws-cmd-note">Stored on your machine at <code>~/.codedash/workspace-commands.json</code> (0600). ' +
+        'Fine for proxy launches — the value is typed straight into the pane shell.</div>' +
+      '<div class="ws-cmd-list" id="wsCmdList">' + _wsCommandsListHtml() + '</div>' +
+      '<div class="ws-cmd-form">' +
+        '<input id="wsCmdName" class="ws-cmd-input" placeholder="Name (e.g. Claude via proxy)" maxlength="120">' +
+        '<input id="wsCmdCommand" class="ws-cmd-input" placeholder="HTTPS_PROXY=\'…\' claude --dangerously-skip-permissions">' +
+        '<button class="toolbar-btn ws-cmd-save" onclick="saveWorkspaceCommand()">Save</button>' +
+      '</div>' +
+      '<div class="ws-cmd-error" id="wsCmdError"></div>' +
+    '</div>';
+  modal.addEventListener('click', function (e) { if (e.target === modal) closeWorkspaceCommands(); });
+  document.body.appendChild(modal);
+  var nameEl = document.getElementById('wsCmdName');
+  if (nameEl) nameEl.focus();
+}
+
+function closeWorkspaceCommands() {
+  var m = document.getElementById('wsCmdModal');
+  if (m) m.remove();
+}
+
+function saveWorkspaceCommand() {
+  var name = (document.getElementById('wsCmdName') || {}).value || '';
+  var command = (document.getElementById('wsCmdCommand') || {}).value || '';
+  var errEl = document.getElementById('wsCmdError');
+  if (errEl) errEl.textContent = '';
+  fetch('/api/terminal/commands', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: name, command: command })
+  }).then(function (r) { return r.json(); }).then(function (d) {
+    if (!d.ok) { if (errEl) errEl.textContent = d.error || 'Could not save'; return; }
+    document.getElementById('wsCmdName').value = '';
+    document.getElementById('wsCmdCommand').value = '';
+    return _wsLoadCommands().then(_wsRenderCommandsModalBody);
+  }).catch(function () { if (errEl) errEl.textContent = 'Request failed'; });
+}
+
+function deleteWorkspaceCommand(id) {
+  fetch('/api/terminal/commands/' + encodeURIComponent(id), { method: 'DELETE' })
+    .then(function (r) { return r.json(); })
+    .then(function () { return _wsLoadCommands().then(_wsRenderCommandsModalBody); });
+}
+
+function runSavedCommand(id) {
+  var cmd = _wsSavedCommands.find(function (c) { return c.id === id; });
+  var paneId = _wsActivePaneId();
+  if (cmd && paneId) { launchAgentInPane(paneId, cmd.command); closeWorkspaceCommands(); }
+}
+
 // ── mount ───────────────────────────────────────────────────────────────────
 async function renderWorkspace(container) {
   // Idempotent: background refreshes call render() while on this view.
@@ -366,6 +484,7 @@ async function renderWorkspace(container) {
           '<button class="toolbar-btn ws-layout-btn" id="wsLayout-4" title="4 panes (2×2)" aria-label="4 panes" onclick="setWorkspaceLayout(4)">' + _WS_ICON_4 + '</button>' +
         '</div>' +
         '<button class="toolbar-btn" id="wsAddPane" title="Add a pane to this tab" onclick="addWorkspacePane(null)">+ Pane</button>' +
+        '<button class="toolbar-btn" title="Manage saved start commands" onclick="openWorkspaceCommands()">Commands</button>' +
         '<span style="flex:1"></span>' +
         '<span class="workspace-hint">Double-click a tab to rename</span>' +
       '</div>' +
@@ -379,4 +498,5 @@ async function renderWorkspace(container) {
   _wsTabs = [{ id: 't' + (++_wsTabSeq), name: 'Tab 1', panes: [{ id: 'p' + (++_wsPaneSeq), cmd: null }] }];
   _wsActiveTabId = _wsTabs[0].id;
   _wsRenderAll();
+  _wsLoadCommands();
 }
