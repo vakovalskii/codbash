@@ -12,40 +12,18 @@
 <body>
 
 <script>
-// Pre-paint sidebar state restore: applies collapsed sections from
-// localStorage before the sidebar markup paints, so a user who collapsed
-// "Agents" doesn't see it flash open on reload. The full applySidebarConfig()
-// runs later from init() and reconciles everything (including hidden items
-// and the chevron rotation), but the .collapsed class needs to land before
-// first paint to prevent the flash. This script runs synchronously before
-// the <div class="sidebar"> below.
+// Pre-paint sidebar state: the whole-sidebar collapse toggle needs to land
+// before first paint to avoid a flash. Section groups always start collapsed
+// (see markup) — expanding a section is a transient, per-session choice, so we
+// deliberately do NOT restore expanded sections here.
 (function () {
   try {
-    var raw = window.localStorage && window.localStorage.getItem('codedash-sidebar-config');
-    if (!raw || typeof raw !== 'string' || raw.length > 65536) return;
-    var cfg = JSON.parse(raw);
-    if (!cfg || typeof cfg !== 'object' || cfg.v !== 1 || !cfg.collapsed) return;
-    var collapsed = cfg.collapsed;
-    // Defer to DOM-ready so .sidebar-group nodes exist. Script is placed
-    // before <div class="sidebar">, so we use a microtask via setTimeout(0).
-    document.addEventListener('DOMContentLoaded', function () {
-      // Sections start collapsed in the markup. Apply stored collapsed=true as
-      // well, and — importantly — EXPAND sections the user explicitly opened
-      // (stored collapsed=false) so their choice survives without a flash.
-      Object.keys(collapsed).forEach(function (id) {
-        var group = document.querySelector('.sidebar-group[data-section="' + id.replace(/"/g, '') + '"]');
-        if (!group) return;
-        var hdr = group.querySelector(':scope > .sidebar-section-header');
-        if (collapsed[id] === true) {
-          group.classList.add('collapsed');
-          if (hdr) hdr.setAttribute('aria-expanded', 'false');
-        } else if (collapsed[id] === false) {
-          group.classList.remove('collapsed');
-          if (hdr) hdr.setAttribute('aria-expanded', 'true');
-        }
+    if (window.localStorage && window.localStorage.getItem('codedash-sidebar-hidden') === '1') {
+      document.addEventListener('DOMContentLoaded', function () {
+        document.body.classList.add('sidebar-hidden');
       });
-    });
-  } catch (_e) { /* private mode or malformed — applySidebarConfig will recover */ }
+    }
+  } catch (_e) { /* private mode — init() will recover */ }
 })();
 </script>
 
@@ -54,28 +32,31 @@
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
         codbash
         <span class="version-badge" id="versionBadge"></span>
+        <button type="button" class="sidebar-collapse-btn" title="Collapse sidebar" aria-label="Collapse sidebar" onclick="toggleSidebar()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
     </div>
 
-    <!-- Overview — always-visible landing (sits above the collapsible groups) -->
+    <!-- Overview + Terminal — always-visible landing items (above the groups) -->
     <div class="sidebar-item active" data-view="overview" data-key="overview">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>
         Overview
     </div>
+    <div class="sidebar-item" data-view="workspace" data-key="workspace">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="18" rx="2"/><polyline points="6 8 9 11 6 14"/><line x1="12" y1="15" x2="17" y2="15"/></svg>
+        Terminal
+    </div>
 
-    <!-- Workspace section -->
+    <!-- Sessions section -->
     <div class="sidebar-group collapsed" data-section="workspace">
         <button type="button" class="sidebar-section-header" data-role="section-header" data-section-target="workspace" aria-expanded="false" aria-controls="sidebarSectionWorkspace">
             <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
-            <span>Workspace</span>
+            <span>Sessions</span>
         </button>
         <div class="sidebar-section-body" id="sidebarSectionWorkspace">
             <div class="sidebar-item" data-view="sessions">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
                 All Sessions
-            </div>
-            <div class="sidebar-item" data-view="workspace" data-key="workspace">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="18" rx="2"/><polyline points="6 8 9 11 6 14"/><line x1="12" y1="15" x2="17" y2="15"/></svg>
-                Workspace
             </div>
             <div class="sidebar-item" data-view="projects">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
@@ -179,7 +160,7 @@
         <div class="sidebar-section-body" id="sidebarSectionTools">
 
             <!-- Install agents sub-section (default collapsed) -->
-            <div class="sidebar-group sidebar-subgroup" data-section="install-agents">
+            <div class="sidebar-group sidebar-subgroup collapsed" data-section="install-agents">
                 <button type="button" class="sidebar-section-header sidebar-subsection-header" data-role="section-header" data-section-target="install-agents" aria-expanded="false" aria-controls="sidebarSectionInstallAgents">
                     <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
                     <span>Install agents</span>
@@ -249,6 +230,11 @@
     </div>
 </div>
 
+<!-- Floating re-open handle, shown only when the sidebar is collapsed -->
+<button type="button" class="sidebar-reopen-btn" title="Show sidebar" aria-label="Show sidebar" onclick="toggleSidebar()">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+</button>
+
 <div class="main">
     <div class="toolbar">
         <input type="text" class="search-box" placeholder="Search sessions, projects... (press /)" oninput="onSearch(this.value)">
@@ -312,8 +298,9 @@
         <div class="ap-body">
             <div class="ap-pane" id="apPaneLocal" role="tabpanel">
                 <label for="apLocalPath">Folder path on this machine</label>
-                <input type="text" id="apLocalPath" placeholder="/Users/me/code/my-project" autocomplete="off" aria-describedby="apLocalHint" />
-                <div class="ap-hint" id="apLocalHint">Must be an existing directory. <code>~</code> is expanded.</div>
+                <input type="text" id="apLocalPath" placeholder="/Users/me/code/my-project" autocomplete="off" aria-describedby="apLocalHint" list="apPathSuggestions" />
+                <datalist id="apPathSuggestions"></datalist>
+                <div class="ap-hint" id="apLocalHint">Start typing to pick from your known project folders. <code>~</code> is expanded.</div>
                 <div class="ap-error" id="apLocalError" role="alert"></div>
             </div>
             <div class="ap-pane" id="apPaneOwned" style="display:none" role="tabpanel">

@@ -1067,6 +1067,9 @@ async function loadSessions() {
     _analyticsHtmlCache = null;
     _analyticsCacheUrl = null;
     applyFilters();
+    // Keep the Overview landing in sync once sessions land (it renders before
+    // this fetch resolves on a cold start).
+    if (typeof _ovRefreshIfCurrent === 'function') _ovRefreshIfCurrent();
     // Progressive loading: if server is still loading cursor vscdb sessions, auto-refresh
     if (resp.headers.get('X-Loading') === '1') {
       setTimeout(loadSessions, 2000);
@@ -1140,6 +1143,9 @@ async function pollActiveSessions() {
     _prevActiveKey = newKey;
 
     activeSessions = newActive;
+
+    // Reflect the new active-agent count on the Overview landing.
+    if (typeof _ovRefreshIfCurrent === 'function') _ovRefreshIfCurrent();
 
     // Only touch cards that changed
     document.querySelectorAll('.card').forEach(function(card) {
@@ -1400,6 +1406,11 @@ function renderCard(s, idx) {
   html += '<span class="card-tags">' + tagHtml;
   html += '<button class="tag-add-btn" onclick="showTagDropdown(event, \'' + s.id + '\')" title="Add tag">+</button>';
   html += '</span>';
+  // Open the session's project folder in the in-app terminal with the agent's
+  // resume command prefilled (awaiting Enter).
+  if (s.git_root || s.project) {
+    html += '<button class="card-gen-btn card-open-here" onclick="event.stopPropagation();openSessionInWorkspace(\'' + escJsString(s.id) + '\')" title="Open a terminal in this project (resume prefilled)">&#9654;</button>';
+  }
   if (s.has_detail) {
     var btnTitle = sessionTitles[s.id] ? 'Regenerate AI title' : 'Generate AI title';
     var btnIcon = sessionTitles[s.id] ? '&#8635;' : '&#9883;';
@@ -2000,6 +2011,14 @@ function scrollToInstallAgents() {
   if (section && section.scrollIntoView) section.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
+// Live Workspace panes whose resolved cwd is this project folder.
+function _projectLiveTerminals(projPath) {
+  if (!projPath || typeof _wsAllPanes !== 'function') return [];
+  return _wsAllPanes().filter(function (x) {
+    return x.pane && !x.pane.exited && x.pane.cwd === projPath;
+  });
+}
+
 function renderLauncherCard(projKey, projInfo) {
   var projName = projInfo.name;
   var projPath = projInfo.path;
@@ -2067,10 +2086,30 @@ function renderLauncherCard(projKey, projInfo) {
       : 'Resume last session (' + lastId.slice(0,8) + ')';
     html += '<button class="git-project-launch-btn"' + (toolMissing ? ' aria-describedby="toolMissingHint"' : '') + ' data-sess-id="' + escHtml(lastId) + '" data-sess-tool="' + escHtml(lastTool) + '" data-proj-path="' + escHtml(projPath) + '" onclick="resumeLastProjectSession(this.dataset.sessId,this.dataset.sessTool,this.dataset.projPath)" title="' + escHtml(lastTitle) + '" aria-label="' + escHtml(lastTitle) + '">&#x21bb; Last</button>';
   }
+  // Open in-app terminals (Workspace) pre-cd'd into this project folder (1-4).
+  if (projPath) {
+    html += '<select class="git-project-launch-btn ws-proj-term" title="Open terminals in this folder (in-app Workspace)" ' +
+      'data-proj-path="' + escHtml(projPath) + '" ' +
+      'onchange="spawnProjectTerminals(this.dataset.projPath, this.value); this.selectedIndex=0;">' +
+      '<option value="">&#8862; Terminal &#9662;</option>' +
+      '<option value="1">1 pane</option><option value="2">2 panes</option>' +
+      '<option value="3">3 panes</option><option value="4">4 panes</option>' +
+      '</select>';
+  }
   if (projInfo.manualId) {
     html += '<button class="git-project-launch-btn" data-proj-id="' + escHtml(projInfo.manualId) + '" data-proj-name="' + escHtml(projName) + '" onclick="unregisterProject(this.dataset.projId,this.dataset.projName)" title="Remove from registry (does not delete files)">&times;</button>';
   }
   html += '</div>';
+
+  // Show terminals already running in this folder, with a jump-to link.
+  var liveT = _projectLiveTerminals(projPath);
+  if (liveT.length) {
+    var first = liveT[0];
+    html += '<button class="launcher-card-link launcher-card-term" ' +
+      'data-tab="' + escHtml(first.tab.id) + '" data-pane="' + escHtml(first.pane.id) + '" ' +
+      'onclick="jumpToWorkspacePane(this.dataset.tab, this.dataset.pane)">&#9679; ' +
+      liveT.length + ' terminal' + (liveT.length === 1 ? '' : 's') + ' running &rarr;</button>';
+  }
 
   if (totalSessions > 0) {
     html += '<button class="launcher-card-link" data-proj-key="' + escHtml(projKey) + '" data-proj-name="' + escHtml(projName) + '" onclick="viewProjectInHistory(this.dataset.projKey,this.dataset.projName)">View ' + totalSessions + ' session' + (totalSessions === 1 ? '' : 's') + ' →</button>';
@@ -2515,14 +2554,10 @@ function _initSidebarConfig() {
 function applySidebarConfig() {
   var cfg = _initSidebarConfig();
 
-  // Sections (including nested install-agents): toggle .collapsed + aria-expanded.
-  document.querySelectorAll('.sidebar-group[data-section]').forEach(function(group) {
-    var id = group.getAttribute('data-section');
-    var collapsed = SidebarConfig.isSectionCollapsed(cfg, id);
-    group.classList.toggle('collapsed', collapsed);
-    var header = group.querySelector(':scope > .sidebar-section-header');
-    if (header) header.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-  });
+  // Section groups always start collapsed (see markup); expanding a section is
+  // a transient, per-session choice handled directly in the header click. We
+  // deliberately do NOT drive .collapsed from stored config here, so the app
+  // always opens tidy with the Overview in focus.
 
   // Items: hide based on data-key (preferred) or data-view (legacy fallback).
   // Settings is force-visible by isItemHidden.
@@ -2624,13 +2659,12 @@ function _onSidebarSectionHeaderClick(event) {
   var target = event.target.closest('[data-role="section-header"]');
   if (!target) return;
   event.stopPropagation();
-  var sectionId = target.getAttribute('data-section-target');
-  if (!sectionId) return;
-  var cfg = _initSidebarConfig();
-  var next = !SidebarConfig.isSectionCollapsed(cfg, sectionId);
-  _sidebarConfig = SidebarConfig.setSectionCollapsed(cfg, sectionId, next);
-  SidebarConfig.saveToStorage(_storage(), _sidebarConfig);
-  applySidebarConfig();
+  // Expansion is transient (per-session) — toggle the DOM directly rather than
+  // persisting, so a reload always returns to the tidy all-collapsed start.
+  var group = target.closest('.sidebar-group[data-section]');
+  if (!group) return;
+  var collapsed = group.classList.toggle('collapsed');
+  target.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
 }
 
 function _bindSidebarHeaders() {
@@ -2646,6 +2680,17 @@ function toggleSidebarItem(key, visible) {
   _sidebarConfig = SidebarConfig.setItemHidden(cfg, key, !visible);
   SidebarConfig.saveToStorage(_storage(), _sidebarConfig);
   applySidebarConfig();
+}
+
+// Collapse/expand the entire sidebar to give the content full width. State is
+// persisted so it survives reloads (applied pre-paint in index.html too).
+function toggleSidebar(force) {
+  var hide = (typeof force === 'boolean') ? force : !document.body.classList.contains('sidebar-hidden');
+  document.body.classList.toggle('sidebar-hidden', hide);
+  var st = _storage();
+  try { if (st) { if (hide) st.setItem('codedash-sidebar-hidden', '1'); else st.removeItem('codedash-sidebar-hidden'); } } catch (e) {}
+  // Terminals need a refit when the viewport width changes.
+  if (typeof _wsRefitTab === 'function') setTimeout(function () { try { _wsRefitTab(_wsActiveTab()); } catch (e) {} }, 260);
 }
 
 function resetSidebarConfig() {
@@ -3938,12 +3983,28 @@ async function unregisterProject(id, name) {
 
 // ── Add Project modal ─────────────────────────────────────────
 
+// Offer the folders codbash already knows about (from every session's git
+// root / project path) as autocomplete options, so "Add project" is a pick
+// rather than typing a full path from memory.
+function _populateProjectPathSuggestions() {
+  var dl = document.getElementById('apPathSuggestions');
+  if (!dl) return;
+  var seen = {};
+  (typeof allSessions !== 'undefined' && allSessions ? allSessions : []).forEach(function (s) {
+    var p = s.git_root || s.project;
+    if (p && p.charAt(0) === '/' && !seen[p]) seen[p] = true;
+  });
+  var paths = Object.keys(seen).sort();
+  dl.innerHTML = paths.map(function (p) { return '<option value="' + escHtml(p) + '"></option>'; }).join('');
+}
+
 function openAddProject() {
   var overlay = document.getElementById('addProjectOverlay');
   if (!overlay) return;
   overlay.classList.add('open');
   overlay.setAttribute('aria-hidden', 'false');
   addProjectSwitchTab('local');
+  _populateProjectPathSuggestions();
   var input = document.getElementById('apLocalPath');
   if (input) { input.value = ''; setTimeout(function() { input.focus(); }, 50); }
   var err = document.getElementById('apLocalError'); if (err) err.textContent = '';
