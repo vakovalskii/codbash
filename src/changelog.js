@@ -2,6 +2,21 @@
 
 const CHANGELOG = [
   {
+    version: '7.13.0',
+    date: '2026-07-20',
+    title: 'Project-aware terminals, richer Overview, tidier sidebar',
+    changes: [
+      'Overview is now a real dashboard: headline stats (sessions, active agents, terminals, spend), your recent sessions as clickable cards, and live terminals grouped by project folder',
+      'Every session card gets an "Open here" button — it opens a terminal in that session\'s project folder with the agent\'s resume command prefilled (you press Enter when ready; it never auto-runs)',
+      'Projects: a "Terminal ▾" control opens up to 4 panes cd\'d into a project folder, and each project shows how many terminals are running in it (click to jump)',
+      'Switching a tab\'s split layout (or closing a tab) now asks before killing running terminals — no more losing live panes by accident',
+      'The whole sidebar can be collapsed for full-width content (a floating handle brings it back); the state is remembered',
+      'Sidebar tidy-up: the terminal is now a top-level "Terminal" item, groups are renamed (Sessions / Agents / Tools), and every group starts collapsed so the Overview stays in focus',
+      'The top terminal status bar no longer jitters — it shows each terminal\'s (renamable) tab name, with the command in the tooltip',
+      '"Add project" now autocompletes from the folders codbash already knows about, so you pick instead of typing a full path',
+    ],
+  },
+  {
     version: '7.12.0',
     date: '2026-07-20',
     title: 'Overview landing + tidy sidebar',

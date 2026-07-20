@@ -40,6 +40,7 @@ var _wsSavedCommands = [];   // [{ id, name, command }]
 var _wsSavedLayouts = [];    // [{ id, name, tabs:[{name,panes:[{cmd}]}] }]
 var _wsRoot = null;          // the live .workspace-wrap element (kept across view switches)
 var _wsFocusedPaneId = null; // the pane the user is currently in (target for commands)
+var _wsPendingOpen = null;   // {name?, cwd?, panes?} to open on the next mount (see openInWorkspace)
 
 // Mark a pane as focused: remember it and highlight its box so it's obvious
 // where a launched command will land.
@@ -93,24 +94,37 @@ function _wsEnsureStatusBar() {
   return bar;
 }
 
+var _wsStatusSig = '';
 function _wsUpdateStatusBar() {
   var bar = _wsEnsureStatusBar();
   if (!bar) return;
   var items = _wsAllPanes().filter(function (x) { return x.pane.sock || x.pane.exited; });
-  if (!items.length) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
+  if (!items.length) {
+    if (_wsStatusSig !== '') { _wsStatusSig = ''; bar.style.display = 'none'; bar.innerHTML = ''; }
+    return;
+  }
 
   var counts = { active: 0, idle: 0, limit: 0, exited: 0 };
+  var sigParts = [];
   var chips = items.map(function (x) {
     var st = _wsPaneStatus(x.pane);
     counts[st]++;
     var meta = WS_STATUS_META[st];
-    var cmd = x.pane.cmd ? x.pane.cmd.split(/\s+/)[0].replace(/^\w+=.*/, '') || x.pane.cmd : 'shell';
-    var label = escHtml(x.tab.name) + ' · ' + escHtml(cmd);
-    return '<button class="ws-chip ' + meta.cls + '" title="' + escHtml(x.pane.cwd || '') + '" ' +
+    // The chip shows the (renamable) tab name only — clean and stable. The
+    // command lands in the tooltip so it never makes the bar jitter.
+    var tip = (x.pane.cwd || '') + (x.pane.cmd ? '  —  ' + _wsMaskSecrets(x.pane.cmd) : '');
+    sigParts.push(x.tab.id + ':' + x.pane.id + ':' + x.tab.name + ':' + st);
+    return '<button class="ws-chip ' + meta.cls + '" title="' + escHtml(tip) + '" ' +
       'onclick="jumpToWorkspacePane(\'' + escHtml(x.tab.id) + '\',\'' + escHtml(x.pane.id) + '\')">' +
-      '<span class="ws-chip-dot"></span>' + label +
+      '<span class="ws-chip-dot"></span>' + escHtml(x.tab.name) +
       '<span class="ws-chip-st">' + meta.label + '</span></button>';
   }).join('');
+
+  // Skip the DOM rebuild when nothing changed — this is what stops the bar
+  // from visibly "twitching" on every 1s tick.
+  var sig = sigParts.join('|');
+  if (sig === _wsStatusSig) return;
+  _wsStatusSig = sig;
 
   var summary = '<span class="ws-sb-title">Terminals</span>' +
     '<span class="ws-sb-count">' + items.length + '</span>' +
@@ -282,7 +296,8 @@ function _wsConnectPane(pane) {
 
   var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   var url = proto + '//' + location.host + '/ws/terminal' +
-    '?token=' + encodeURIComponent(_wsToken) + '&cols=' + term.cols + '&rows=' + term.rows;
+    '?token=' + encodeURIComponent(_wsToken) + '&cols=' + term.cols + '&rows=' + term.rows +
+    (pane.wantCwd ? '&cwd=' + encodeURIComponent(pane.wantCwd) : '');
   var sock = new WebSocket(url);
   sock.binaryType = 'arraybuffer';
   pane.sock = sock;
@@ -298,7 +313,10 @@ function _wsConnectPane(pane) {
       if (msg.t === 'ready') {
         pane.cwd = msg.cwd;
         setStatus(_wsShortCwd(msg.cwd));
+        // cmd auto-runs (trailing \r); prefill is typed but NOT executed so the
+        // user can review/edit a resume command before pressing Enter.
         if (pane.cmd) setTimeout(function () { if (sock.readyState === 1) sock.send(enc.encode(pane.cmd + '\r')); }, 120);
+        else if (pane.prefill) setTimeout(function () { if (sock.readyState === 1) sock.send(enc.encode(pane.prefill)); if (pane.term) pane.term.focus(); }, 120);
       } else if (msg.t === 'exit') { pane.exited = true; setStatus('exited (' + msg.code + ')'); _wsUpdateStatusBar(); }
       else if (msg.t === 'error') { setStatus('error'); term.write('\r\n\x1b[31m' + (msg.message || 'error') + '\x1b[0m\r\n'); }
       return;
@@ -437,6 +455,74 @@ function addWorkspaceTab() {
   _wsRenderAll();
 }
 
+// ── Open a project / resume a session into the terminal ──────────────────────
+// A "spec" describes a tab to open: { name?, cwd?, panes?:[{cwd,cmd,prefill}] }.
+// If panes is omitted, a single pane is created from the top-level cwd/cmd/prefill.
+function _wsProjectBasename(p) {
+  if (!p) return '';
+  return String(p).replace(/[\/\\]+$/, '').split(/[\/\\]/).pop() || String(p);
+}
+function _wsTabName(spec) {
+  return spec.name || _wsProjectBasename(spec.cwd) || ('Tab ' + (_wsTabs.length + 1));
+}
+function _wsBuildPanes(spec) {
+  var list = (spec.panes && spec.panes.length) ? spec.panes
+    : [{ cwd: spec.cwd, cmd: spec.cmd, prefill: spec.prefill }];
+  list = list.slice(0, MAX_WS_PANES);
+  return list.map(function (pc) {
+    return { id: 'p' + (++_wsPaneSeq), cmd: pc.cmd || null, prefill: pc.prefill || null, wantCwd: pc.cwd || null };
+  });
+}
+
+// Open a spec in the Workspace. If the terminal is already mounted, append a new
+// tab; otherwise stash it and let renderWorkspace seed it as the first tab.
+function openInWorkspace(spec) {
+  if (_wsRoot) {
+    var tab = { id: 't' + (++_wsTabSeq), name: _wsTabName(spec), panes: _wsBuildPanes(spec) };
+    _wsTabs.push(tab);
+    _wsActiveTabId = tab.id;
+    _wsRenderAll();
+  } else {
+    _wsPendingOpen = spec;
+  }
+  if (typeof setView === 'function') setView('workspace');
+}
+
+// Best-effort per-agent resume command. Prefilled (not auto-run) so the user
+// can review/edit before pressing Enter — safe even where syntax varies.
+function _wsResumeCommand(tool, id) {
+  switch (tool) {
+    case 'claude':
+    case 'claude-ext': return 'claude --resume ' + id;
+    case 'codex': return 'codex resume ' + id;
+    case 'opencode': return 'opencode';
+    case 'kiro': return 'kiro-cli';
+    case 'qwen': return 'qwen';
+    case 'gemini': return 'gemini';
+    case 'pi': return 'pi';
+    default: return '';
+  }
+}
+
+// Card action: open a pane in the session's project folder with the agent's
+// resume command prefilled (awaiting Enter). Used by the session cards.
+function openSessionInWorkspace(sessionId) {
+  var list = (typeof allSessions !== 'undefined' && allSessions) ? allSessions : [];
+  var s = list.find(function (x) { return x.id === sessionId; });
+  if (!s) return;
+  var cwd = s.git_root || s.project || null;
+  var resume = _wsResumeCommand(s.tool, s.id);
+  openInWorkspace({ name: _wsProjectBasename(cwd) || s.tool, cwd: cwd, prefill: resume || null });
+}
+
+// Projects action: open up to `n` (1-4) panes all cd'd into a project folder.
+function spawnProjectTerminals(cwd, n) {
+  n = Math.max(1, Math.min(MAX_WS_PANES, parseInt(n, 10) || 1));
+  var panes = [];
+  for (var i = 0; i < n; i++) panes.push({ cwd: cwd });
+  openInWorkspace({ name: _wsProjectBasename(cwd), cwd: cwd, panes: panes });
+}
+
 function activateWorkspaceTab(id) {
   if (id === _wsActiveTabId) return;
   _wsActiveTabId = id;
@@ -448,6 +534,9 @@ function activateWorkspaceTab(id) {
 function closeWorkspaceTab(id) {
   var idx = _wsTabs.findIndex(function (t) { return t.id === id; });
   if (idx < 0) return;
+  var live = _wsTabs[idx].panes.filter(_wsPaneLive).length;
+  if (live > 0 && !confirm('Close this tab and its ' + live + ' running terminal' +
+      (live === 1 ? '' : 's') + '?')) return;
   _wsTabs[idx].panes.forEach(_wsTeardownPane);
   _wsTabs.splice(idx, 1);
   if (_wsTabs.length === 0) { addWorkspaceTab(); return; }
@@ -479,10 +568,22 @@ function renameWorkspaceTab(id) {
 }
 
 // ── pane ops (operate on the active tab) ────────────────────────────────────
+// A pane is "live" if its terminal is connected and hasn't exited — closing it
+// would kill whatever is running, so we confirm before destroying live panes.
+function _wsPaneLive(p) { return !!(p && p.sock && p.sock.readyState === 1 && !p.exited); }
+
 function setWorkspaceLayout(n) {
   var tab = _wsActiveTab();
   if (!tab) return;
   n = Math.max(1, Math.min(MAX_WS_PANES, n));
+  if (n < tab.panes.length) {
+    var live = tab.panes.slice(n).filter(_wsPaneLive).length;
+    if (live > 0 && !confirm('Switching layout will close ' + live + ' running terminal' +
+        (live === 1 ? '' : 's') + ' in this tab. Continue?')) {
+      _wsSyncLayoutButtons(); // keep the button selection in sync with reality
+      return;
+    }
+  }
   while (tab.panes.length < n) tab.panes.push({ id: 'p' + (++_wsPaneSeq), cmd: null });
   while (tab.panes.length > n) _wsTeardownPane(tab.panes.pop());
   _wsRenderPanes(); _wsSyncLayoutButtons();
@@ -812,7 +913,14 @@ async function renderWorkspace(container) {
 
   // Remember the root so future view switches detach/re-attach it (never rebuild).
   _wsRoot = container.querySelector('.workspace-wrap');
-  _wsTabs = [{ id: 't' + (++_wsTabSeq), name: 'Tab 1', panes: [{ id: 'p' + (++_wsPaneSeq), cmd: null }] }];
+  // If something asked to open a project/session before the terminal had
+  // mounted, seed that tab as the initial one (no throwaway "Tab 1").
+  if (_wsPendingOpen) {
+    var spec = _wsPendingOpen; _wsPendingOpen = null;
+    _wsTabs = [{ id: 't' + (++_wsTabSeq), name: _wsTabName(spec), panes: _wsBuildPanes(spec) }];
+  } else {
+    _wsTabs = [{ id: 't' + (++_wsTabSeq), name: 'Tab 1', panes: [{ id: 'p' + (++_wsPaneSeq), cmd: null }] }];
+  }
   _wsActiveTabId = _wsTabs[0].id;
   _wsRenderAll();
   _wsLoadCommands();
