@@ -10,9 +10,12 @@
 const { app, BrowserWindow, shell, dialog, Menu } = require('electron');
 const { spawn } = require('child_process');
 const http = require('http');
+const https = require('https');
 const net = require('net');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
+const { execFileSync } = require('child_process');
 
 let serverProc = null;
 let win = null;
@@ -41,12 +44,42 @@ function resolveServerEntry() {
 
 // The Node binary used to run the server. We deliberately avoid Electron's own
 // Node (ELECTRON_RUN_AS_NODE) because its ABI differs from the prebuilt
-// node-pty. Prefer an explicit override, then a bundled node, then PATH node.
+// node-pty.
+//
+// A Finder/`open`-launched macOS app inherits only a minimal PATH
+// (/usr/bin:/bin:/usr/sbin:/sbin), so bare "node" (installed via nvm, Homebrew,
+// conda, etc.) usually isn't found. We therefore resolve an absolute path:
+// explicit override → bundled node → common install locations → the user's
+// login shell → bare "node" as a last resort.
 function resolveNodeBin() {
   if (process.env.CODBASH_NODE) return process.env.CODBASH_NODE;
+
   const bundled = path.join(process.resourcesPath || '', process.platform === 'win32' ? 'node.exe' : 'node');
   try { if (app.isPackaged && fs.existsSync(bundled)) return bundled; } catch (_e) {}
-  return process.platform === 'win32' ? 'node.exe' : 'node';
+
+  if (process.platform === 'win32') return 'node.exe';
+
+  const home = os.homedir();
+  const candidates = [
+    '/opt/homebrew/bin/node',
+    '/usr/local/bin/node',
+    '/usr/bin/node',
+    path.join(home, '.local/bin/node'),
+    path.join(home, '.volta/bin/node'),
+  ];
+  for (const c of candidates) {
+    try { if (fs.existsSync(c)) return c; } catch (_e) {}
+  }
+
+  // Ask the user's login shell (picks up nvm/conda/asdf shims a plain env misses).
+  try {
+    const shell = process.env.SHELL || '/bin/zsh';
+    const out = execFileSync(shell, ['-lic', 'command -v node'], { encoding: 'utf8', timeout: 6000 });
+    const p = out.split('\n').map(function (s) { return s.trim(); }).filter(Boolean).pop();
+    if (p && fs.existsSync(p)) return p;
+  } catch (_e) {}
+
+  return 'node';
 }
 
 function startServer(port) {
