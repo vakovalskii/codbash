@@ -10,6 +10,7 @@ const CHANGELOG = [
       'Click any terminal card to jump straight into that pane in the Workspace',
       'Cards refresh live — status (active / idle / limit / exited) updates as your agents run',
       'The sidebar now starts with every section collapsed, so the Overview stays the focus; open only the sections you use and the app remembers your choice',
+      'Fix: the update check could hang on a stalled npm registry instead of failing gracefully — the request now times out cleanly so the "update available" notification reappears reliably',
     ],
   },
   {
