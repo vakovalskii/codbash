@@ -1,4 +1,4 @@
 node_modules/
 dist/
 build/icon.icns
-*.dmg
+build/icon.svg.png

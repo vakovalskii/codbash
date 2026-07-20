@@ -113,12 +113,29 @@ async function createWindow() {
   }
 }
 
+// Auto-update from GitHub Releases (only in a packaged, signed build — a dev
+// run has nothing to update against). Failures are non-fatal.
+function initAutoUpdater() {
+  if (!app.isPackaged || SMOKE) return;
+  try {
+    const { autoUpdater } = require('electron-updater');
+    autoUpdater.autoDownload = true;
+    autoUpdater.on('error', function (err) { process.stderr.write('[updater] ' + err + '\n'); });
+    autoUpdater.checkForUpdatesAndNotify();
+    // Re-check every 6 hours while the app stays open.
+    setInterval(function () { autoUpdater.checkForUpdatesAndNotify(); }, 6 * 60 * 60 * 1000);
+  } catch (e) {
+    process.stderr.write('[updater] disabled: ' + (e && e.message) + '\n');
+  }
+}
+
 app.whenReady().then(async function () {
   try {
     serverPort = await getFreePort();
     startServer(serverPort);
     await waitForServer(serverPort);
     await createWindow();
+    initAutoUpdater();
   } catch (e) {
     dialog.showErrorBox('codbash failed to start', String((e && e.message) || e));
     app.isQuitting = true;
