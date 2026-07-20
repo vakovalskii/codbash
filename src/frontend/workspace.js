@@ -274,6 +274,19 @@ function _wsShortCwd(cwd) {
   return cwd.replace(/^\/Users\/[^/]+/, '~').replace(/^\/home\/[^/]+/, '~');
 }
 
+// A short, human label for a pane's title bar: the running agent (if any),
+// otherwise the folder name (e.g. "CoWork"), or "~" for the home directory.
+function _wsPaneLabel(pane) {
+  if (pane && pane.cmd) {
+    var w = String(pane.cmd).trim().split(/\s+/)[0];
+    if (w) return w;
+  }
+  var c = (pane && pane.cwd) || '';
+  if (!c) return 'shell';
+  if (/^(\/Users\/[^/]+|\/home\/[^/]+|\/root)\/?$/.test(c)) return '~';
+  return _wsProjectBasename(c);
+}
+
 function _wsConnectPane(pane) {
   var host = document.getElementById('wsTermHost-' + pane.id);
   if (!host) return;
@@ -312,7 +325,7 @@ function _wsConnectPane(pane) {
       var msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
       if (msg.t === 'ready') {
         pane.cwd = msg.cwd;
-        setStatus(_wsShortCwd(msg.cwd));
+        setStatus(_wsPaneLabel(pane));
         _wsAutoNameTab(pane);
         // cmd auto-runs (trailing \r); prefill is typed but NOT executed so the
         // user can review/edit a resume command before pressing Enter.
@@ -365,7 +378,7 @@ function _wsTabMarkup(tab) {
       'onclick="activateWorkspaceTab(\'' + escHtml(tab.id) + '\')" ondblclick="renameWorkspaceTab(\'' + escHtml(tab.id) + '\')" ' +
       'title="Double-click to rename">' +
       '<span class="ws-tab-name">' + escHtml(tab.name) + '</span>' +
-      '<button class="ws-tab-rename" title="Rename terminal" aria-label="Rename terminal" onclick="event.stopPropagation();renameWorkspaceTab(\'' + escHtml(tab.id) + '\')">&#9998;</button>' +
+      '<button class="ws-tab-rename-btn" title="Rename terminal" aria-label="Rename terminal" onclick="event.stopPropagation();renameWorkspaceTab(\'' + escHtml(tab.id) + '\')">&#9998;</button>' +
       '<button class="ws-tab-close" title="Close tab" onclick="event.stopPropagation();closeWorkspaceTab(\'' + escHtml(tab.id) + '\')">&times;</button>' +
     '</div>';
 }
@@ -569,7 +582,7 @@ function renameWorkspaceTab(id) {
   var el = document.querySelector('.ws-tab[data-tab-id="' + id + '"] .ws-tab-name');
   if (!el) return;
   var input = document.createElement('input');
-  input.className = 'ws-tab-rename';
+  input.className = 'ws-tab-rename-input';
   input.value = tab.name;
   el.replaceWith(input);
   input.focus(); input.select();
@@ -638,6 +651,8 @@ function launchAgentInPane(id, cmd) {
   pane.lastOutputAt = _wsNow();
   pane.sock.send(new TextEncoder().encode(cmd + '\r'));
   if (pane.term) pane.term.focus();
+  var st = document.getElementById('wsStatus-' + pane.id);
+  if (st) st.textContent = _wsPaneLabel(pane);   // reflect the launched agent
   _wsUpdateStatusBar();
 }
 
@@ -780,19 +795,22 @@ function _wsRenderLayoutsMenu() {
 function saveWorkspaceLayout() {
   var active = _wsActiveTab();
   var suggested = (active && active.name) || ('Workspace ' + (_wsSavedLayouts.length + 1));
-  var name = window.prompt('Save this workspace as:', suggested);
-  if (name == null) return;
-  name = name.trim();
-  if (!name) return;
-  var payload = _wsCaptureLayout();
-  payload.name = name;
-  fetch('/api/terminal/layouts', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  }).then(function (r) { return r.json(); }).then(function (d) {
-    if (!d || !d.ok) { window.alert('Could not save layout: ' + ((d && d.error) || 'unknown error')); return; }
-    return _wsLoadLayouts();
-  }).catch(function () { window.alert('Could not save layout: request failed'); });
+  // codbashPrompt (not window.prompt — the latter is a no-op in the Electron app).
+  codbashPrompt('Save this workspace as:', suggested).then(function (name) {
+    if (name == null) return;
+    name = name.trim();
+    if (!name) return;
+    var payload = _wsCaptureLayout();
+    payload.name = name;
+    return fetch('/api/terminal/layouts', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (!d || !d.ok) { showToast('Could not save layout: ' + ((d && d.error) || 'error')); return; }
+      showToast('Saved layout "' + name + '"');
+      return _wsLoadLayouts();
+    }).catch(function () { showToast('Could not save layout: request failed'); });
+  });
 }
 
 // Menu handler: launch a saved layout, or open the manager.

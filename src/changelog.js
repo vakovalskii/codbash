@@ -2,6 +2,17 @@
 
 const CHANGELOG = [
   {
+    version: '7.14.1',
+    date: '2026-07-20',
+    title: 'Layout save fix + tidier terminal naming',
+    changes: [
+      'Fixed "Save layout" doing nothing in the desktop app — it used the browser prompt, which Electron ignores; now uses an in-app dialog',
+      'Terminal pane headers show the folder name (e.g. "codbash") or the running agent, instead of a bare "~/path"',
+      'Smaller, tidier rename (✎) button on tabs — fixed a style clash with the rename field',
+      'Cmd+D opens a new terminal tab',
+    ],
+  },
+  {
     version: '7.14.0',
     date: '2026-07-20',
     title: 'Named terminals, macOS desktop app',

@@ -630,6 +630,39 @@ function fallbackCopyText(text) {
   }
 }
 
+// A promise-based text prompt that works everywhere — notably in the Electron
+// desktop app, where window.prompt() is a no-op (returns undefined). Resolves
+// to the entered string, or null if cancelled.
+function codbashPrompt(message, defaultValue) {
+  return new Promise(function (resolve) {
+    var overlay = document.createElement('div');
+    overlay.className = 'cb-prompt-overlay';
+    overlay.innerHTML =
+      '<div class="cb-prompt" role="dialog" aria-modal="true">' +
+        '<div class="cb-prompt-msg"></div>' +
+        '<input type="text" class="cb-prompt-input" />' +
+        '<div class="cb-prompt-actions">' +
+          '<button type="button" class="toolbar-btn cb-prompt-cancel">Cancel</button>' +
+          '<button type="button" class="toolbar-btn cb-prompt-ok">OK</button>' +
+        '</div>' +
+      '</div>';
+    overlay.querySelector('.cb-prompt-msg').textContent = message || '';
+    var input = overlay.querySelector('.cb-prompt-input');
+    input.value = defaultValue == null ? '' : String(defaultValue);
+    document.body.appendChild(overlay);
+    setTimeout(function () { input.focus(); input.select(); }, 20);
+    var done = false;
+    function close(val) { if (done) return; done = true; overlay.remove(); resolve(val); }
+    overlay.querySelector('.cb-prompt-ok').onclick = function () { close(input.value); };
+    overlay.querySelector('.cb-prompt-cancel').onclick = function () { close(null); };
+    overlay.addEventListener('mousedown', function (e) { if (e.target === overlay) close(null); });
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); close(input.value); }
+      else if (e.key === 'Escape') { e.preventDefault(); close(null); }
+    });
+  });
+}
+
 function copyText(text, successMsg) {
   var done = function() {
     showToast(successMsg || ('Copied: ' + text));
@@ -637,7 +670,7 @@ function copyText(text, successMsg) {
   };
   var fail = function() {
     if (fallbackCopyText(text)) return done();
-    prompt('Copy this command:', text);
+    codbashPrompt('Copy this command:', text);
     showToast(window.isSecureContext ? 'Clipboard copy failed' : 'Clipboard unavailable on non-secure origin');
     return false;
   };
@@ -2901,6 +2934,15 @@ function deleteFocused() {
 }
 
 document.addEventListener('keydown', function(e) {
+  // Cmd+D (macOS) / Ctrl+Shift+D → new terminal tab. Cmd is safe in the app
+  // (the shell uses Ctrl+D for EOF, which we never intercept).
+  if ((e.key === 'd' || e.key === 'D') && (e.metaKey || (e.ctrlKey && e.shiftKey)) && !e.altKey) {
+    e.preventDefault();
+    if (typeof setView === 'function' && currentView !== 'workspace') setView('workspace');
+    var openTab = function () { if (typeof addWorkspaceTab === 'function') addWorkspaceTab(); };
+    if (currentView === 'workspace' && window._wsRoot) openTab(); else setTimeout(openTab, 120);
+    return;
+  }
   if (e.key === 'Escape') {
     if (pendingDelete) {
       closeConfirm();
