@@ -65,6 +65,7 @@
         }
       ],
       "icon": "build/icon.png",
+      "identity": "Valeriy Kovalsky (A933C2TJXU)",
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
