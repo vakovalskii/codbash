@@ -2,6 +2,15 @@
 
 const CHANGELOG = [
   {
+    version: '7.10.1',
+    date: '2026-07-20',
+    title: 'Workspace — focused pane targeting',
+    changes: [
+      'Click a pane to focus it — it gets a blue border, and launched agents / saved commands now go to THAT pane instead of always the first one',
+      'The active pane is highlighted so it is always clear where a command will land',
+    ],
+  },
+  {
     version: '7.10.0',
     date: '2026-07-20',
     title: 'Workspace — save & relaunch layouts',

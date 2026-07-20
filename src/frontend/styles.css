@@ -2896,6 +2896,9 @@ body {
     overflow: hidden;
     background: #08090c;
 }
+/* The pane the user is "in": launched commands / resume land here. */
+.ws-pane.focused { border-color: var(--accent-blue); box-shadow: 0 0 0 1px var(--accent-blue); }
+.ws-pane.focused .ws-pane-bar { background: color-mix(in srgb, var(--accent-blue) 14%, var(--bg-secondary)); }
 .ws-pane-bar {
     display: flex;
     align-items: center;

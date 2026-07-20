@@ -39,6 +39,16 @@ var _wsVendorLoaded = false;
 var _wsSavedCommands = [];   // [{ id, name, command }]
 var _wsSavedLayouts = [];    // [{ id, name, tabs:[{name,panes:[{cmd}]}] }]
 var _wsRoot = null;          // the live .workspace-wrap element (kept across view switches)
+var _wsFocusedPaneId = null; // the pane the user is currently in (target for commands)
+
+// Mark a pane as focused: remember it and highlight its box so it's obvious
+// where a launched command will land.
+function _wsSetFocusedPane(id) {
+  _wsFocusedPaneId = id;
+  Array.prototype.forEach.call(document.querySelectorAll('.ws-pane'), function (el) {
+    el.classList.toggle('focused', el.getAttribute('data-pane-id') === id);
+  });
+}
 
 // Mask credentials in a URL userinfo (proxy passwords) for display only.
 function _wsMaskSecrets(cmd) {
@@ -169,6 +179,11 @@ function _wsConnectPane(pane) {
   try { fit.fit(); } catch (e) {}
   pane.term = term; pane.fit = fit;
 
+  // Track which pane the user is "in": focusing/clicking the terminal marks it
+  // as the focused pane, so saved commands / resume land where you're looking.
+  host.addEventListener('focusin', function () { _wsSetFocusedPane(pane.id); });
+  host.addEventListener('mousedown', function () { _wsSetFocusedPane(pane.id); });
+
   var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   var url = proto + '//' + location.host + '/ws/terminal' +
     '?token=' + encodeURIComponent(_wsToken) + '&cols=' + term.cols + '&rows=' + term.rows;
@@ -289,6 +304,13 @@ function _wsRenderPanes() {
 
   // Refit the active tab shortly after it becomes visible (0-size while hidden).
   setTimeout(function () { _wsRefitTab(_wsActiveTab()); }, 60);
+
+  // Ensure a focused pane is always highlighted within the active tab.
+  var at = _wsActiveTab();
+  if (at && at.panes.length) {
+    var focusedInTab = _wsFocusedPaneId && at.panes.some(function (p) { return p.id === _wsFocusedPaneId; });
+    _wsSetFocusedPane(focusedInTab ? _wsFocusedPaneId : at.panes[0].id);
+  }
 }
 
 function _wsSyncLayoutButtons() {
@@ -394,9 +416,15 @@ function launchAgentInPane(id, cmd) {
 }
 
 // ── Saved-commands manager (modal) ──────────────────────────────────────────
+// The pane a launched command should target: the focused pane if it belongs to
+// the active tab, otherwise that tab's first pane.
 function _wsActivePaneId() {
   var tab = _wsActiveTab();
-  return tab && tab.panes[0] ? tab.panes[0].id : null;
+  if (!tab || !tab.panes.length) return null;
+  if (_wsFocusedPaneId && tab.panes.some(function (p) { return p.id === _wsFocusedPaneId; })) {
+    return _wsFocusedPaneId;
+  }
+  return tab.panes[0].id;
 }
 
 function _wsCommandsListHtml() {
@@ -408,7 +436,7 @@ function _wsCommandsListHtml() {
         '<code class="ws-cmd-cmd">' + escHtml(_wsMaskSecrets(c.command)) + '</code>' +
       '</div>' +
       '<div class="ws-cmd-actions">' +
-        '<button class="toolbar-btn" title="Run in the active pane" onclick="runSavedCommand(\'' + escHtml(c.id) + '\')">Run</button>' +
+        '<button class="toolbar-btn" title="Run in the focused pane (highlighted)" onclick="runSavedCommand(\'' + escHtml(c.id) + '\')">Run</button>' +
         '<button class="toolbar-btn ws-cmd-del" title="Delete" onclick="deleteWorkspaceCommand(\'' + escHtml(c.id) + '\')">&times;</button>' +
       '</div>' +
     '</div>';
@@ -431,7 +459,7 @@ function openWorkspaceCommands() {
       '<div class="ws-cmd-head"><span>Saved commands</span>' +
         '<button class="ws-cmd-close" onclick="closeWorkspaceCommands()">&times;</button></div>' +
       '<div class="ws-cmd-note">Stored on your machine at <code>~/.codedash/workspace-commands.json</code> (0600). ' +
-        'Fine for proxy launches — the value is typed straight into the pane shell.</div>' +
+        'Fine for proxy launches — the value is typed into the <strong>focused pane</strong> (the one with the blue border).</div>' +
       '<div class="ws-cmd-list" id="wsCmdList">' + _wsCommandsListHtml() + '</div>' +
       '<div class="ws-cmd-form">' +
         '<input id="wsCmdName" class="ws-cmd-input" placeholder="Name (e.g. Claude via proxy)" maxlength="120">' +
