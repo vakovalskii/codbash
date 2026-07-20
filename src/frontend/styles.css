@@ -2872,6 +2872,31 @@ body.sidebar-hidden .toolbar { padding-left: 52px; }
     border: 1px solid var(--accent-blue); border-radius: 4px; padding: 1px 4px;
 }
 
+/* Sidebar running-terminals tree (bottom of the sidebar). */
+.ws-running-tree {
+    margin: 8px 8px 4px; padding-top: 8px; border-top: 1px solid var(--border);
+}
+.ws-run-title {
+    font-size: 10px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase;
+    color: var(--text-muted); padding: 0 8px 4px;
+}
+.ws-run-proj {
+    display: flex; align-items: center; gap: 6px; padding: 4px 8px;
+    font-size: 12px; color: var(--text-primary); cursor: pointer; border-radius: 6px;
+}
+.ws-run-proj:hover { background: rgba(255,255,255,0.06); }
+.ws-run-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-green); flex-shrink: 0; }
+.ws-run-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: Menlo, Monaco, monospace; }
+.ws-run-count {
+    font-size: 10px; color: var(--text-muted); background: var(--bg-hover);
+    border-radius: 8px; padding: 0 6px; min-width: 16px; text-align: center;
+}
+.ws-run-term {
+    padding: 2px 8px 2px 22px; font-size: 11px; color: var(--text-secondary);
+    cursor: pointer; border-radius: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ws-run-term:hover { background: rgba(255,255,255,0.05); color: var(--text-primary); }
+
 /* In-app prompt (codbashPrompt) — replaces window.prompt (no-op in Electron). */
 .cb-prompt-overlay {
     position: fixed; inset: 0; z-index: 1000;

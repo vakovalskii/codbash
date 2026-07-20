@@ -140,9 +140,57 @@ function _wsStartStatusLoop() {
   if (_wsStatusTimer) return;
   _wsStatusTimer = setInterval(function () {
     _wsUpdateStatusBar();
+    _wsRenderRunningTree();
     // Keep the Overview landing's cards live too.
     if (typeof _ovRefreshIfCurrent === 'function') _ovRefreshIfCurrent();
   }, 1000);
+}
+
+// Group live terminals by their project folder (skips the home dir — those
+// aren't "projects"). Used by the sidebar running-terminals tree.
+function _wsRunningByProject() {
+  var groups = {}, order = [];
+  _wsAllPanes().forEach(function (x) {
+    var p = x.pane;
+    if (!p.sock || p.exited || p.sock.readyState !== 1) return;
+    var cwd = p.cwd || '';
+    if (!cwd || /^(\/Users\/[^/]+|\/home\/[^/]+|\/root)\/?$/.test(cwd)) return;
+    var key = _wsProjectBasename(cwd);
+    if (!groups[key]) { groups[key] = { name: key, items: [] }; order.push(key); }
+    groups[key].items.push(x);
+  });
+  return order.map(function (k) { return groups[k]; });
+}
+
+// Render a compact tree at the bottom of the sidebar: each project folder that
+// has running terminals, with its terminals underneath — click to jump.
+var _wsRunTreeSig = '';
+function _wsRenderRunningTree() {
+  var el = document.getElementById('wsRunningTree');
+  if (!el) return;
+  var groups = _wsRunningByProject();
+  var sig = groups.map(function (g) {
+    return g.name + ':' + g.items.map(function (x) { return x.pane.id + '=' + _wsPaneLabel(x.pane); }).join(',');
+  }).join('|');
+  if (sig === _wsRunTreeSig) return;   // no change → no rebuild
+  _wsRunTreeSig = sig;
+
+  if (!groups.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  var html = '<div class="ws-run-title">Running in projects</div>';
+  groups.forEach(function (g) {
+    var first = g.items[0];
+    html += '<div class="ws-run-proj" title="' + escHtml(g.name) + '" ' +
+      'onclick="jumpToWorkspacePane(\'' + escHtml(first.tab.id) + '\',\'' + escHtml(first.pane.id) + '\')">' +
+      '<span class="ws-run-dot"></span><span class="ws-run-name">' + escHtml(g.name) + '</span>' +
+      '<span class="ws-run-count">' + g.items.length + '</span></div>';
+    g.items.forEach(function (x) {
+      html += '<div class="ws-run-term" ' +
+        'onclick="jumpToWorkspacePane(\'' + escHtml(x.tab.id) + '\',\'' + escHtml(x.pane.id) + '\')">' +
+        escHtml(_wsPaneLabel(x.pane)) + '</div>';
+    });
+  });
+  el.innerHTML = html;
+  el.style.display = '';
 }
 
 // Jump from a status chip to that pane: show Workspace, activate its tab, focus it.
@@ -278,8 +326,13 @@ function _wsShortCwd(cwd) {
 // otherwise the folder name (e.g. "CoWork"), or "~" for the home directory.
 function _wsPaneLabel(pane) {
   if (pane && pane.cmd) {
-    var w = String(pane.cmd).trim().split(/\s+/)[0];
-    if (w) return w;
+    // Strip leading `VAR=value` env assignments (value may be quoted and hold
+    // secrets, e.g. HTTPS_PROXY='http://user:pass@host') so the label is the
+    // actual command — "claude", not the proxy string.
+    var cmd = String(pane.cmd).trim()
+      .replace(/^([A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|"[^"]*"|\S+)\s+)+/, '');
+    var w = cmd.split(/\s+/)[0];
+    if (w) return (typeof _wsMaskSecrets === 'function') ? _wsMaskSecrets(w) : w;
   }
   var c = (pane && pane.cwd) || '';
   if (!c) return 'shell';
