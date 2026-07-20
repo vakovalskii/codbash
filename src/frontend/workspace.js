@@ -37,6 +37,8 @@ var _wsPaneSeq = 0;
 var _wsToken = null;
 var _wsVendorLoaded = false;
 var _wsSavedCommands = [];   // [{ id, name, command }]
+var _wsSavedLayouts = [];    // [{ id, name, tabs:[{name,panes:[{cmd}]}] }]
+var _wsRoot = null;          // the live .workspace-wrap element (kept across view switches)
 
 // Mask credentials in a URL userinfo (proxy passwords) for display only.
 function _wsMaskSecrets(cmd) {
@@ -115,10 +117,35 @@ function _wsTeardownPane(pane) {
   if (pane.term) { try { pane.term.dispose(); } catch (e) {} }
   pane.sock = null; pane.term = null; pane.fit = null; pane.ro = null;
 }
+// Hidden off-screen holder that keeps the live workspace DOM (and therefore its
+// xterm instances + WebSockets + ptys) alive while another dashboard view is
+// shown. Leaving the Workspace view DETACHES here; returning re-attaches.
+function _wsHolder() {
+  var h = document.getElementById('wsHolder');
+  if (!h) {
+    h = document.createElement('div');
+    h.id = 'wsHolder';
+    h.style.display = 'none';
+    document.body.appendChild(h);
+  }
+  return h;
+}
+
+// Called from render() when navigating AWAY from the Workspace view. Moves the
+// live workspace into the hidden holder instead of destroying it, so panes and
+// their ptys keep running and everything is exactly as left on return.
+function detachWorkspaceIfMounted() {
+  if (_wsRoot && _wsRoot.parentNode && _wsRoot.parentNode.id === 'content') {
+    _wsHolder().appendChild(_wsRoot);
+  }
+}
+
+// Full teardown — kills every pty and drops all state. Not used on normal view
+// switches (those detach); reserved for an explicit reset.
 function teardownWorkspaceIfActive() {
-  if (!_wsTabs.length) return;
-  _wsTabs.forEach(function (t) { t.panes.forEach(_wsTeardownPane); });
+  if (_wsTabs.length) _wsTabs.forEach(function (t) { t.panes.forEach(_wsTeardownPane); });
   _wsTabs = []; _wsActiveTabId = null;
+  if (_wsRoot) { try { _wsRoot.remove(); } catch (e) {} _wsRoot = null; }
 }
 
 // ── pane connection ─────────────────────────────────────────────────────────
@@ -360,6 +387,8 @@ function launchAgentInPane(id, cmd) {
   if (!cmd) return;
   var pane = _wsFindPane(id);
   if (!pane || !pane.sock || pane.sock.readyState !== 1) return;
+  // Remember what was launched so "Save layout" captures the running setup.
+  pane.cmd = cmd;
   pane.sock.send(new TextEncoder().encode(cmd + '\r'));
   if (pane.term) pane.term.focus();
 }
@@ -450,12 +479,162 @@ function runSavedCommand(id) {
   if (cmd && paneId) { launchAgentInPane(paneId, cmd.command); closeWorkspaceCommands(); }
 }
 
+// ── Saved layouts (whole-workspace snapshots) ───────────────────────────────
+// A layout = every tab, its panes, and each pane's start command. Saved
+// server-side (0600) because a command may embed proxy secrets. Relaunching
+// rebuilds the tabs/panes and auto-runs each command on pane connect.
+
+function _wsLoadLayouts() {
+  return fetch('/api/terminal/layouts')
+    .then(function (r) { return r.json(); })
+    .then(function (d) { _wsSavedLayouts = (d && d.layouts) || []; _wsRenderLayoutsMenu(); })
+    .catch(function () { _wsSavedLayouts = []; });
+}
+
+// Snapshot the current workspace into the { tabs:[{name,panes:[{cmd}]}] } shape
+// the server expects. A pane with no launched command is stored as cmd:''.
+function _wsCaptureLayout() {
+  return {
+    tabs: _wsTabs.map(function (t) {
+      return {
+        name: t.name,
+        panes: t.panes.map(function (p) { return { cmd: p.cmd || '' }; }),
+      };
+    }),
+  };
+}
+
+// Rebuild "Launch a saved layout ▾" menu in the toolbar.
+function _wsRenderLayoutsMenu() {
+  var sel = document.getElementById('wsLayoutsMenu');
+  if (!sel) return;
+  var html = '<option value="">Layouts ▾</option>';
+  if (_wsSavedLayouts.length) {
+    _wsSavedLayouts.forEach(function (l) {
+      var n = l.tabs ? l.tabs.length : 0;
+      html += '<option value="' + escHtml(l.id) + '">' + escHtml(l.name) + '  (' + n + (n === 1 ? ' tab' : ' tabs') + ')</option>';
+    });
+    html += '<option disabled>──────────</option>';
+    html += '<option value="__manage__">Manage…</option>';
+  } else {
+    html += '<option value="" disabled>No saved layouts</option>';
+  }
+  sel.innerHTML = html;
+}
+
+// Save button: snapshot → ask for a name (default = active tab name) → POST.
+function saveWorkspaceLayout() {
+  var active = _wsActiveTab();
+  var suggested = (active && active.name) || ('Workspace ' + (_wsSavedLayouts.length + 1));
+  var name = window.prompt('Save this workspace as:', suggested);
+  if (name == null) return;
+  name = name.trim();
+  if (!name) return;
+  var payload = _wsCaptureLayout();
+  payload.name = name;
+  fetch('/api/terminal/layouts', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }).then(function (r) { return r.json(); }).then(function (d) {
+    if (!d || !d.ok) { window.alert('Could not save layout: ' + ((d && d.error) || 'unknown error')); return; }
+    return _wsLoadLayouts();
+  }).catch(function () { window.alert('Could not save layout: request failed'); });
+}
+
+// Menu handler: launch a saved layout, or open the manager.
+function onWorkspaceLayoutsMenu(value) {
+  if (!value) return;
+  if (value === '__manage__') { openWorkspaceLayouts(); return; }
+  applyWorkspaceLayout(value);
+}
+
+// Tear down the current workspace and rebuild it from a saved layout, running
+// each pane's start command on connect (via pane.cmd + _wsConnectPane).
+function applyWorkspaceLayout(id) {
+  var layout = _wsSavedLayouts.find(function (l) { return l.id === id; });
+  if (!layout || !layout.tabs || !layout.tabs.length) return;
+
+  _wsTabs.forEach(function (t) { t.panes.forEach(_wsTeardownPane); });
+  _wsTabs = layout.tabs.map(function (t, ti) {
+    var panes = (t.panes && t.panes.length ? t.panes : [{ cmd: '' }])
+      .slice(0, MAX_WS_PANES)
+      .map(function (p) { return { id: 'p' + (++_wsPaneSeq), cmd: (p && p.cmd) || null }; });
+    return { id: 't' + (++_wsTabSeq), name: t.name || ('Tab ' + (ti + 1)), panes: panes };
+  });
+  _wsActiveTabId = _wsTabs[0].id;
+  _wsRenderAll();
+}
+
+// ── Layout manager (modal): rename-free list with delete ────────────────────
+function _wsLayoutsListHtml() {
+  if (!_wsSavedLayouts.length) return '<div class="ws-cmd-empty">No saved layouts yet.</div>';
+  return _wsSavedLayouts.map(function (l) {
+    var summary = (l.tabs || []).map(function (t) {
+      return escHtml(t.name) + ' (' + (t.panes ? t.panes.length : 0) + ')';
+    }).join(' · ');
+    return '<div class="ws-cmd-row">' +
+      '<div class="ws-cmd-info">' +
+        '<div class="ws-cmd-name">' + escHtml(l.name) + '</div>' +
+        '<code class="ws-cmd-cmd">' + summary + '</code>' +
+      '</div>' +
+      '<div class="ws-cmd-actions">' +
+        '<button class="toolbar-btn" title="Launch this workspace" onclick="applyWorkspaceLayout(\'' + escHtml(l.id) + '\');closeWorkspaceLayouts();">Launch</button>' +
+        '<button class="toolbar-btn ws-cmd-del" title="Delete" onclick="deleteWorkspaceLayout(\'' + escHtml(l.id) + '\')">&times;</button>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+function _wsRenderLayoutsModalBody() {
+  var el = document.getElementById('wsLayoutList');
+  if (el) el.innerHTML = _wsLayoutsListHtml();
+}
+
+function openWorkspaceLayouts() {
+  var existing = document.getElementById('wsLayoutModal');
+  if (existing) existing.remove();
+  var modal = document.createElement('div');
+  modal.id = 'wsLayoutModal';
+  modal.className = 'ws-cmd-modal';
+  modal.innerHTML =
+    '<div class="ws-cmd-dialog">' +
+      '<div class="ws-cmd-head"><span>Saved workspaces</span>' +
+        '<button class="ws-cmd-close" onclick="closeWorkspaceLayouts()">&times;</button></div>' +
+      '<div class="ws-cmd-note">A layout stores every tab, its panes, and each pane\'s start command. ' +
+        'Stored on your machine at <code>~/.codedash/workspace-layouts.json</code> (0600). ' +
+        'Use <strong>Save layout</strong> in the toolbar to capture the current setup.</div>' +
+      '<div class="ws-cmd-list" id="wsLayoutList">' + _wsLayoutsListHtml() + '</div>' +
+    '</div>';
+  modal.addEventListener('click', function (e) { if (e.target === modal) closeWorkspaceLayouts(); });
+  document.body.appendChild(modal);
+}
+
+function closeWorkspaceLayouts() {
+  var m = document.getElementById('wsLayoutModal');
+  if (m) m.remove();
+}
+
+function deleteWorkspaceLayout(id) {
+  fetch('/api/terminal/layouts/' + encodeURIComponent(id), { method: 'DELETE' })
+    .then(function (r) { return r.json(); })
+    .then(function () { return _wsLoadLayouts().then(_wsRenderLayoutsModalBody); });
+}
+
 // ── mount ───────────────────────────────────────────────────────────────────
 async function renderWorkspace(container) {
-  // Idempotent: background refreshes call render() while on this view.
-  if (_wsTabs.length && document.getElementById('wsTabPanes')) return;
+  // If a live workspace already exists, re-attach it instead of rebuilding —
+  // this preserves every pane's terminal, WebSocket and pty across view
+  // switches (and makes background dashboard refreshes a no-op). The root is
+  // moved back from the hidden holder (or left in place if already here).
+  if (_wsRoot) {
+    if (_wsRoot.parentNode !== container) {
+      container.innerHTML = '';
+      container.appendChild(_wsRoot);
+    }
+    setTimeout(function () { _wsRefitTab(_wsActiveTab()); }, 60);
+    return;
+  }
 
-  teardownWorkspaceIfActive();
   container.innerHTML = '<div class="loading">Loading terminal…</div>';
 
   var status;
@@ -486,7 +665,9 @@ async function renderWorkspace(container) {
         '<button class="toolbar-btn" id="wsAddPane" title="Add a pane to this tab" onclick="addWorkspacePane(null)">+ Pane</button>' +
         '<button class="toolbar-btn" title="Manage saved start commands" onclick="openWorkspaceCommands()">Commands</button>' +
         '<span style="flex:1"></span>' +
-        '<span class="workspace-hint">Double-click a tab to rename</span>' +
+        '<button class="toolbar-btn" title="Save the current tabs, panes and commands as a reusable layout" onclick="saveWorkspaceLayout()">Save layout</button>' +
+        '<select class="ws-pane-launch" id="wsLayoutsMenu" title="Launch a saved workspace layout" ' +
+          'onchange="onWorkspaceLayoutsMenu(this.value); this.selectedIndex=0;"><option value="">Layouts ▾</option></select>' +
       '</div>' +
       '<div class="workspace-tabpanes" id="wsTabPanes"></div>' +
     '</div>';
@@ -495,8 +676,11 @@ async function renderWorkspace(container) {
   catch (e) { container.innerHTML = '<div class="empty-state">Failed to load terminal assets.</div>'; return; }
   if (!document.getElementById('wsTabPanes')) return; // switched away while loading
 
+  // Remember the root so future view switches detach/re-attach it (never rebuild).
+  _wsRoot = container.querySelector('.workspace-wrap');
   _wsTabs = [{ id: 't' + (++_wsTabSeq), name: 'Tab 1', panes: [{ id: 'p' + (++_wsPaneSeq), cmd: null }] }];
   _wsActiveTabId = _wsTabs[0].id;
   _wsRenderAll();
   _wsLoadCommands();
+  _wsLoadLayouts();
 }
