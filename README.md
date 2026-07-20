@@ -1,8 +1,12 @@
 # Codbash
 
-Control room for AI coding sessions. Search, replay, and resume Claude Code, Codex, Qwen, Pi, Oh My Pi, Cursor, OpenCode, Kiro, Kilo, and Copilot Chat sessions without digging through scattered logs.
+Control room for AI coding sessions. Search, replay, and resume Claude Code, Codex, Qwen, Pi, Oh My Pi, Cursor, OpenCode, Kiro, Kilo, and Copilot Chat sessions — and run them all side by side in a built-in terminal — without digging through scattered logs.
 
 [Russian / Русский](docs/README_RU.md) | [Chinese / 中文](docs/README_ZH.md)
+
+![codbash — four AI coding agents running side by side in the built-in Workspace terminal](docs/assets/codbash-desktop.png)
+
+*The macOS desktop app running Claude Code, Codex, OpenCode and Kiro together in one Workspace.*
 
 https://github.com/user-attachments/assets/15c45659-365b-49f8-86a3-9005fa155ca6
 
@@ -14,6 +18,8 @@ https://github.com/user-attachments/assets/15c45659-365b-49f8-86a3-9005fa155ca6
 npm i -g codbash-app
 codbash run
 ```
+
+Or grab the **macOS desktop app** from [Releases](https://github.com/vakovalskii/codbash/releases/latest) (Apple Silicon).
 
 ## Supported Agents
 
@@ -31,6 +37,25 @@ codbash run
 Also detects Claude Code running inside Cursor (via `claude-vscode` entrypoint).
 
 ## Features
+
+**Overview** — the landing dashboard
+- At-a-glance stats: total sessions, active agents, running terminals, spend (today + total)
+- Recent sessions as clickable cards
+- Live terminals grouped by project folder
+
+**Workspace** — a real terminal in your browser
+- Tabs + split panes (1–4 per tab), each an independent shell/agent
+- Launch any agent or a saved command into a pane; save whole layouts
+- "Open here" on any session card → opens a terminal in that project's folder with the agent's resume command prefilled
+- Open up to 4 terminals cd'd into a project from the Projects view
+- Terminals auto-name after their folder; double-click or the ✎ button to rename
+- Confirms before closing live terminals; per-terminal status in the top bar
+- Powered by xterm.js + a prebuilt `@lydell/node-pty` (optional); the core dashboard stays dependency-free
+
+**Desktop App (macOS)**
+- Native window around the same server — download the DMG from [Releases](https://github.com/vakovalskii/codbash/releases/latest)
+- Checks for updates on launch (via GitHub Releases)
+- Everything the CLI does, in an app (see [`desktop/`](desktop/))
 
 **Browser Dashboard**
 - Grid and List view with project grouping

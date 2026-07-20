@@ -1,7 +1,7 @@
 {
   "name": "codbash-desktop",
   "productName": "codbash",
-  "version": "7.13.0",
+  "version": "7.14.0",
   "private": true,
   "description": "Desktop shell (Electron) for codbash — wraps the codbash server in a native window.",
   "main": "main.js",
