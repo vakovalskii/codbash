@@ -1399,7 +1399,7 @@ function getBrowserHost(host) {
 // ── npm version check ───────────────────
 function fetchLatestVersion(packageName) {
   return new Promise((resolve, reject) => {
-    https.get(`https://registry.npmjs.org/${packageName}/latest`, { timeout: 5000 }, (res) => {
+    const req = https.get(`https://registry.npmjs.org/${packageName}/latest`, { timeout: 5000 }, (res) => {
       let data = '';
       res.on('data', chunk => data += chunk);
       res.on('end', () => {
@@ -1407,7 +1407,12 @@ function fetchLatestVersion(packageName) {
           resolve(JSON.parse(data).version);
         } catch { reject(); }
       });
-    }).on('error', reject);
+    });
+    req.on('error', reject);
+    // The `timeout` option only emits an event — without this the socket is
+    // never torn down, so a stalled registry would hang /api/version forever
+    // instead of falling back to "no update available".
+    req.on('timeout', () => { req.destroy(new Error('registry timeout')); });
   });
 }
 

@@ -2,6 +2,29 @@
 
 const CHANGELOG = [
   {
+    version: '7.12.0',
+    date: '2026-07-20',
+    title: 'Overview landing + tidy sidebar',
+    changes: [
+      'New "Overview" view is now the landing screen — your workspace at a glance: every running terminal as a live card (tab, status, command, folder), plus quick actions to open a terminal, relaunch a saved layout or fire a saved command',
+      'Click any terminal card to jump straight into that pane in the Workspace',
+      'Cards refresh live — status (active / idle / limit / exited) updates as your agents run',
+      'The sidebar now starts with every section collapsed, so the Overview stays the focus; open only the sections you use and the app remembers your choice',
+      'Fix: the update check could hang on a stalled npm registry instead of failing gracefully — the request now times out cleanly so the "update available" notification reappears reliably',
+    ],
+  },
+  {
+    version: '7.11.0',
+    date: '2026-07-20',
+    title: 'Workspace — live status bar + focused pane',
+    changes: [
+      'A live terminal status bar now sits at the very top whenever terminals are running — visible from any view, showing each pane\'s state (active / idle / limit / exited), its tab and command',
+      'Account-limit detection: when an agent hits a rate/usage limit, its pane is flagged "limit" in the bar (heuristic on output)',
+      'Click any status chip to jump straight to that pane',
+      'Click a pane to focus it (blue border) — launched agents / saved commands now go to THAT pane instead of always the first one',
+    ],
+  },
+  {
     version: '7.10.0',
     date: '2026-07-20',
     title: 'Workspace — save & relaunch layouts',

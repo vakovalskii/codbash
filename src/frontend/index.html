@@ -29,13 +29,19 @@
     // Defer to DOM-ready so .sidebar-group nodes exist. Script is placed
     // before <div class="sidebar">, so we use a microtask via setTimeout(0).
     document.addEventListener('DOMContentLoaded', function () {
+      // Sections start collapsed in the markup. Apply stored collapsed=true as
+      // well, and — importantly — EXPAND sections the user explicitly opened
+      // (stored collapsed=false) so their choice survives without a flash.
       Object.keys(collapsed).forEach(function (id) {
-        if (collapsed[id] !== true) return;
         var group = document.querySelector('.sidebar-group[data-section="' + id.replace(/"/g, '') + '"]');
-        if (group) {
+        if (!group) return;
+        var hdr = group.querySelector(':scope > .sidebar-section-header');
+        if (collapsed[id] === true) {
           group.classList.add('collapsed');
-          var hdr = group.querySelector(':scope > .sidebar-section-header');
           if (hdr) hdr.setAttribute('aria-expanded', 'false');
+        } else if (collapsed[id] === false) {
+          group.classList.remove('collapsed');
+          if (hdr) hdr.setAttribute('aria-expanded', 'true');
         }
       });
     });
@@ -50,14 +56,20 @@
         <span class="version-badge" id="versionBadge"></span>
     </div>
 
+    <!-- Overview — always-visible landing (sits above the collapsible groups) -->
+    <div class="sidebar-item active" data-view="overview" data-key="overview">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>
+        Overview
+    </div>
+
     <!-- Workspace section -->
-    <div class="sidebar-group" data-section="workspace">
-        <button type="button" class="sidebar-section-header" data-role="section-header" data-section-target="workspace" aria-expanded="true" aria-controls="sidebarSectionWorkspace">
+    <div class="sidebar-group collapsed" data-section="workspace">
+        <button type="button" class="sidebar-section-header" data-role="section-header" data-section-target="workspace" aria-expanded="false" aria-controls="sidebarSectionWorkspace">
             <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
             <span>Workspace</span>
         </button>
         <div class="sidebar-section-body" id="sidebarSectionWorkspace">
-            <div class="sidebar-item active" data-view="sessions">
+            <div class="sidebar-item" data-view="sessions">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
                 All Sessions
             </div>
@@ -101,8 +113,8 @@
     </div>
 
     <!-- Agents section -->
-    <div class="sidebar-group" data-section="agents">
-        <button type="button" class="sidebar-section-header" data-role="section-header" data-section-target="agents" aria-expanded="true" aria-controls="sidebarSectionAgents">
+    <div class="sidebar-group collapsed" data-section="agents">
+        <button type="button" class="sidebar-section-header" data-role="section-header" data-section-target="agents" aria-expanded="false" aria-controls="sidebarSectionAgents">
             <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
             <span>Agents</span>
         </button>
@@ -159,8 +171,8 @@
     </div>
 
     <!-- Tools section -->
-    <div class="sidebar-group" data-section="tools">
-        <button type="button" class="sidebar-section-header" data-role="section-header" data-section-target="tools" aria-expanded="true" aria-controls="sidebarSectionTools">
+    <div class="sidebar-group collapsed" data-section="tools">
+        <button type="button" class="sidebar-section-header" data-role="section-header" data-section-target="tools" aria-expanded="false" aria-controls="sidebarSectionTools">
             <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
             <span>Tools</span>
         </button>

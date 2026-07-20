@@ -168,17 +168,14 @@ test('isItemHidden never reports Settings as hidden, even if config says so', ()
 
 // ── isSectionCollapsed ──────────────────────────────────────────
 
-test('isSectionCollapsed returns false for sections by default', () => {
+test('isSectionCollapsed defaults all sidebar sections to collapsed', () => {
+  // By design, the app starts with every sidebar group collapsed so the
+  // Overview landing view is the focus on first paint.
   const m = loadModule();
   const cfg = m.parseSidebarConfig(null);
-  assert.equal(m.isSectionCollapsed(cfg, 'workspace'), false);
-  assert.equal(m.isSectionCollapsed(cfg, 'agents'), false);
-  assert.equal(m.isSectionCollapsed(cfg, 'tools'), false);
-});
-
-test('isSectionCollapsed defaults install-agents sub-section to collapsed', () => {
-  const m = loadModule();
-  const cfg = m.parseSidebarConfig(null);
+  assert.equal(m.isSectionCollapsed(cfg, 'workspace'), true);
+  assert.equal(m.isSectionCollapsed(cfg, 'agents'), true);
+  assert.equal(m.isSectionCollapsed(cfg, 'tools'), true);
   assert.equal(m.isSectionCollapsed(cfg, 'install-agents'), true,
     'install-agents is default-collapsed per design');
 });

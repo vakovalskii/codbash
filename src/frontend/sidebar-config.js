@@ -29,6 +29,8 @@
   var BLOCKED_KEYS = { '__proto__': true, 'constructor': true, 'prototype': true };
 
   var KNOWN_ITEM_KEYS = [
+    // Landing
+    'overview',
     // Workspace
     'sessions', 'workspace', 'projects', 'timeline', 'activity', 'running',
     'analytics', 'starred', 'leaderboard', 'cloud',
@@ -42,7 +44,12 @@
     'install:kiro', 'install:opencode', 'install:kilo', 'install:copilot'
   ];
 
+  // Top-level sections start collapsed for a clean landing; users who expand
+  // them have that choice persisted (isSectionCollapsed honors stored values).
   var DEFAULT_COLLAPSED = {
+    'workspace': true,
+    'agents': true,
+    'tools': true,
     'install-agents': true
   };
 
@@ -52,6 +59,7 @@
   // by the sidebar-config unit test (every KNOWN_ITEM_KEY must have help).
   var NAV_HELP = {
     // Workspace
+    'overview': 'Your workspace at a glance — running terminals and quick actions',
     'sessions': 'Every AI coding session across all agents, in one place',
     'workspace': 'A live terminal in your browser — run shells and agents without leaving codbash',
     'projects': 'Browse sessions grouped by project folder',
