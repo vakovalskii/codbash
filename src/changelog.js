@@ -2,6 +2,16 @@
 
 const CHANGELOG = [
   {
+    version: '7.14.0',
+    date: '2026-07-20',
+    title: 'Named terminals, macOS desktop app',
+    changes: [
+      'Terminals now auto-name after their project folder, and you can rename any terminal with the ✎ button on its tab (or double-click) — manual names stick',
+      'macOS desktop app: a native window around the same server, available as a DMG on GitHub Releases with in-app update checks',
+      'README refreshed with a Workspace/desktop overview and a screenshot',
+    ],
+  },
+  {
     version: '7.13.0',
     date: '2026-07-20',
     title: 'Project-aware terminals, richer Overview, tidier sidebar',

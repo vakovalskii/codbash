@@ -2859,6 +2859,13 @@ body.sidebar-hidden .toolbar { padding-left: 52px; }
     cursor: pointer; padding: 0 2px; border-radius: 4px;
 }
 .ws-tab-close:hover { color: var(--accent-red); }
+.ws-tab-rename {
+    font-size: 11px; line-height: 1;
+    background: transparent; border: none; color: var(--text-muted);
+    cursor: pointer; padding: 0 2px; border-radius: 4px; opacity: 0;
+}
+.ws-tab:hover .ws-tab-rename, .ws-tab.active .ws-tab-rename { opacity: 0.75; }
+.ws-tab-rename:hover { color: var(--accent-blue); opacity: 1; }
 .ws-tab-add {
     align-self: center;
     margin-left: 4px;

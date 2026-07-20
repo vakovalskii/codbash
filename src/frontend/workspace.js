@@ -313,6 +313,7 @@ function _wsConnectPane(pane) {
       if (msg.t === 'ready') {
         pane.cwd = msg.cwd;
         setStatus(_wsShortCwd(msg.cwd));
+        _wsAutoNameTab(pane);
         // cmd auto-runs (trailing \r); prefill is typed but NOT executed so the
         // user can review/edit a resume command before pressing Enter.
         if (pane.cmd) setTimeout(function () { if (sock.readyState === 1) sock.send(enc.encode(pane.cmd + '\r')); }, 120);
@@ -364,6 +365,7 @@ function _wsTabMarkup(tab) {
       'onclick="activateWorkspaceTab(\'' + escHtml(tab.id) + '\')" ondblclick="renameWorkspaceTab(\'' + escHtml(tab.id) + '\')" ' +
       'title="Double-click to rename">' +
       '<span class="ws-tab-name">' + escHtml(tab.name) + '</span>' +
+      '<button class="ws-tab-rename" title="Rename terminal" aria-label="Rename terminal" onclick="event.stopPropagation();renameWorkspaceTab(\'' + escHtml(tab.id) + '\')">&#9998;</button>' +
       '<button class="ws-tab-close" title="Close tab" onclick="event.stopPropagation();closeWorkspaceTab(\'' + escHtml(tab.id) + '\')">&times;</button>' +
     '</div>';
 }
@@ -462,6 +464,23 @@ function _wsProjectBasename(p) {
   if (!p) return '';
   return String(p).replace(/[\/\\]+$/, '').split(/[\/\\]/).pop() || String(p);
 }
+
+// Give a terminal a meaningful name automatically: when a pane connects and
+// reports its cwd, name its tab after the folder (basename) — unless the user
+// renamed it, or it already has a non-default name (e.g. a project tab).
+function _wsAutoNameTab(pane) {
+  if (!pane || !pane.cwd) return;
+  var tab = null;
+  for (var i = 0; i < _wsTabs.length; i++) {
+    if (_wsTabs[i].panes.some(function (p) { return p.id === pane.id; })) { tab = _wsTabs[i]; break; }
+  }
+  if (!tab || tab.userNamed) return;
+  if (!/^Tab \d+$/.test(tab.name)) return;   // already meaningful — leave it
+  // Skip the home directory — "username" is a poor terminal name; keep "Tab N".
+  if (/^(\/Users\/[^/]+|\/home\/[^/]+|\/root)\/?$/.test(pane.cwd)) return;
+  var base = _wsProjectBasename(pane.cwd);
+  if (base && base !== tab.name) { tab.name = base; _wsRenderTabbar(); }
+}
 function _wsTabName(spec) {
   return spec.name || _wsProjectBasename(spec.cwd) || ('Tab ' + (_wsTabs.length + 1));
 }
@@ -556,7 +575,7 @@ function renameWorkspaceTab(id) {
   input.focus(); input.select();
   function commit() {
     var v = input.value.trim();
-    if (v) tab.name = v;
+    if (v) { tab.name = v; tab.userNamed = true; }   // manual name wins over auto-naming
     _wsRenderTabbar();
   }
   input.addEventListener('keydown', function (e) {
