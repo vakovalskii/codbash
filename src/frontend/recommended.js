@@ -78,7 +78,7 @@ function toggleToolInstalled(id) {
 
 function renderRecommended(container) {
   var installed = _loadInstalledTools();
-  var html = '<div class="changelog-container">';
+  var html = '<div class="tools-container">';
   html += '<h2 class="heatmap-title">Recommended tools</h2>';
   html += '<p class="tools-intro">Handpicked companion apps that pair well with codbash. Tick the ones you already have.</p>';
   html += '<div class="tools-grid">';

@@ -2877,7 +2877,7 @@ body.sidebar-hidden .toolbar { padding-left: 52px; }
 .workspace-tabpanes { flex: 1; min-height: 0; display: flex; }
 
 /* ── Overview landing ── */
-.ov-wrap { padding: 24px; max-width: 1040px; }
+.ov-wrap { padding: 24px; }
 .ov-head { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 16px; }
 .ov-sub { font-size: 13px; color: var(--text-muted); margin-top: 4px; }
 .ov-primary { border-color: var(--accent-blue); color: var(--accent-blue); }
@@ -3067,6 +3067,7 @@ body.sidebar-hidden .toolbar { padding-left: 52px; }
 .changelog-container { padding: 20px; max-width: 700px; }
 
 /* ── Recommended tools view ────────────────────────────────── */
+.tools-container { padding: 20px; }
 .tools-intro {
     color: var(--text-secondary);
     font-size: 13px;
@@ -3074,7 +3075,7 @@ body.sidebar-hidden .toolbar { padding-left: 52px; }
 }
 .tools-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
     gap: 14px;
 }
 .tool-card {
