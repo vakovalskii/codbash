@@ -2749,10 +2749,15 @@ body {
 /* ── Changelog ──────────────────────────────────────────────── */
 
 /* ── Workspace (browser terminal) ──────────────────────────── */
+/* Terminal fills the content area edge-to-edge (drop the dashboard's 20px
+   padding + scroll only when the workspace is mounted). */
+.content:has(.workspace-wrap) { padding: 0; overflow: hidden; }
 .workspace-wrap {
     display: flex;
     flex-direction: column;
-    height: calc(100vh - 52px);
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
 }
 .workspace-bar {
     display: flex;
@@ -2764,7 +2769,15 @@ body {
 }
 .workspace-title { font-weight: 600; color: var(--text-primary); font-size: 13px; }
 .ws-layouts { display: flex; gap: 4px; }
-.ws-layouts .toolbar-btn { min-width: 34px; letter-spacing: 1px; }
+.ws-layout-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px 8px;
+    color: var(--text-secondary);
+}
+.ws-layout-btn.active { color: var(--accent-blue); border-color: var(--accent-blue); }
+.ws-layout-btn svg { display: block; }
 .workspace-hint { font-size: 11px; color: var(--text-muted); }
 
 /* ── Tab bar (iTerm-like) ── */
