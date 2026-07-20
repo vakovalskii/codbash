@@ -1441,10 +1441,20 @@ function renderCard(s, idx) {
   html += '<span class="card-tags">' + tagHtml;
   html += '<button class="tag-add-btn" onclick="showTagDropdown(event, \'' + s.id + '\')" title="Add tag">+</button>';
   html += '</span>';
-  // Open the session's project folder in the in-app terminal with the agent's
-  // resume command prefilled (awaiting Enter).
+  // Two launch actions for a session with a known project folder:
+  //   • native terminal (iTerm2/Terminal.app/…) via /api/launch — a terminal
+  //     icon; resumes CLI agents, "open in Cursor" for Cursor, hidden for the
+  //     VS Code-only Copilot Chat (no terminal to resume into).
+  //   • in-app Workspace terminal (▶) with the resume command prefilled.
   if (s.git_root || s.project) {
-    html += '<button class="card-gen-btn card-open-here" onclick="event.stopPropagation();openSessionInWorkspace(\'' + escJsString(s.id) + '\')" title="Open a terminal in this project (resume prefilled)">&#9654;</button>';
+    var _projPath = s.git_root || s.project;
+    var _termIcon = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px"><rect x="2" y="3" width="20" height="18" rx="2"/><polyline points="6 8 9 11 6 14"/><line x1="12" y1="15" x2="17" y2="15"/></svg>';
+    if (s.tool === 'cursor') {
+      html += '<button class="card-gen-btn card-launch-native" onclick="event.stopPropagation();openInCursor(\'' + escJsString(_projPath) + '\')" title="Open project in Cursor">' + _termIcon + '</button>';
+    } else if (s.tool !== 'copilot-chat') {
+      html += '<button class="card-gen-btn card-launch-native" onclick="event.stopPropagation();resumeLastProjectSession(\'' + escJsString(s.id) + '\',\'' + escJsString(s.tool || '') + '\',\'' + escJsString(_projPath) + '\',this)" title="Resume in native terminal (' + escHtml(agentLabel(s.tool)) + ')">' + _termIcon + '</button>';
+    }
+    html += '<button class="card-gen-btn card-open-here" onclick="event.stopPropagation();openSessionInWorkspace(\'' + escJsString(s.id) + '\')" title="Open in the in-app terminal (resume prefilled)">&#9654;</button>';
   }
   if (s.has_detail) {
     var btnTitle = sessionTitles[s.id] ? 'Regenerate AI title' : 'Generate AI title';
