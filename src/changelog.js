@@ -2,6 +2,18 @@
 
 const CHANGELOG = [
   {
+    version: '7.14.6',
+    date: '2026-07-21',
+    title: 'Folder picker, community fixes, and docs',
+    changes: [
+      'Add project → a native "Browse…" folder picker in the desktop app (opens Finder and fills the absolute path); the browser keeps the folder autocomplete',
+      'Oh My Pi: sessions with a title record before the session header now parse correctly, in both the list and the detail view (thanks @timseriakov)',
+      'GitHub avatars now render in the cloud profile and leaderboard (CSP fix, thanks @mvasilyev)',
+      'Overview and Recommended tiles now fill the available width on wide screens',
+      'Footer credit updated to the Neuraldeep community',
+    ],
+  },
+  {
     version: '7.14.5',
     date: '2026-07-20',
     title: 'Bug-hunt sweep: crash-safety, data-loss fix, and many correctness fixes',
