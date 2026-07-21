@@ -2,6 +2,16 @@
 
 const CHANGELOG = [
   {
+    version: '7.14.7',
+    date: '2026-07-21',
+    title: 'GUI-launch agent detection, Kiro fixes, terminal fit',
+    changes: [
+      'Desktop app: Claude/Codex are now detected even when codbash is launched from the GUI (Finder/Dock) with a stripped PATH — the CLI repairs PATH from your login shell on startup (opt out with CODBASH_NO_PATH_REPAIR=1). Thanks @NovakPAai',
+      'Kiro: large conversations no longer come back as an empty session list / empty detail (raised the sqlite3 read buffer), and assistant tool-use turns are now shown. Thanks @Sean10',
+      'Workspace terminal: fixed full-screen TUIs (e.g. Claude Code) rendering at the wrong width on large / hi-DPI displays — the pane now fits only once it has a real size and re-syncs the pty size on connect',
+    ],
+  },
+  {
     version: '7.14.6',
     date: '2026-07-21',
     title: 'Folder picker, community fixes, and docs',
