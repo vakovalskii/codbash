@@ -7,7 +7,7 @@
 // answers, then points a BrowserWindow at it.
 'use strict';
 
-const { app, BrowserWindow, shell, dialog, Menu } = require('electron');
+const { app, BrowserWindow, shell, dialog, Menu, ipcMain } = require('electron');
 const { spawn } = require('child_process');
 const http = require('http');
 const https = require('https');
@@ -120,7 +120,25 @@ function waitForServer(port, timeoutMs) {
   });
 }
 
+// Native folder picker for the "Add project" flow. Returns the chosen absolute
+// path, or null on cancel. Registered once (guarded) so re-creating the window
+// doesn't stack duplicate handlers.
+let _pickFolderRegistered = false;
+function registerIpc() {
+  if (_pickFolderRegistered) return;
+  _pickFolderRegistered = true;
+  ipcMain.handle('codbash:pick-folder', async function () {
+    const res = await dialog.showOpenDialog(win, {
+      title: 'Choose a project folder',
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    if (res.canceled || !res.filePaths || !res.filePaths.length) return null;
+    return res.filePaths[0];
+  });
+}
+
 async function createWindow() {
+  registerIpc();
   win = new BrowserWindow({
     width: 1320,
     height: 860,
@@ -128,7 +146,12 @@ async function createWindow() {
     minHeight: 600,
     title: 'codbash',
     backgroundColor: '#0b0d12',
-    webPreferences: { contextIsolation: true, nodeIntegration: false, spellcheck: false },
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      spellcheck: false,
+      preload: path.join(__dirname, 'preload.js'),
+    },
   });
 
   // http/https links open in the user's real browser, not inside the app.

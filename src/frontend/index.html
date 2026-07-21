@@ -300,9 +300,12 @@
         <div class="ap-body">
             <div class="ap-pane" id="apPaneLocal" role="tabpanel">
                 <label for="apLocalPath">Folder path on this machine</label>
-                <input type="text" id="apLocalPath" placeholder="/Users/me/code/my-project" autocomplete="off" aria-describedby="apLocalHint" list="apPathSuggestions" />
+                <div class="ap-path-row">
+                    <input type="text" id="apLocalPath" placeholder="/Users/me/code/my-project" autocomplete="off" aria-describedby="apLocalHint" list="apPathSuggestions" />
+                    <button type="button" id="apBrowseBtn" class="toolbar-btn" style="display:none" onclick="browseForProjectFolder()" title="Choose a folder…">Browse…</button>
+                </div>
                 <datalist id="apPathSuggestions"></datalist>
-                <div class="ap-hint" id="apLocalHint">Start typing to pick from your known project folders. <code>~</code> is expanded.</div>
+                <div class="ap-hint" id="apLocalHint">Start typing to pick from your known project folders, or <strong>Browse…</strong> in the desktop app. <code>~</code> is expanded.</div>
                 <div class="ap-error" id="apLocalError" role="alert"></div>
             </div>
             <div class="ap-pane" id="apPaneOwned" style="display:none" role="tabpanel">
