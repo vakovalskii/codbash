@@ -1086,6 +1086,9 @@ body[data-view="overview"] .toolbar { display: none; }
     color: var(--text-primary);
     font-size: 13px;
 }
+.ap-path-row { display: flex; gap: 8px; align-items: stretch; }
+.ap-path-row input[type="text"] { flex: 1; }
+.ap-path-row #apBrowseBtn { flex: 0 0 auto; white-space: nowrap; }
 .ap-hint { font-size: 11px; color: var(--text-muted); margin-top: 6px; }
 .ap-error { font-size: 12px; color: var(--accent-red); margin-top: 8px; min-height: 18px; }
 .ap-filter { margin-bottom: 8px; }

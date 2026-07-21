@@ -4085,7 +4085,24 @@ function openAddProject() {
   var input = document.getElementById('apLocalPath');
   if (input) { input.value = ''; setTimeout(function() { input.focus(); }, 50); }
   var err = document.getElementById('apLocalError'); if (err) err.textContent = '';
+  // Desktop app only: reveal the native "Browse…" folder picker (the browser
+  // has no way to open a Finder folder dialog and return an absolute path).
+  var browse = document.getElementById('apBrowseBtn');
+  if (browse) browse.style.display =
+    (window.codbashDesktop && typeof window.codbashDesktop.pickFolder === 'function') ? '' : 'none';
   _installModalFocusTrap(overlay);
+}
+
+// Open the OS folder picker (Finder) in the desktop app and drop the chosen
+// absolute path into the input. No-op in the browser (button stays hidden).
+function browseForProjectFolder() {
+  if (!(window.codbashDesktop && typeof window.codbashDesktop.pickFolder === 'function')) return;
+  window.codbashDesktop.pickFolder().then(function (dir) {
+    if (!dir) return;
+    var input = document.getElementById('apLocalPath');
+    if (input) { input.value = dir; input.focus(); }
+    var err = document.getElementById('apLocalError'); if (err) err.textContent = '';
+  }).catch(function () {});
 }
 
 function closeAddProject() {
