@@ -56,7 +56,9 @@ try {
   if (added.length) {
     console.error(`[codbash] PATH augmented from login shell (+${added.length} dir${added.length === 1 ? '' : 's'})`);
   }
-} catch (_) { /* keep existing PATH */ }
+} catch (err) {
+  console.error('[codbash] PATH augmentation skipped:', err && err.message ? err.message : err);
+}
 
 const DEFAULT_PORT = 3847;
 const DEFAULT_HOST = 'localhost';
