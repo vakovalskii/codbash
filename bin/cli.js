@@ -45,6 +45,18 @@ const { exportArchive, importArchive } = require('../src/migrate');
 const { convertSession } = require('../src/convert');
 const { generateHandoff, quickHandoff } = require('../src/handoff');
 const { cloudCLI } = require('../src/cloud');
+const { augmentPathFromLoginShell } = require('../src/shell-path');
+
+// GUI launches (Finder/Dock/Spotlight) inherit a stripped PATH that omits user
+// bin dirs where `claude`/`codex` live, which breaks PATH-based agent detection.
+// Repair it from the login shell before any command runs. No-op (no shell
+// spawn) when launched from a terminal that already has the full PATH.
+try {
+  const added = augmentPathFromLoginShell();
+  if (added.length) {
+    console.error(`[codbash] PATH augmented from login shell (+${added.length} dir${added.length === 1 ? '' : 's'})`);
+  }
+} catch (_) { /* keep existing PATH */ }
 
 const DEFAULT_PORT = 3847;
 const DEFAULT_HOST = 'localhost';
