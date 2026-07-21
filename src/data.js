@@ -1761,7 +1761,7 @@ function scanKiroSessions() {
       '-separator', '\t',
       KIRO_DB,
       'SELECT key, conversation_id, created_at, updated_at, substr(value, 1, 500), length(value) FROM conversations_v2 ORDER BY updated_at DESC'
-    ], { encoding: 'utf8', timeout: 5000, windowsHide: true }).trim();
+    ], { encoding: 'utf8', timeout: 5000, maxBuffer: 50 * 1024 * 1024, windowsHide: true }).trim();
 
     if (!rows) return sessions;
 
@@ -1808,7 +1808,7 @@ function loadKiroDetail(conversationId) {
     const raw = execFileSync('sqlite3', [
       KIRO_DB,
       `SELECT value FROM conversations_v2 WHERE conversation_id = '${conversationId.replace(/'/g, "''")}';`
-    ], { encoding: 'utf8', timeout: 10000, windowsHide: true }).trim();
+    ], { encoding: 'utf8', timeout: 10000, maxBuffer: 50 * 1024 * 1024, windowsHide: true }).trim();
 
     if (!raw) return { messages: [] };
 
@@ -1822,7 +1822,10 @@ function loadKiroDetail(conversationId) {
         if (text) messages.push({ role: 'user', content: text.slice(0, 2000), uuid: '' });
       }
       if (entry.assistant) {
-        const resp = entry.assistant.Response || entry.assistant.response || {};
+        // assistant can be { Response: {...} } or { ToolUse: {...} } — both carry
+        // content + message_id. Kiro started emitting ToolUse turns, which were
+        // dropped when only Response was read.
+        const resp = entry.assistant.Response || entry.assistant.ToolUse || entry.assistant.response || {};
         const text = resp.content || '';
         if (text) messages.push({ role: 'assistant', content: text.slice(0, 2000), uuid: resp.message_id || '' });
       }

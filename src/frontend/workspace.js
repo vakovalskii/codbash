@@ -404,8 +404,18 @@ function _wsConnectPane(pane) {
   var fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
   term.open(host);
-  try { fit.fit(); } catch (e) {}
   pane.term = term; pane.fit = fit;
+
+  // Fit only when the host actually has a size. Fitting a zero-size / not-yet-
+  // laid-out host (inactive tab, mid-transition pane) computes bogus cols/rows,
+  // which spawns the pty at the wrong width and garbles full-screen TUIs like
+  // Claude Code — most visibly on large / hi-DPI displays (see #259).
+  function _wsFitPane() {
+    if (!host.clientWidth || !host.clientHeight) return false;
+    try { fit.fit(); return true; } catch (e) { return false; }
+  }
+  _wsFitPane();                          // best-effort now (correct URL dims if laid out)
+  requestAnimationFrame(_wsFitPane);     // and again after the first paint
 
   // Track which pane the user is "in": focusing/clicking the terminal marks it
   // as the focused pane, so saved commands / resume land where you're looking.
@@ -432,6 +442,11 @@ function _wsConnectPane(pane) {
         pane.cwd = msg.cwd;
         setStatus(_wsPaneLabel(pane));
         _wsAutoNameTab(pane);
+        // Now that the pane is laid out and connected, re-fit and push the true
+        // size to the pty so xterm and the pty agree (fixes wrong-width TUIs).
+        if (_wsFitPane() && sock.readyState === 1) {
+          sock.send(JSON.stringify({ t: 'resize', cols: term.cols, rows: term.rows }));
+        }
         // cmd auto-runs (trailing \r); prefill is typed but NOT executed so the
         // user can review/edit a resume command before pressing Enter.
         if (pane.cmd) setTimeout(function () { if (sock.readyState === 1) sock.send(enc.encode(pane.cmd + '\r')); }, 120);
@@ -456,8 +471,9 @@ function _wsConnectPane(pane) {
   pane.ro = new ResizeObserver(function () {
     clearTimeout(rt);
     rt = setTimeout(function () {
-      try { fit.fit(); } catch (e) {}
-      if (sock.readyState === 1) sock.send(JSON.stringify({ t: 'resize', cols: term.cols, rows: term.rows }));
+      if (_wsFitPane() && sock.readyState === 1) {
+        sock.send(JSON.stringify({ t: 'resize', cols: term.cols, rows: term.rows }));
+      }
     }, 100);
   });
   try { pane.ro.observe(host.parentNode); } catch (e) {}
