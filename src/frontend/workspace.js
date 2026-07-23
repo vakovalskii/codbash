@@ -2110,6 +2110,7 @@ function _wsBindReopenShortcut() {
     var inWs = (typeof currentView === 'undefined') || currentView === 'workspace';
 
     if (e.shiftKey && isT) {                       // reopen closed tab
+      if (_wsInFormField()) return;                // don't hijack while typing in a field
       if (_wsClosedTabs.length) { e.preventDefault(); reopenLastClosedTab(); }
       return;
     }
