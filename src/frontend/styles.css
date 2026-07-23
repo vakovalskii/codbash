@@ -175,27 +175,34 @@ body.sidebar-hidden .sidebar {
 }
 .sidebar-collapse-btn:hover { color: var(--text-primary); background: rgba(255,255,255,0.06); }
 .sidebar-collapse-btn svg { width: 16px; height: 16px; }
+/* Collapsed-sidebar re-open handle: a slim vertical tab docked to the middle of
+   the window's left edge (the conventional "pull the panel out" affordance). It
+   sits clear of the top header and the macOS traffic lights, so it never
+   overlaps content the way a top-left floating square did. */
 .sidebar-reopen-btn {
     position: fixed;
-    top: 12px;
-    left: 10px;
+    top: 50%;
+    left: 0;
+    transform: translateY(-50%);
     z-index: 60;
     display: none;
     align-items: center;
     justify-content: center;
-    width: 30px;
-    height: 30px;
+    width: 20px;
+    height: 52px;
+    padding: 0;
     background: var(--bg-card);
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-left: none;
+    border-radius: 0 10px 10px 0;
     color: var(--text-secondary);
     cursor: pointer;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+    box-shadow: 2px 0 10px rgba(0,0,0,0.28);
+    transition: width 0.12s ease, color 0.12s ease, background 0.12s ease;
 }
-.sidebar-reopen-btn:hover { color: var(--text-primary); border-color: var(--accent-blue); }
-.sidebar-reopen-btn svg { width: 16px; height: 16px; }
+.sidebar-reopen-btn:hover { width: 26px; color: var(--text-primary); background: rgba(255,255,255,0.06); }
+.sidebar-reopen-btn svg { width: 15px; height: 15px; }
 body.sidebar-hidden .sidebar-reopen-btn { display: flex; }
-body.sidebar-hidden .toolbar { padding-left: 52px; }
 
 .sidebar-brand {
     padding: 8px 20px 20px;
@@ -215,6 +222,14 @@ body.sidebar-hidden .toolbar { padding-left: 52px; }
     background: rgba(255,255,255,0.06);
     padding: 1px 6px;
     border-radius: 4px;
+}
+
+/* Running from source (NODE_ENV=development): a loud amber badge so it's
+   unmistakable you're looking at the live-editing build, not the installed app. */
+.version-badge.dev-build {
+    color: #0b0d10;
+    background: var(--accent-orange, #f59e0b);
+    font-weight: 700;
 }
 
 .version-badge.update-available {
@@ -2834,7 +2849,176 @@ body[data-view="overview"] .toolbar { display: none; }
 .ws-layout-btn svg { display: block; }
 .workspace-hint { font-size: 11px; color: var(--text-muted); }
 
+/* ── Bookmarks bar (Chrome-like: folder + agent, one click to launch) ── */
+.ws-bookmarks {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+    scrollbar-width: thin;
+}
+.ws-bookmarks::-webkit-scrollbar { height: 0; }
+.ws-bm-lead { color: var(--text-muted); font-size: 13px; flex-shrink: 0; opacity: 0.7; }
+.ws-bm-hint { font-size: 11px; color: var(--text-muted); padding: 2px 4px; white-space: nowrap; }
+.ws-bm {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    flex-shrink: 0;
+    max-width: 220px;
+    padding: 5px 9px 5px 8px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--text-secondary);
+    transition: background 0.14s ease, border-color 0.14s ease, transform 0.06s ease;
+    position: relative;
+}
+.ws-bm:hover { background: color-mix(in srgb, var(--accent-blue) 12%, var(--bg-input)); border-color: color-mix(in srgb, var(--accent-blue) 40%, var(--border)); color: var(--text-primary); }
+.ws-bm:active { transform: translateY(1px); }
+.ws-bm-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 12%, transparent); }
+.ws-bm-label { font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ws-bm-sub { color: var(--text-muted); font-size: 11px; white-space: nowrap; }
+.ws-bm-x {
+    margin-left: 2px;
+    width: 16px; height: 16px;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 4px;
+    font-size: 14px; line-height: 1;
+    color: var(--text-muted);
+    opacity: 0;
+    transition: opacity 0.12s ease;
+}
+.ws-bm:hover .ws-bm-x { opacity: 0.7; }
+.ws-bm-x:hover { opacity: 1; background: color-mix(in srgb, var(--accent-red) 22%, transparent); color: var(--accent-red); }
+.ws-bm-add {
+    flex-shrink: 0;
+    width: 26px; height: 26px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: transparent;
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    color: var(--text-muted);
+    font-size: 16px; line-height: 1;
+    cursor: pointer;
+}
+.ws-bm-add:hover { color: var(--accent-blue); border-color: var(--accent-blue); border-style: solid; }
+.ws-bm-newfolder { width: auto; padding: 0 8px; font-size: 12px; gap: 2px; }
+
+/* Bookmark group (folder) chip on the bar. */
+.ws-bm-folder { border-style: solid; }
+.ws-bm-folder .ws-bm-folder-ico { font-size: 10px; }
+.ws-bm-folder .ws-bm-sub {
+    background: color-mix(in srgb, var(--text-muted) 22%, transparent);
+    border-radius: 999px; padding: 0 6px; min-width: 16px; text-align: center;
+}
+.ws-bm.drop-target { border-color: var(--accent-blue); background: color-mix(in srgb, var(--accent-blue) 20%, var(--bg-input)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-blue) 45%, transparent); }
+
+/* Bookmark group dropdown menu. */
+.ws-bmf-menu {
+    position: fixed; z-index: 1000;
+    width: 260px; max-height: 60vh; overflow-y: auto;
+    padding: 6px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+    animation: wsRestoreIn 0.14s ease;
+}
+.ws-bmf-list { display: flex; flex-direction: column; gap: 2px; }
+.ws-bmf-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 8px; border-radius: 8px; cursor: pointer;
+    font-size: 12px; color: var(--text-secondary);
+}
+.ws-bmf-item:hover { background: color-mix(in srgb, var(--accent-blue) 14%, transparent); color: var(--text-primary); }
+.ws-bmf-label { font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.ws-bmf-sub { color: var(--text-muted); font-size: 11px; white-space: nowrap; }
+.ws-bmf-out, .ws-bmf-x {
+    width: 18px; height: 18px; flex-shrink: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 5px; color: var(--text-muted); font-size: 13px; opacity: 0;
+}
+.ws-bmf-item:hover .ws-bmf-out, .ws-bmf-item:hover .ws-bmf-x { opacity: 0.7; }
+.ws-bmf-out:hover { opacity: 1; background: color-mix(in srgb, var(--text-secondary) 20%, transparent); color: var(--text-primary); }
+.ws-bmf-x:hover { opacity: 1; background: color-mix(in srgb, var(--accent-red) 22%, transparent); color: var(--accent-red); }
+.ws-bmf-empty { padding: 14px 8px; text-align: center; color: var(--text-muted); font-size: 11px; }
+.ws-bmf-foot { display: flex; gap: 6px; margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border); }
+.ws-bmf-foot button {
+    flex: 1; padding: 6px 8px; font-size: 11px; cursor: pointer;
+    background: var(--bg-input); color: var(--text-secondary);
+    border: 1px solid var(--border); border-radius: 7px;
+}
+.ws-bmf-foot button:hover { color: var(--text-primary); border-color: var(--text-muted); }
+.ws-bmf-foot button.danger:hover { color: var(--accent-red); border-color: var(--accent-red); }
+
+/* ── Terminal settings popover ── */
+.ws-settings-pop {
+    position: fixed;
+    z-index: 1000;
+    width: 260px;
+    padding: 12px 14px 14px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+    animation: wsRestoreIn 0.14s ease;
+}
+.ws-set-head { font-size: 12px; font-weight: 700; color: var(--text-primary); margin-bottom: 10px; letter-spacing: 0.02em; }
+.ws-set-row {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; margin: 8px 0; font-size: 12px; color: var(--text-secondary);
+}
+.ws-set-row > span { flex-shrink: 0; }
+.ws-set-row select {
+    flex: 1; max-width: 150px;
+    font-size: 12px; padding: 4px 6px;
+    background: var(--bg-input); color: var(--text-primary);
+    border: 1px solid var(--border); border-radius: 6px; cursor: pointer;
+}
+.ws-set-row input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; accent-color: var(--accent-blue); }
+.ws-set-size { display: inline-flex; align-items: center; gap: 8px; }
+.ws-set-size button {
+    width: 24px; height: 24px; border-radius: 6px; cursor: pointer;
+    background: var(--bg-input); color: var(--text-primary);
+    border: 1px solid var(--border); font-size: 14px; line-height: 1;
+    display: inline-flex; align-items: center; justify-content: center;
+}
+.ws-set-size button:hover { border-color: var(--accent-blue); color: var(--accent-blue); }
+.ws-set-size b { min-width: 34px; text-align: center; color: var(--text-primary); font-size: 12px; }
+
 /* ── Tab bar (iTerm-like) ── */
+/* One compact top row: tabs (flex) + tools (right). Replaces the old stacked
+   tab bar + toolbar to reclaim vertical space. */
+.ws-topbar {
+    display: flex;
+    align-items: stretch;
+    gap: 8px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    padding-right: 10px;
+}
+.ws-topbar .ws-tabbar {
+    flex: 1;
+    min-width: 0;
+    border-bottom: none;
+    background: transparent;
+}
+.ws-tools {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
+.ws-tools-sep { width: 1px; height: 20px; background: var(--border); margin: 0 2px; align-self: center; }
+.ws-icon-btn { display: inline-flex; align-items: center; justify-content: center; padding: 6px 8px; }
+.ws-icon-btn svg { display: block; }
+
 .ws-tabbar {
     display: flex;
     align-items: stretch;
@@ -2861,6 +3045,11 @@ body[data-view="overview"] .toolbar { display: none; }
     user-select: none;
 }
 .ws-tab.active { background: var(--bg-card); color: var(--text-primary); border-color: var(--accent-blue); }
+/* Drag-to-reorder feedback: the grabbed tab dims, and an insertion bar shows
+   where it will land. */
+.ws-tab.dragging { opacity: 0.4; }
+.ws-tab.drop-before { box-shadow: inset 2px 0 0 0 var(--accent-blue); }
+.ws-tab.drop-after { box-shadow: inset -2px 0 0 0 var(--accent-blue); }
 .ws-tab-name { overflow: hidden; text-overflow: ellipsis; }
 .ws-tab-close {
     font-size: 14px; line-height: 1;
@@ -3089,24 +3278,86 @@ body[data-view="overview"] .toolbar { display: none; }
     background: var(--bg-primary);
 }
 .workspace-grid.active { display: grid; }
+.workspace-grid { position: relative; }   /* anchor for absolute drag handles */
 .workspace-grid[data-count="1"] { grid-template-columns: 1fr; }
 .workspace-grid[data-count="2"] { grid-template-columns: 1fr 1fr; }
 .workspace-grid[data-count="3"] { grid-template-columns: 1fr 1fr 1fr; }
 .workspace-grid[data-count="4"] { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+
+/* Draggable pane splitters — sit over the gap between panes; a thin accent line
+   appears on hover/drag. JS (_wsMakeResizer) positions left/top to the gap. */
+.ws-resizer { position: absolute; z-index: 6; }
+.ws-resizer-v { top: 0; bottom: 0; width: 12px; transform: translateX(-50%); cursor: col-resize; }
+.ws-resizer-h { left: 0; right: 0; height: 12px; transform: translateY(-50%); cursor: row-resize; }
+.ws-resizer::before {
+    content: ''; position: absolute; background: transparent;
+    transition: background 0.12s ease;
+}
+.ws-resizer-v::before { top: 0; bottom: 0; left: 50%; width: 2px; transform: translateX(-50%); }
+.ws-resizer-h::before { left: 0; right: 0; top: 50%; height: 2px; transform: translateY(-50%); }
+.ws-resizer:hover::before, .ws-resizer.dragging::before { background: var(--accent-blue); }
+.ws-resizer.dragging::before { box-shadow: 0 0 8px color-mix(in srgb, var(--accent-blue) 60%, transparent); }
 
 .ws-pane {
     display: flex;
     flex-direction: column;
     min-width: 0;
     min-height: 0;
+    position: relative;
     border: 1px solid var(--border);
     border-radius: 8px;
     overflow: hidden;
     background: #08090c;
 }
+
+/* "Resume where you left off" banner — floats over the bottom of a restored
+   pane. One click re-runs the remembered agent (folder + proxy prefix); nothing
+   runs until then. This is the terminal analogue of a browser reopening a tab. */
+.ws-restore-banner {
+    position: absolute;
+    left: 8px; right: 8px; bottom: 8px;
+    z-index: 5;
+    animation: wsRestoreIn 0.18s ease;
+}
+@keyframes wsRestoreIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.ws-restore-inner {
+    display: flex; align-items: center; gap: 12px;
+    padding: 9px 10px 9px 13px;
+    border: 1px solid color-mix(in srgb, var(--accent-blue) 45%, var(--border));
+    border-radius: 9px;
+    background: color-mix(in srgb, var(--accent-blue) 12%, var(--bg-secondary, #12151b));
+    box-shadow: 0 6px 22px rgba(0,0,0,0.45);
+    backdrop-filter: blur(6px);
+}
+.ws-restore-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.ws-restore-title { font-size: 12px; font-weight: 700; color: var(--text-primary); }
+.ws-restore-sub { font-size: 11px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ws-restore-sub code { font-family: Menlo, Monaco, monospace; color: var(--text-primary); }
+.ws-restore-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.ws-restore-run {
+    border: none; border-radius: 7px; cursor: pointer;
+    padding: 6px 14px; font-size: 12px; font-weight: 700;
+    background: var(--accent-blue); color: #fff;
+}
+.ws-restore-run:hover { filter: brightness(1.08); }
+.ws-restore-dismiss {
+    border: none; background: transparent; cursor: pointer;
+    color: var(--text-secondary); font-size: 18px; line-height: 1;
+    padding: 2px 6px; border-radius: 6px;
+}
+.ws-restore-dismiss:hover { background: color-mix(in srgb, var(--text-secondary) 18%, transparent); color: var(--text-primary); }
 /* The pane the user is "in": launched commands / resume land here. */
 .ws-pane.focused { border-color: var(--accent-blue); box-shadow: 0 0 0 1px var(--accent-blue); }
 .ws-pane.focused .ws-pane-bar { background: color-mix(in srgb, var(--accent-blue) 14%, var(--bg-secondary)); }
+/* Inactive panes (only when a tab holds 2+): gently dim + faintly blur the
+   terminal surface so the focused pane stands out. Single-pane grids are never
+   dimmed. Targets .ws-pane-term (not the whole pane) so the title bar stays
+   crisp and legible. _wsRenderPanes always keeps one pane focused, so this can
+   never dim every pane at once. */
+.ws-pane-term { transition: filter 0.18s ease; }
+.workspace-grid:not([data-count="1"]) .ws-pane:not(.focused) .ws-pane-term {
+    filter: brightness(0.6) blur(0.6px);
+}
 .ws-pane-bar {
     display: flex;
     align-items: center;
@@ -3125,6 +3376,17 @@ body[data-view="overview"] .toolbar { display: none; }
     padding: 3px 6px;
     cursor: pointer;
 }
+.ws-pane-bm {
+    font-size: 14px;
+    line-height: 1;
+    width: 22px; height: 22px;
+    background: transparent;
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+}
+.ws-pane-bm:hover { color: var(--accent-orange, #f59e0b); border-color: var(--accent-orange, #f59e0b); }
 .ws-pane-close {
     font-size: 15px;
     line-height: 1;

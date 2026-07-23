@@ -8,3 +8,7 @@ node_modules/
 hooks/
 .tmp/
 package-lock.json
+
+# Local dev screenshots / MCP scratch (not shipped)
+.playwright-mcp/
+/*.png

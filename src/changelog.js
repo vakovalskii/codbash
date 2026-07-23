@@ -2,6 +2,22 @@
 
 const CHANGELOG = [
   {
+    version: '7.15.0',
+    date: '2026-07-23',
+    title: 'Browser-like terminal: session resume, bookmarks & groups, settings, resizable panes — plus input-freeze & lost-dialog fixes',
+    changes: [
+      'Fixed the terminal freezing input intermittently — the running-agents and pane-cwd polls ran ps/lsof synchronously on the event loop (every 1–4s), stalling terminal I/O; they now run off the loop so typing stays smooth',
+      'Fixed agents launched from codbash writing their conversation to the wrong place: panes no longer inherit the parent\'s agent-session vars (which made a nested "hidden folder" session) or npm\'s npm_config_prefix (which broke nvm), and a requested folder is never silently swapped for your home directory (which misfiled dialogs) — you\'re warned instead',
+      'Resume where you left off (Chrome-like): reopening the app offers to continue each pane\'s last agent conversation in that folder with one click (claude --continue), keeping your proxy prefix',
+      'Bookmarks bar with named groups/folders — drag a bookmark into a group; one click opens the folder and launches its agent',
+      'Terminal settings (⚙): font family & size, theme (iTerm, Monokai, Dracula, Solarized, Light…), cursor style and blink — applied live to every pane',
+      'Resizable split panes — drag the divider; sizes persist with the session and survive maximize / fullscreen',
+      'Tabs: Cmd+T new tab, Cmd+W close tab, Cmd+Shift+T reopen the last closed tab (full layout), and drag to reorder',
+      'Reclaimed vertical space by merging the tab bar and toolbar into one compact row',
+      'Running Agents now lists only agents actually launched from codbash',
+    ],
+  },
+  {
     version: '7.14.7',
     date: '2026-07-21',
     title: 'GUI-launch agent detection, Kiro fixes, terminal fit',

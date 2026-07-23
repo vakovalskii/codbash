@@ -35,6 +35,31 @@ function getFreePort() {
   });
 }
 
+// A STABLE loopback port keeps the window's origin (http://127.0.0.1:<port>)
+// constant across launches. This is REQUIRED for persistence: localStorage is
+// scoped to the origin, so a random ephemeral port silently wiped EVERYTHING
+// origin-scoped every launch — theme, starred sessions, tags, terminal prefs,
+// and the saved Workspace session used to restore tabs/panes. We therefore
+// prefer a fixed port and only fall back to an ephemeral one if it is genuinely
+// occupied (rare — another instance or an unrelated listener).
+const PREFERRED_PORT = 51763;
+function isPortFree(port) {
+  return new Promise((resolve) => {
+    const srv = net.createServer();
+    srv.unref();
+    srv.once('error', () => resolve(false));
+    srv.listen(port, '127.0.0.1', () => srv.close(() => resolve(true)));
+  });
+}
+async function resolveStablePort() {
+  if (process.env.CODBASH_PORT) {
+    const p = parseInt(process.env.CODBASH_PORT, 10);
+    if (Number.isInteger(p) && p > 0 && await isPortFree(p)) return p;
+  }
+  if (await isPortFree(PREFERRED_PORT)) return PREFERRED_PORT;
+  return getFreePort();
+}
+
 // Where the codbash server lives: repo layout in dev, bundled resources when packaged.
 function resolveServerEntry() {
   const dev = path.join(__dirname, '..', 'bin', 'cli.js');
@@ -135,6 +160,9 @@ function registerIpc() {
     if (res.canceled || !res.filePaths || !res.filePaths.length) return null;
     return res.filePaths[0];
   });
+  // The renderer decides a shortcut had no in-page meaning (e.g. Cmd+W outside
+  // the Workspace) and asks us to close the window instead.
+  ipcMain.on('codbash:close-window', function () { if (win) { try { win.close(); } catch (_e) {} } });
 }
 
 async function createWindow() {
@@ -158,6 +186,20 @@ async function createWindow() {
   win.webContents.setWindowOpenHandler(function (details) {
     if (/^https?:/i.test(details.url)) { shell.openExternal(details.url); return { action: 'deny' }; }
     return { action: 'allow' };
+  });
+
+  // Cmd/Ctrl+W would hit the native menu's "Close Window" before the page ever
+  // sees the keystroke. Intercept it here so it can close the ACTIVE TAB instead
+  // (Chrome-like). We forward it to the renderer, which closes a tab or — if
+  // there's nothing to close — calls back to close the window. Cmd+T and
+  // Cmd+Shift+T are NOT default menu accelerators, so the page handles those.
+  win.webContents.on('before-input-event', function (event, input) {
+    if (input.type !== 'keyDown') return;
+    const mod = input.meta || input.control;
+    if (mod && !input.shift && !input.alt && (input.key === 'w' || input.key === 'W')) {
+      event.preventDefault();
+      try { win.webContents.send('codbash:shortcut', 'close-tab'); } catch (_e) {}
+    }
   });
 
   await win.loadURL('http://127.0.0.1:' + serverPort + '/');
@@ -232,7 +274,7 @@ function initAutoUpdater() {
 
 app.whenReady().then(async function () {
   try {
-    serverPort = await getFreePort();
+    serverPort = await resolveStablePort();
     startServer(serverPort);
     await waitForServer(serverPort);
     await createWindow();

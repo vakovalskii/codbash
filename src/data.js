@@ -1,7 +1,10 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { execSync, execFileSync } = require('child_process');
+const { execSync, execFileSync, exec, execFile } = require('child_process');
+const { promisify } = require('util');
+const _execAsync = promisify(exec);
+const _execFileAsync = promisify(execFile);
 const { atomicWriteJson } = require('./atomic');
 
 // ── Constants ──────────────────────────────────────────────
@@ -5398,31 +5401,98 @@ function _analyticsKey(sessions) {
   return sessions.length + ':' + newest;
 }
 
-function getCostAnalytics(sessions) {
-  // Fast cache check — if sessions haven't changed, return cached result
+// Background recompute guard: the key we're currently (re)computing off the
+// request path, so overlapping Overview polls don't queue N duplicate 4s jobs.
+let _analyticsRecomputeKey = null;
+
+function _persistAnalytics(key, result) {
+  try { fs.writeFileSync(ANALYTICS_CACHE_FILE, JSON.stringify({ _key: key, data: result })); } catch {}
+}
+
+// Recompute analytics off the request path and refresh the in-memory + disk
+// cache when done. Deduped by key so a burst of stale hits schedules one job.
+//
+// The expensive part of a cold recompute is ~O(sessions) computeSessionCost()
+// calls, each of which may read+parse a JSONL file. Running them all in one
+// synchronous tick would freeze the event loop for seconds — stalling every
+// other request AND the terminal WebSocket data pump. So we warm those caches
+// in small chunks, yielding to the loop between chunks; the final aggregate is
+// then cache-warm and returns in milliseconds.
+function _scheduleAnalyticsRecompute(key, sessions) {
+  if (_analyticsRecomputeKey === key) return;
+  _analyticsRecomputeKey = key;
+  const finish = () => { if (_analyticsRecomputeKey === key) _analyticsRecomputeKey = null; };
+  (async () => {
+    try {
+      const CHUNK = 80;
+      for (let i = 0; i < sessions.length; i += CHUNK) {
+        const chunk = sessions.slice(i, i + CHUNK);
+        for (const s of chunk) {
+          // Skip formats that carry no token cost (cursor/kiro/copilot) — they
+          // short-circuit in computeSessionCost anyway, but avoid the call.
+          if (s.tool === 'cursor' || s.tool === 'kiro' || s.tool === 'copilot-chat') continue;
+          try { computeSessionCost(s.id, s.project); } catch {}
+        }
+        // Yield so terminal output and other API calls stay responsive.
+        await new Promise(r => setImmediate(r));
+      }
+      const result = _computeCostAnalytics(sessions); // caches warm → fast, sync
+      _analyticsCacheResult = result;
+      _analyticsCacheKey = key;
+      _persistAnalytics(key, result);
+    } catch {}
+    finally { finish(); }
+  })();
+}
+
+// Cost analytics with stale-while-revalidate. The cache key is
+// count+newest-mtime, so it invalidates after ANY session activity — which,
+// with ~1500 sessions, meant a ~4s synchronous recompute on nearly every cold
+// start / Overview open. Instead we return the last known result INSTANTLY and
+// refresh in the background (opts.allowStale, set by the unfiltered Overview
+// path). Only the very first computation, when nothing is cached yet, blocks.
+//
+// Date-filtered requests (from/to → allowStale falsy) must be exact, so they
+// compute synchronously and are kept out of the shared Overview cache to avoid
+// a filtered snapshot briefly leaking onto the unfiltered Overview.
+function getCostAnalytics(sessions, opts) {
+  opts = opts || {};
   const key = _analyticsKey(sessions);
+
+  // Exact in-memory hit → fresh.
   if (_analyticsCacheResult && _analyticsCacheKey === key) return _analyticsCacheResult;
 
-  // Try disk cache
+  // Warm the in-memory cache from disk once (survives restarts).
   if (!_analyticsCacheResult) {
     try {
       if (fs.existsSync(ANALYTICS_CACHE_FILE)) {
         const cached = JSON.parse(fs.readFileSync(ANALYTICS_CACHE_FILE, 'utf8'));
-        if (cached._key === key) {
+        if (cached && cached.data) {
           _analyticsCacheResult = cached.data;
-          _analyticsCacheKey = key;
-          return cached.data;
+          _analyticsCacheKey = cached._key;
+          if (cached._key === key) return cached.data;
         }
       }
     } catch {}
   }
 
+  // Stale-while-revalidate for the unfiltered Overview/startup path: return the
+  // previous result now, refresh in the background. Never blocks after the very
+  // first ever computation.
+  if (opts.allowStale && _analyticsCacheResult) {
+    _scheduleAnalyticsRecompute(key, sessions);
+    return _analyticsCacheResult;
+  }
+
+  // Cold path: first-ever computation, or an exact (date-filtered) request.
   const result = _computeCostAnalytics(sessions);
 
-  // Save to cache
-  _analyticsCacheResult = result;
-  _analyticsCacheKey = key;
-  try { fs.writeFileSync(ANALYTICS_CACHE_FILE, JSON.stringify({ _key: key, data: result })); } catch {}
+  // Only the unfiltered path owns the shared Overview cache.
+  if (opts.allowStale) {
+    _analyticsCacheResult = result;
+    _analyticsCacheKey = key;
+    _persistAnalytics(key, result);
+  }
 
   return result;
 }
@@ -5767,7 +5837,11 @@ function findQwenSessionByPid(pid, cwd, allSessions) {
   return null;
 }
 
-function getActiveSessions() {
+// ASYNC on purpose: this shells out to `ps aux` (and sometimes `lsof`) and is
+// polled by /api/active every second. The old synchronous execSync blocked the
+// single Node event loop each tick, which stalled the Workspace pty's I/O — the
+// "input freezes for a moment" bug. Async execFile keeps it off the loop.
+async function getActiveSessions() {
   const active = [];
   const seenPids = new Set();
 
@@ -5800,10 +5874,10 @@ function getActiveSessions() {
   if (process.platform === 'win32') return active;
 
   try {
-    const psOut = execSync(
+    const psOut = (await _execAsync(
       'ps aux 2>/dev/null | grep -E "claude|codex|qwen|omp|omp.cmd|(^|[[:space:]/])pi([[:space:]]|$)|opencode|kiro-cli|cursor-agent|kilo" | grep -v grep || true',
-      { encoding: 'utf8', timeout: 3000, stdio: ['pipe', 'pipe', 'pipe'] }
-    );
+      { encoding: 'utf8', timeout: 3000, maxBuffer: 4 * 1024 * 1024 }
+    )).stdout;
 
     const allSessions = loadSessions();
 
@@ -5828,6 +5902,16 @@ function getActiveSessions() {
 
       // Skip node/npm/shell wrappers, MCP servers, plugins — only main agent processes
       if (cmd.includes('node bin/cli') || /(^|\s)npm(\s|$)/.test(cmd) || /(^|\s)grep(\s|$)/.test(cmd)) continue;
+      // Skip GUI desktop apps whose name/path contains an agent word but which
+      // are NOT CLI agents — most notably the Claude *Desktop* chat app, whose
+      // Electron helpers live under `/Applications/Claude.app/…/Claude Helper`
+      // and match the loose `\bclaude\b` pattern. Electron subprocesses are
+      // identified by their `--type=<renderer|utility|gpu-process|zygote|…>`
+      // flag; the bundle helpers by their `.app/Contents/{Frameworks,MacOS}/`
+      // path. Neither is ever a coding-agent session.
+      if (/--type=(renderer|utility|gpu-process|zygote|broker|crashpad|ppapi|sandbox)/.test(cmd)) continue;
+      if (/\.app\/Contents\/(Frameworks|MacOS)\//.test(cmd)) continue;
+      if (/(^|\/)(Claude|Cursor|Code) Helper/.test(cmd)) continue;
       if (cmd.includes('mcp-server') || cmd.includes('mcp_server') || cmd.includes('/mcp/') || cmd.includes('/mcp-servers/')) continue;
       if (cmd.includes('/plugins/') || cmd.includes('plugin-') || cmd.includes('app-server-broker')) continue;
       if (cmd.includes('.claude/') && !cmd.includes('claude ') && tool === 'claude') continue;
@@ -5878,7 +5962,7 @@ function getActiveSessions() {
       }
       if (!cwd) {
         try {
-          const lsofOut = execSync(`lsof -a -p ${pid} -d cwd -Fn 2>/dev/null`, { encoding: 'utf8', timeout: 2000, stdio: ['pipe', 'pipe', 'pipe'] });
+          const lsofOut = (await _execFileAsync('lsof', ['-a', '-p', String(pid), '-d', 'cwd', '-Fn'], { encoding: 'utf8', timeout: 2000 })).stdout;
           // -F output is line-oriented; cwd path lives on a line starting with "n".
           // Anchor to start-of-line (multiline flag) so we don't depend on a
           // preceding newline, and tolerate non-path lines mixed in.
@@ -5972,7 +6056,44 @@ function getActiveSessions() {
     if (entryScore > existingScore) deduped.set(key, entry);
   }
 
-  return Array.from(deduped.values());
+  // Scope to agents launched from codbash — only those whose process tree
+  // descends from a codbash terminal pane (see pty-registry). Matches the
+  // "codbash-only" RUNNING AGENTS model: no panes open → nothing shown.
+  return await _scopeToCodbashAgents(Array.from(deduped.values()));
+}
+
+// Keep only active entries whose process ancestry reaches a live codbash pty.
+// Empty pty registry → empty result (nothing is running *in* codbash). If the
+// ppid scan itself fails we fail OPEN (return the unfiltered list) rather than
+// hiding genuine sessions on a transient `ps` error.
+async function _scopeToCodbashAgents(active) {
+  let ptyRegistry;
+  try { ptyRegistry = require('./pty-registry'); } catch { return active; }
+  const livePids = ptyRegistry.all();
+  if (!livePids.length) return [];
+  if (process.platform === 'win32') return active; // no ppid scan here
+  const live = new Set(livePids);
+
+  // Build a pid→ppid map in one cheap (async, off-loop) call so we can walk each
+  // agent's ancestry without blocking the event loop.
+  const ppidOf = new Map();
+  try {
+    const out = (await _execFileAsync('ps', ['-Ao', 'pid=,ppid='], { encoding: 'utf8', timeout: 3000, maxBuffer: 4 * 1024 * 1024 })).stdout;
+    for (const line of out.split('\n')) {
+      const m = line.trim().match(/^(\d+)\s+(\d+)$/);
+      if (m) ppidOf.set(parseInt(m[1], 10), parseInt(m[2], 10));
+    }
+  } catch { return active; } // fail open
+
+  return active.filter(a => {
+    let pid = a.pid, depth = 0;
+    while (pid && depth < 16) {
+      if (live.has(pid)) return true;
+      pid = ppidOf.get(pid);
+      depth++;
+    }
+    return false;
+  });
 }
 
 // ── Leaderboard stats ─────────────────────────────────────

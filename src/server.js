@@ -3,6 +3,8 @@ const http = require('http');
 const https = require('https');
 const { URL } = require('url');
 const { exec, execFile, execFileSync } = require('child_process');
+const { promisify } = require('util');
+const execFileAsync = promisify(execFile);
 const dataApi = require('./data');
 const { loadSessions, loadSessionDetail, deleteSession, getGitCommits, exportSessionMarkdown, getSessionPreview, searchFullText, getActiveSessions, getSessionReplay, getCostAnalytics, computeSessionCost, getProjectGitInfo, getLeaderboardStats } = dataApi;
 const { detectTerminals, openInTerminal, focusTerminalByPid, isWSL } = require('./terminals');
@@ -26,6 +28,74 @@ const { repoRefreshManager } = require('./repo-refresh');
 const { handleRepoRefreshRoute } = require('./repo-refresh-routes');
 
 const SAFE_SESSION_ID = /^[A-Za-z0-9._-]{1,128}$/;
+
+// The agent command currently running inside a pane's shell, for session
+// restore — so a hand-typed `HTTPS_PROXY=… claude …` comes back, not just the
+// folder. We look for a recognized agent among the shell's child processes,
+// take its command line, and rebuild any proxy env prefix from the child's
+// environment (the env isn't part of the argv). Returns '' when the pane is
+// just a plain shell. pid is a validated positive integer.
+const _AGENT_CMD_RE = /(^|[\/\s])(claude|codex|opencode|cursor-agent|kiro|kilo|qwen|gemini|aider|pi|omp)(\s|$)/;
+const _PROXY_ENV_KEYS = ['HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY', 'https_proxy', 'http_proxy', 'all_proxy'];
+// ASYNC on purpose: these run pgrep/ps/lsof, which can each take up to a couple
+// of seconds. The old synchronous execFileSync versions ran on the single Node
+// event loop — and because /api/terminal/cwd polls them every few seconds for
+// every pane, the loop stalled in bursts, freezing terminal echo/input. Using
+// async execFile keeps the subprocesses OFF the loop so the pty keeps flowing.
+async function resolvePaneCommand(shellPid) {
+  let kids = [];
+  try {
+    const { stdout } = await execFileAsync('pgrep', ['-P', String(shellPid)], { encoding: 'utf8', timeout: 2000 });
+    kids = stdout.trim().split('\n').map(s => s.trim()).filter(Boolean);
+  } catch (_e) { return ''; }
+  for (const kid of kids) {
+    if (!/^\d+$/.test(kid)) continue;
+    let cmd = '';
+    try { cmd = (await execFileAsync('ps', ['-o', 'command=', '-p', kid], { encoding: 'utf8', timeout: 2000 })).stdout.trim(); }
+    catch (_e) { continue; }
+    if (!cmd || !_AGENT_CMD_RE.test(cmd)) continue;
+    // Rebuild a proxy env prefix (values contain no spaces, so \S+ is safe).
+    let prefix = '';
+    try {
+      const eww = (await execFileAsync('ps', ['eww', '-o', 'command=', '-p', kid], { encoding: 'utf8', timeout: 2000 })).stdout;
+      const seen = new Set();
+      for (const key of _PROXY_ENV_KEYS) {
+        const up = key.toUpperCase();
+        if (seen.has(up)) continue;
+        const m = eww.match(new RegExp('(?:^|\\s)' + key + '=(\\S+)'));
+        if (m) { prefix += up + "='" + m[1] + "' "; seen.add(up); }
+      }
+    } catch (_e) { /* env unreadable — return bare command */ }
+    return prefix + cmd;
+  }
+  return '';
+}
+
+// Current working directory of a running process, for terminal session restore.
+// Linux: read /proc/<pid>/cwd (fast, no spawn). macOS/other: `lsof -a -p <pid>
+// -d cwd -Fn` (async — lsof is slow, see resolvePaneCommand). Returns '' on any
+// failure. pid is a validated positive integer.
+async function resolveProcessCwd(pid) {
+  if (process.platform === 'linux') {
+    try {
+      const t = fs.readlinkSync(`/proc/${pid}/cwd`);
+      if (t && t.startsWith('/')) return t;
+    } catch (_e) { /* fall through to lsof */ }
+  }
+  try {
+    const { stdout: out } = await execFileAsync('lsof', ['-a', '-p', String(pid), '-d', 'cwd', '-Fn'], {
+      encoding: 'utf8', timeout: 2000,
+    });
+    const m = out.match(/^n(\/[^\n]*)/m);
+    if (m) {
+      let p = m[1].trim();
+      const errIdx = p.indexOf(' (');
+      if (errIdx !== -1) p = p.slice(0, errIdx).trim();
+      if (p && p.startsWith('/') && !p.startsWith('/proc/')) return p;
+    }
+  } catch (_e) { /* process gone or lsof unavailable */ }
+  return '';
+}
 
 function getValidatedPiResumeTarget(sessionId, resumeTarget, project) {
   if (typeof sessionId !== 'string' || !SAFE_SESSION_ID.test(sessionId)) return '';
@@ -158,6 +228,8 @@ function startServer(host, port, openBrowser = true) {
       const VENDOR_FILES = {
         'xterm.js': 'application/javascript; charset=utf-8',
         'addon-fit.js': 'application/javascript; charset=utf-8',
+        'addon-canvas.js': 'application/javascript; charset=utf-8',
+        'addon-webgl.js': 'application/javascript; charset=utf-8',
         'xterm.css': 'text/css; charset=utf-8',
       };
       const name = pathname.slice('/vendor/'.length);
@@ -182,6 +254,26 @@ function startServer(host, port, openBrowser = true) {
       // what gates the WS shell — see terminal.verifyUpgradeAuth.
       const status = terminal.terminalStatus();
       jsonLog(res, { available: status.available, error: status.error, hint: status.hint, token: terminal.getToken() });
+    }
+
+    // ── Live cwd of terminal panes (so session restore follows `cd`) ──
+    // Given the pane shells' pids, return each one's CURRENT working directory
+    // by reading the process (macOS: lsof; Linux: /proc). Lets the workspace
+    // persist where a pane actually IS, not just where it opened.
+    else if (req.method === 'GET' && pathname === '/api/terminal/cwd') {
+      const pids = (parsed.searchParams.get('pids') || '')
+        .split(',').map(s => parseInt(s, 10))
+        .filter(n => Number.isInteger(n) && n > 0).slice(0, 32);
+      // Resolve every pane concurrently and OFF the event loop (async execFile),
+      // so this poll never stalls terminal I/O even when lsof/ps are slow.
+      Promise.all(pids.map(async (pid) => {
+        const [cwd, cmd] = await Promise.all([resolveProcessCwd(pid), resolvePaneCommand(pid)]);
+        return { pid, cwd, cmd };
+      })).then((results) => {
+        const out = {};
+        for (const r of results) { if (r.cwd || r.cmd) out[r.pid] = { cwd: r.cwd, cmd: r.cmd }; }
+        json(res, out);
+      }).catch(() => json(res, {}));
     }
 
     // ── Saved Workspace commands (may contain proxy secrets; stored 0600) ──
@@ -463,20 +555,23 @@ function startServer(host, port, openBrowser = true) {
 
     // ── Active sessions ─────────────────────
     else if (req.method === 'GET' && pathname === '/api/active') {
-      const active = getActiveSessions();
-      // Log only when active set changes
-      const activeKey = active.map(a => a.pid + ':' + a.status).sort().join(',');
-      if (activeKey !== startServer._lastActiveKey) {
-        startServer._lastActiveKey = activeKey;
-        if (active.length > 0) {
-          for (const a of active) {
-            log('ACTIVE', `pid=${a.pid} ${a.kind}/${a.status} cpu=${a.cpu}% cwd=${a.cwd || '?'} session=${a.sessionId ? a.sessionId.slice(0,8) + '...' : 'none'} source=${a._sessionSource || 'none'}`);
+      // getActiveSessions is async (runs ps/lsof off the event loop) so this
+      // 1-second poll never stalls terminal I/O.
+      getActiveSessions().then((active) => {
+        // Log only when active set changes
+        const activeKey = active.map(a => a.pid + ':' + a.status).sort().join(',');
+        if (activeKey !== startServer._lastActiveKey) {
+          startServer._lastActiveKey = activeKey;
+          if (active.length > 0) {
+            for (const a of active) {
+              log('ACTIVE', `pid=${a.pid} ${a.kind}/${a.status} cpu=${a.cpu}% cwd=${a.cwd || '?'} session=${a.sessionId ? a.sessionId.slice(0,8) + '...' : 'none'} source=${a._sessionSource || 'none'}`);
+            }
+          } else if (startServer._lastActiveKey !== '') {
+            log('ACTIVE', 'no running agents');
           }
-        } else if (startServer._lastActiveKey !== '') {
-          log('ACTIVE', 'no running agents');
         }
-      }
-      json(res, active);
+        json(res, active);
+      }).catch(() => json(res, []));
     }
 
     // ── Open in IDE ────────────────────────
@@ -590,7 +685,10 @@ function startServer(host, port, openBrowser = true) {
       const to = parsed.searchParams.get('to');
       if (from) sessions = sessions.filter(s => s.date >= from);
       if (to) sessions = sessions.filter(s => s.date <= to);
-      const data = getCostAnalytics(sessions);
+      // Unfiltered (Overview/startup) requests may serve a stale result while
+      // recomputing in the background — this is the hot cold-start path. Date-
+      // filtered requests must be exact.
+      const data = getCostAnalytics(sessions, { allowStale: !from && !to });
       json(res, data);
     }
 
@@ -876,11 +974,15 @@ function startServer(host, port, openBrowser = true) {
     else if (req.method === 'GET' && pathname === '/api/version') {
       const pkg = require('../package.json');
       const current = pkg.version;
+      // `dev` marks a from-source run (NODE_ENV=development) so the UI can show a
+      // DEV badge — an at-a-glance signal that you're looking at the live-editing
+      // build (your uncommitted changes), NOT the installed DMG.
+      const dev = process.env.NODE_ENV === 'development';
       // Fetch latest from npm registry
       fetchLatestVersion(pkg.name).then(latest => {
-        json(res, { current, latest, updateAvailable: latest && latest !== current && isNewer(latest, current) });
+        json(res, { current, latest, updateAvailable: latest && latest !== current && isNewer(latest, current), dev });
       }).catch(() => {
-        json(res, { current, latest: null, updateAvailable: false });
+        json(res, { current, latest: null, updateAvailable: false, dev });
       });
     }
 
@@ -962,6 +1064,13 @@ function startServer(host, port, openBrowser = true) {
     }
     console.log('  \x1b[2mPress Ctrl+C to stop\x1b[0m');
     console.log('');
+
+    // Warm the optional native terminal module (@lydell/node-pty) in the
+    // background. The require() blocks the loop briefly (~1s) the first time, but
+    // running it here overlaps the Electron window/page-load dead time — before
+    // the frontend ever asks for /api/terminal/status — so the terminal-first
+    // landing opens its first pane instantly instead of paying the load then.
+    setImmediate(() => { try { terminal.isTerminalAvailable(); } catch (_e) {} });
 
     if (openBrowser) {
       if (process.platform === 'darwin') {

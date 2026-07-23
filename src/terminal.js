@@ -17,9 +17,42 @@
 
 const crypto = require('crypto');
 const os = require('os');
+const fs = require('fs');
+const ptyRegistry = require('./pty-registry');
 
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const WS_PATH = '/ws/terminal';
+
+// Env vars that must NOT leak from codbash's own process into a pane's shell.
+// Two families:
+//
+// 1. Agent-session markers. If codbash is launched from within a Claude/Codex
+//    session (the dev server, or a shell an agent spawned), these leak through
+//    `process.env`. A `claude` started in the pane would then see e.g.
+//    CLAUDE_CODE_SESSION_ID and behave as a NESTED/child session — its
+//    conversation gets filed under the parent's `subagents/` dir instead of
+//    becoming a normal top-level dialog. That's the "my dialog vanished / went
+//    to a hidden folder" bug.
+//
+// 2. npm's per-run vars. When the server is started via `npm start` (dev) or an
+//    `npx` wrapper, npm injects `npm_config_*`/`npm_package_*`/… into the
+//    environment. `npm_config_prefix` in particular makes nvm refuse to load in
+//    the pane's shell ("nvm is not compatible with the npm_config_prefix
+//    environment variable"). These are npm-invocation scratch vars, never meant
+//    to outlive the npm command, so a fresh shell must not inherit them.
+//
+// We KEEP user CONFIG (CLAUDE_CONFIG_DIR, ANTHROPIC_*) — that legitimately
+// controls how the agent runs.
+const AGENT_SESSION_ENV_RE = /^(CLAUDE_CODE_|CLAUDECODE$|CLAUDE_PID$|CLAUDE_EFFORT$|CLAUDE_REMOTE_URL$|CODEX_SESSION|CODEX_SANDBOX|OPENCODE_SESSION|CURSOR_SESSION|CURSOR_AGENT|GEMINI_CLI_SESSION|QWEN_SESSION|npm_config_|npm_package_|npm_lifecycle_|npm_command$|npm_execpath$|npm_node_execpath$)/;
+function sanitizedPtyEnv() {
+  const src = process.env;
+  const out = {};
+  for (const k of Object.keys(src)) {
+    if (AGENT_SESSION_ENV_RE.test(k)) continue;
+    out[k] = src[k];
+  }
+  return out;
+}
 
 // ── Lazy node-pty loader ────────────────────────────────────────────────────
 let _pty = null;
@@ -168,20 +201,37 @@ function sendClose(socket) {
   try { socket.write(encodeFrame(Buffer.alloc(0), 0x8)); } catch (_e) {}
 }
 
-// Validate/normalize the requested cwd. `isSafeCwd(dir)` is injected by the
-// server so we reuse the dashboard's known-git-roots trust boundary.
+// Resolve the requested cwd for the pty. Returns { cwd, requested, fellBack }.
+//
+// IMPORTANT: this cwd is handed to pty.spawn's `cwd` option, which passes it
+// straight to the OS — it never goes through a shell. So shell-metacharacter
+// restrictions (the `isSafeCwd`/isSafeLaunchPath char check, meant for building
+// `cd "..." && …` command strings elsewhere) MUST NOT gate it here: doing so
+// silently rewrote legitimate folders — anything containing ()[]{}&'"… — to
+// $HOME, which then misfiled the agent's conversation under the wrong project
+// (Claude stores history keyed by cwd). That was the "my dialog disappeared from
+// this folder" bug. We honor any path that is a real, existing directory and is
+// not a symlink (the one check worth keeping — a symlink could smuggle a path
+// out of the user's tree). Only a genuinely unusable path falls back to $HOME,
+// and we flag that so the client can warn instead of silently misfiling.
 function resolveCwd(url, isSafeCwd) {
   const requested = url.searchParams.get('cwd');
-  // Expand a leading ~ before the safety check AND before handing the path to
-  // pty.spawn — a shell won't expand ~ in a cwd, so a raw "~/foo" spawns ENOENT.
-  const expanded = !requested ? requested
-    : requested === '~' ? os.homedir()
+  if (!requested) return { cwd: os.homedir(), requested: null, fellBack: false };
+  // Expand a leading ~ — a shell won't expand it in a raw cwd (spawns ENOENT).
+  const expanded = requested === '~' ? os.homedir()
     : requested.startsWith('~/') ? os.homedir() + requested.slice(1)
     : requested;
-  if (expanded && typeof isSafeCwd === 'function' && isSafeCwd(expanded)) {
-    return expanded;
+  try {
+    const lst = fs.lstatSync(expanded);
+    if (lst.isDirectory() && !lst.isSymbolicLink()) {
+      return { cwd: expanded, requested: expanded, fellBack: false };
+    }
+  } catch (_e) { /* doesn't exist / not accessible → fall through */ }
+  // Belt-and-braces: also accept anything the server's stricter check blesses.
+  if (typeof isSafeCwd === 'function' && isSafeCwd(expanded)) {
+    return { cwd: expanded, requested: expanded, fellBack: false };
   }
-  return os.homedir();
+  return { cwd: os.homedir(), requested: expanded, fellBack: true };
 }
 
 // Attach the upgrade handler + spawn a pty per connection.
@@ -229,7 +279,8 @@ function handleUpgrade(req, socket, head, opts) {
     '\r\n'
   );
 
-  const cwd = resolveCwd(url, opts.isSafeCwd);
+  const resolved = resolveCwd(url, opts.isSafeCwd);
+  const cwd = resolved.cwd;
   const shell = process.env.SHELL || (process.platform === 'win32' ? 'powershell.exe' : 'bash');
   const cols = parseInt(url.searchParams.get('cols'), 10) || 80;
   const rows = parseInt(url.searchParams.get('rows'), 10) || 24;
@@ -241,7 +292,9 @@ function handleUpgrade(req, socket, head, opts) {
       cols: cols,
       rows: rows,
       cwd: cwd,
-      env: process.env
+      // Clean, top-level env — strip inherited agent-session markers so a
+      // `claude`/`codex` launched here starts a normal dialog, not a nested one.
+      env: sanitizedPtyEnv()
     });
   } catch (err) {
     sendText(socket, { t: 'error', message: 'Failed to start shell: ' + (err && err.message) });
@@ -250,8 +303,18 @@ function handleUpgrade(req, socket, head, opts) {
     return;
   }
 
+  // Register this pty so RUNNING AGENTS can scope to codbash-launched agents
+  // (agents whose process tree descends from a codbash terminal pane).
+  ptyRegistry.add(term.pid);
+
+  if (resolved.fellBack) {
+    log('TERM', 'requested cwd unusable (' + resolved.requested + ') — fell back to ' + cwd);
+  }
   log('TERM', 'pty spawned pid=' + term.pid + ' cwd=' + cwd);
-  sendText(socket, { t: 'ready', pid: term.pid, cwd: cwd, shell: shell });
+  sendText(socket, {
+    t: 'ready', pid: term.pid, cwd: cwd, shell: shell,
+    requestedCwd: resolved.requested, cwdFellBack: !!resolved.fellBack,
+  });
 
   // pty -> client (raw bytes as binary frames)
   const onData = term.onData(function (data) {
@@ -267,6 +330,7 @@ function handleUpgrade(req, socket, head, opts) {
   function cleanup() {
     if (closed) return;
     closed = true;
+    ptyRegistry.remove(term.pid);
     try { onData.dispose(); } catch (_e) {}
     try { onExit.dispose(); } catch (_e) {}
     try { term.kill(); } catch (_e) {}
@@ -297,6 +361,12 @@ function handleUpgrade(req, socket, head, opts) {
         if (c > 0 && r > 0) { try { term.resize(c, r); } catch (_e) {} }
       } else if (msg && msg.t === 'input' && typeof msg.data === 'string') {
         try { term.write(msg.data); } catch (_e) {}
+      } else if (msg && msg.t === 'pause') {
+        // Flow control: the client is behind on parsing output — stop reading
+        // from the pty so a burst can't flood the browser and freeze typing.
+        try { term.pause(); } catch (_e) {}
+      } else if (msg && msg.t === 'resume') {
+        try { term.resume(); } catch (_e) {}
       }
     }
   });
@@ -317,5 +387,8 @@ module.exports = {
   // exported for unit tests
   encodeFrame: encodeFrame,
   createFrameDecoder: createFrameDecoder,
-  tokensMatch: tokensMatch
+  tokensMatch: tokensMatch,
+  resolveCwd: resolveCwd,
+  sanitizedPtyEnv: sanitizedPtyEnv,
+  AGENT_SESSION_ENV_RE: AGENT_SESSION_ENV_RE
 };

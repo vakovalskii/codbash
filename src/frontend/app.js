@@ -3586,6 +3586,16 @@ async function checkForUpdates() {
 
     if (badge) {
       badge.textContent = 'v' + data.current;
+      // DEV badge: when running from source (NODE_ENV=development), flag it so
+      // it's obvious you're looking at the live-editing build with the latest
+      // changes — not the installed DMG. Removed automatically in a real build.
+      if (data.dev) {
+        badge.textContent = 'v' + data.current + ' · DEV';
+        badge.classList.add('dev-build');
+        badge.title = 'Running from source — live changes (not the installed app)';
+      } else {
+        badge.classList.remove('dev-build');
+      }
     }
 
     // Show "what's new" if version changed since last visit
@@ -4508,6 +4518,14 @@ function _onProjectsHashChange() {
   setInterval(checkForUpdates, 10000); // check every 10s
   setInterval(loadSessions, 60000);    // refresh sessions + invalidate analytics cache every 60s
   startActivePolling();
+
+  // Terminal-first landing (Chrome-like): if a previous workspace session was
+  // saved, open straight into Terminal and restore its tabs/panes instead of
+  // the Overview dashboard. Read localStorage directly so this doesn't depend on
+  // workspace.js having initialized yet. First run (no session) keeps Overview.
+  try {
+    if (localStorage.getItem('codbash-workspace-session')) currentView = 'workspace';
+  } catch (e) { /* localStorage unavailable */ }
 
   // Apply saved theme
   var savedTheme = localStorage.getItem('codedash-theme') || 'dark';
