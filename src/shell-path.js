@@ -17,11 +17,29 @@
 // Opt out entirely with `CODBASH_NO_PATH_REPAIR=1`. Set `CODBASH_DEBUG=1` to
 // log the skip/augment decisions to stderr.
 
-const { execFileSync } = require('child_process');
+const { execFileSync, execFile } = require('child_process');
 const os = require('os');
 const path = require('path');
+const fs = require('fs');
 
 let _done = false;
+
+// Disk cache for the login-shell PATH probe. The probe spawns an interactive
+// login shell (~1–1.5s, running the user's whole rc chain) and, before this
+// cache, ran on EVERY app launch — a large slice of cold-start latency. We now
+// remember the captured PATH and reuse it instantly on subsequent launches,
+// refreshing it in the background so a newly-installed tool is picked up next
+// time. Only the very first launch (empty cache) pays the synchronous probe.
+const PATH_CACHE_FILE = path.join(os.homedir(), '.codedash', 'path-cache.json');
+const PATH_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // refresh in background once/day
+
+// The interactive-login probe script, shared by the sync capture and the async
+// background refresh so both read PATH identically.
+const PROBE_SCRIPT = 'printf "\\1CBP\\1%s\\1CBE\\1" "$PATH"';
+function _extractProbePath(raw) {
+  const m = /\x01CBP\x01([\s\S]*?)\x01CBE\x01/.exec(raw || '');
+  return m ? m[1] : '';
+}
 
 function debugEnabled() {
   return process.env.CODBASH_DEBUG === '1' || process.env.CODBASH_DEBUG === 'true';
@@ -58,7 +76,7 @@ function hasUserBinPaths(p, home) {
   });
 }
 
-function captureLoginShellPath() {
+function _resolveShell() {
   let shell = process.env.SHELL || '';
   // $SHELL is attacker-controllable only by someone who already has env-setting
   // (= code-execution) capability in this process, so this is a robustness
@@ -66,25 +84,21 @@ function captureLoginShellPath() {
   // to the macOS default login shell (zsh since Catalina; this feature is
   // macOS-focused — cf. terminal.js which defaults to bash for its own path).
   if (!shell || !path.isAbsolute(shell)) shell = '/bin/zsh';
+  return shell;
+}
 
-  // Sentinels (SOH-delimited) let us pull PATH out of stdout even when rc files
-  // print banners / shell-integration escape sequences on startup. NOTE: this
-  // guards against *accidental* banner noise only — it is NOT a trust boundary
-  // against a malicious rc file, which already controls $PATH directly.
-  const script = 'printf "\\1CBP\\1%s\\1CBE\\1" "$PATH"';
-
-  // Separate flags (not a bundled `-ilc`) for portability across shells with
-  // stricter getopt parsing. `-i -l` sources both login (.zprofile/.zlogin) and
-  // interactive (.zshrc/.bashrc) config, so PATH matches a real terminal no
-  // matter which file the user's exports live in. Cost: this runs the user's rc
-  // chain once per app launch — an accepted tradeoff for correct detection.
-  // killSignal is SIGKILL because a shell/rc that traps or ignores SIGTERM
-  // could otherwise outlive the timeout; SIGKILL is still best-effort (a
-  // process blocked in an uninterruptible syscall cannot be reaped until it
-  // unblocks), so the 4s bound is a strong guideline, not a hard guarantee.
+// Synchronous interactive-login probe. Separate flags (not a bundled `-ilc`)
+// for portability across shells with stricter getopt parsing. `-i -l` sources
+// both login (.zprofile/.zlogin) and interactive (.zshrc/.bashrc) config, so
+// PATH matches a real terminal no matter which file the user's exports live in.
+// killSignal is SIGKILL because a shell/rc that traps or ignores SIGTERM could
+// otherwise outlive the timeout; SIGKILL is still best-effort (a process blocked
+// in an uninterruptible syscall cannot be reaped until it unblocks), so the 4s
+// bound is a strong guideline, not a hard guarantee.
+function _probeSync(shell) {
   let raw;
   try {
-    raw = execFileSync(shell, ['-i', '-l', '-c', script], {
+    raw = execFileSync(shell, ['-i', '-l', '-c', PROBE_SCRIPT], {
       encoding: 'utf8',
       timeout: 4000,
       killSignal: 'SIGKILL',
@@ -97,8 +111,67 @@ function captureLoginShellPath() {
     console.error('[codbash] PATH repair: login-shell probe failed: ' + (err && err.message ? err.message : String(err)));
     return '';
   }
-  const m = /\x01CBP\x01([\s\S]*?)\x01CBE\x01/.exec(raw);
-  return m ? m[1] : '';
+  return _extractProbePath(raw);
+}
+
+function _readPathCache() {
+  try {
+    const c = JSON.parse(fs.readFileSync(PATH_CACHE_FILE, 'utf8'));
+    if (c && typeof c.path === 'string' && c.path) return c;
+  } catch (_) {}
+  return null;
+}
+
+function _writePathCache(shell, capturedPath, stamp) {
+  try {
+    fs.mkdirSync(path.dirname(PATH_CACHE_FILE), { recursive: true });
+    fs.writeFileSync(PATH_CACHE_FILE, JSON.stringify({ shell: shell, path: capturedPath, ts: stamp }));
+  } catch (_) {}
+}
+
+// Re-probe the login shell off the critical path and refresh the cache for the
+// NEXT launch. Never touches this run's process.env (already repaired) and never
+// blocks; failures are swallowed (the stale cache stays valid).
+let _bgRefreshRunning = false;
+function _backgroundRefreshPath(shell) {
+  if (_bgRefreshRunning) return;
+  _bgRefreshRunning = true;
+  try {
+    execFile(shell, ['-i', '-l', '-c', PROBE_SCRIPT], {
+      encoding: 'utf8', timeout: 8000, killSignal: 'SIGKILL',
+    }, (err, stdout) => {
+      _bgRefreshRunning = false;
+      if (err) return;
+      const p = _extractProbePath(stdout);
+      if (p) { _writePathCache(shell, p, monoNow()); debug('PATH cache refreshed in background'); }
+    });
+  } catch (_) { _bgRefreshRunning = false; }
+}
+
+// Wall-clock stamp for cache freshness. Kept in one place so tests can reason
+// about it; Date.now() is fine here (not a resume-sensitive workflow script).
+function monoNow() { return Date.now(); }
+
+// Return the login-shell PATH, served from a disk cache when possible so only
+// the first-ever launch pays the ~1s synchronous shell spawn. A cache hit
+// schedules a background refresh when older than the TTL.
+function captureLoginShellPath() {
+  const shell = _resolveShell();
+
+  const cached = _readPathCache();
+  if (cached && cached.shell === shell) {
+    // Cheap: reuse instantly, refresh in the background if it's gone stale.
+    if (!cached.ts || (monoNow() - cached.ts) > PATH_CACHE_TTL_MS) {
+      _backgroundRefreshPath(shell);
+    }
+    debug('PATH repair: served from disk cache');
+    return cached.path;
+  }
+
+  // Cold cache (first launch, or $SHELL changed): probe synchronously, persist.
+  const captured = _probeSync(shell);
+  if (captured) _writePathCache(shell, captured, monoNow());
+  return captured;
 }
 
 // Merge the login-shell PATH into process.env.PATH. Existing entries keep

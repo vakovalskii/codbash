@@ -20,6 +20,7 @@ var _WS_ICON_1 = '<svg ' + _WS_SVG + '><rect x="2" y="3" width="12" height="10" 
 var _WS_ICON_2 = '<svg ' + _WS_SVG + '><rect x="2" y="3" width="5" height="10" rx="1"/><rect x="9" y="3" width="5" height="10" rx="1"/></svg>';
 var _WS_ICON_3 = '<svg ' + _WS_SVG + '><rect x="1.5" y="3" width="3.6" height="10" rx="1"/><rect x="6.2" y="3" width="3.6" height="10" rx="1"/><rect x="10.9" y="3" width="3.6" height="10" rx="1"/></svg>';
 var _WS_ICON_4 = '<svg ' + _WS_SVG + '><rect x="2" y="2.5" width="5" height="5" rx="1"/><rect x="9" y="2.5" width="5" height="5" rx="1"/><rect x="2" y="8.5" width="5" height="5" rx="1"/><rect x="9" y="8.5" width="5" height="5" rx="1"/></svg>';
+var _WS_ICON_GEAR = '<svg ' + _WS_SVG + '><circle cx="8" cy="8" r="2.4"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4"/></svg>';
 
 var WORKSPACE_AGENTS = [
   { label: 'Claude Code', cmd: 'claude' },
@@ -55,6 +56,26 @@ function _wsSetFocusedPane(id) {
 // Account-limit cues we can spot in agent output (heuristic, extend freely).
 var WS_LIMIT_RE = /rate.?limit|usage limit|too many requests|\b429\b|quota (?:exceeded|reached)|limit reached|overloaded|insufficient.*(?:quota|credit)/i;
 var _wsStatusTimer = null;
+
+// Output flow-control watermarks. A burst of agent output (a full-screen TUI
+// repaint, `cat`-ing a big file) can pile up faster than xterm parses it on the
+// main thread — which is what makes TYPING freeze. When unparsed bytes exceed
+// HIGH we ask the server to pause the pty; when they drain below LOW we resume.
+var WS_HIGH_WATER = 1 << 20;   // 1 MB in flight → pause
+var WS_LOW_WATER = 1 << 18;    // 256 KB → resume
+
+// A shell line that LAUNCHES a CLI agent — the first word (after any leading
+// `VAR=value` env assignments, which may hold a proxy) is a known agent binary.
+// We capture such lines as the user types them (see _wsConnectPane) so a window
+// remembers the exact command — incl. `HTTPS_PROXY=… claude` — that macOS `ps`
+// can't recover from a running process (it won't expose another proc's env).
+var _WS_ENV_PREFIX_RE = /^([A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|"[^"]*"|\S+)\s+)+/;
+var _WS_AGENT_WORD_RE = /^(claude|codex|opencode|cursor-agent|kiro|kiro-cli|kilo|qwen|gemini|aider|pi|omp|copilot)$/i;
+function _wsIsAgentLine(line) {
+  var s = String(line || '').trim().replace(_WS_ENV_PREFIX_RE, '');
+  var w = s.split(/\s+/)[0] || '';
+  return _WS_AGENT_WORD_RE.test(w);
+}
 
 function _wsNow() { try { return performance.now(); } catch (e) { return 0; } }
 
@@ -98,6 +119,14 @@ var _wsStatusSig = '';
 function _wsUpdateStatusBar() {
   var bar = _wsEnsureStatusBar();
   if (!bar) return;
+  // Inside the Workspace the tab bar already shows every terminal, so this
+  // top strip is pure duplication that eats vertical space — hide it here and
+  // keep it only as a "jump back to a running agent" affordance on other views.
+  if (typeof currentView !== 'undefined' && currentView === 'workspace') {
+    if (bar.style.display !== 'none') { bar.style.display = 'none'; bar.innerHTML = ''; }
+    _wsStatusSig = '';   // force a rebuild when we later show it on another view
+    return;
+  }
   var items = _wsAllPanes().filter(function (x) { return x.pane.sock || x.pane.exited; });
   if (!items.length) {
     if (_wsStatusSig !== '') { _wsStatusSig = ''; bar.style.display = 'none'; bar.innerHTML = ''; }
@@ -138,11 +167,93 @@ function _wsUpdateStatusBar() {
   bar.style.display = 'flex';
 }
 
+// ── Session restore (Chrome-like) ────────────────────────────────────────────
+// Persist the open tabs/panes so a relaunch reopens the same workspace. Stored
+// as the capture-layout shape ({tabs:[{name,panes:[{cmd,prefill,cwd}]}]}).
+var _WS_SESSION_KEY = 'codbash-workspace-session';
+var _wsLastSessionSig = '';
+
+function _wsSaveSession() {
+  try {
+    var snap = _wsCaptureLayout();
+    // Don't persist a lone empty pane — that's just the default blank state.
+    var meaningful = snap.tabs.some(function (t) {
+      return t.panes.some(function (p) { return p.cmd || p.prefill || p.cwd || p.enteredCmd; });
+    }) || snap.tabs.length > 1 || (snap.tabs[0] && snap.tabs[0].panes.length > 1);
+    var sig = meaningful ? JSON.stringify(snap) : '';
+    if (sig === _wsLastSessionSig) return;
+    _wsLastSessionSig = sig;
+    if (sig) localStorage.setItem(_WS_SESSION_KEY, sig);
+    else localStorage.removeItem(_WS_SESSION_KEY);
+  } catch (e) { /* localStorage unavailable — non-fatal */ }
+}
+
+function _wsLoadSession() {
+  try {
+    var s = JSON.parse(localStorage.getItem(_WS_SESSION_KEY));
+    return (s && s.tabs && s.tabs.length) ? s : null;
+  } catch (e) { return null; }
+}
+
+// Does a restorable workspace session exist? Used to land straight in Terminal.
+function wsHasSavedSession() { return !!_wsLoadSession(); }
+
+// Rebuild _wsTabs from a saved session. The agent command a window launched
+// comes back as a RESTORE OFFER (a banner in the pane with a "Restore" button),
+// never auto-run — so a relaunch reopens the same folder and lets you resume the
+// agent with one click, without silently re-spawning agents / burning tokens.
+// enteredCmd (the exact typed line, incl. a proxy prefix) is preferred over the
+// ps-detected command, which on macOS can't include env vars.
+function _wsRestoreTabsFromSession(sess) {
+  _wsTabs = sess.tabs.map(function (t, ti) {
+    var panes = (t.panes && t.panes.length ? t.panes : [{}])
+      .slice(0, MAX_WS_PANES)
+      .map(function (p) {
+        var restoreCmd = (p && (p.cmd || p.enteredCmd || p.detectedCmd || p.prefill)) || '';
+        return { id: 'p' + (++_wsPaneSeq), cmd: null, prefill: null, restoreCmd: restoreCmd || null, wantCwd: (p && p.cwd) || null };
+      });
+    return { id: 't' + (++_wsTabSeq), name: t.name || ('Tab ' + (ti + 1)), panes: panes,
+             cols: Array.isArray(t.cols) ? t.cols.slice() : null, rows: Array.isArray(t.rows) ? t.rows.slice() : null };
+  });
+  _wsActiveTabId = _wsTabs[0].id;
+}
+
+// Follow each live pane's real working directory (updated as the user `cd`s) by
+// asking the server for the shell pids' current cwd. Runs on a slow cadence —
+// the result feeds _wsSaveSession so a restored pane reopens where it actually
+// was, not just where it first opened.
+var _wsCwdTick = 0;
+function _wsRefreshCwds() {
+  var byPid = {}, pids = [];
+  _wsTabs.forEach(function (t) {
+    t.panes.forEach(function (p) {
+      if (p.pid && _wsPaneLive(p)) { pids.push(p.pid); (byPid[p.pid] = byPid[p.pid] || []).push(p); }
+    });
+  });
+  if (!pids.length) return;
+  fetch('/api/terminal/cwd?pids=' + pids.join(','))
+    .then(function (r) { return r.json(); })
+    .then(function (map) {
+      Object.keys(map || {}).forEach(function (pid) {
+        var info = map[pid] || {};
+        (byPid[pid] || []).forEach(function (p) {
+          if (info.cwd) p.cwd = info.cwd;
+          // The live-running agent command (incl. a rebuilt proxy prefix). Kept
+          // separate from p.cmd (UI-launched) so hand-typed agents also restore.
+          p.detectedCmd = info.cmd || '';
+        });
+      });
+    })
+    .catch(function () {});
+}
+
 function _wsStartStatusLoop() {
   if (_wsStatusTimer) return;
   _wsStatusTimer = setInterval(function () {
     _wsUpdateStatusBar();
     _wsRenderRunningTree();
+    if ((++_wsCwdTick % 4) === 0) _wsRefreshCwds();  // ~every 4s: follow `cd`
+    _wsSaveSession();   // cheap: only writes localStorage when the layout changes
     // Keep the Overview landing's cards live too.
     if (typeof _ovRefreshIfCurrent === 'function') _ovRefreshIfCurrent();
   }, 1000);
@@ -170,9 +281,16 @@ function _wsRunningByProject() {
   Object.keys(map).forEach(function (k) {
     var a = map[k];
     var cwd = (a && a.cwd) || '';
-    if (!cwd || /^(\/Users\/[^/]+|\/home\/[^/]+|\/root)\/?$/.test(cwd)) return;
+    // Only skip entries with no cwd (can't group or jump). Home-dir agents used
+    // to be skipped as noise, but RUNNING AGENTS is now scoped server-side to
+    // codbash-launched agents, so a home-dir agent is legitimate — show it.
+    if (!cwd) return;
+    var isHome = /^(\/Users\/[^/]+|\/home\/[^/]+|\/root)\/?$/.test(cwd);
     var key = cwd; // group by full path so two same-named folders don't merge
-    if (!groups[key]) { groups[key] = { name: _wsProjectBasename(cwd), cwd: cwd, items: [] }; order.push(key); }
+    if (!groups[key]) {
+      groups[key] = { name: isHome ? '~' : _wsProjectBasename(cwd), cwd: cwd, items: [] };
+      order.push(key);
+    }
     groups[key].items.push(a);
   });
   return order.map(function (k) { return groups[k]; });
@@ -311,6 +429,13 @@ function _loadWorkspaceVendor() {
     }
     loadScript('/vendor/xterm.js')
       .then(function () { return loadScript('/vendor/addon-fit.js'); })
+      // GPU/canvas renderer addons — sharpen glyph rendering to native-terminal
+      // quality (the default DOM renderer leaves hairline gaps between block
+      // glyphs). WebGL is preferred: unlike the canvas renderer it doesn't show
+      // HiDPI horizontal banding inside Electron. Both are optional — a load
+      // failure must not block the terminal, so we swallow errors and fall back.
+      .then(function () { return loadScript('/vendor/addon-webgl.js').catch(function () {}); })
+      .then(function () { return loadScript('/vendor/addon-canvas.js').catch(function () {}); })
       .then(function () { _wsVendorLoaded = true; resolve(); })
       .catch(reject);
   });
@@ -396,14 +521,40 @@ function _wsConnectPane(pane) {
   var host = document.getElementById('wsTermHost-' + pane.id);
   if (!host) return;
 
+  var _tp = _wsTermPrefs;
   var term = new Terminal({
-    cursorBlink: true, fontSize: 13,
-    fontFamily: 'Menlo, Monaco, "Courier New", monospace',
-    theme: { background: '#08090c' }, scrollback: 5000, allowProposedApi: true
+    cursorBlink: _tp.cursorBlink, cursorStyle: _tp.cursorStyle,
+    fontSize: _tp.fontSize, fontFamily: _tp.fontFamily,
+    theme: _wsTermTheme(), scrollback: 5000, allowProposedApi: true
   });
   var fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
+  host.style.background = _wsTermTheme().background;   // match frame to theme
   term.open(host);
+  // Upgrade the renderer for crisp, native-terminal glyph rendering (the DOM
+  // renderer leaves sub-pixel gaps between block glyphs). Try WebGL first — it
+  // avoids the HiDPI horizontal banding the canvas renderer shows inside
+  // Electron — then canvas, then keep the DOM renderer. Best-effort throughout:
+  // the vendored addons target a nearby @xterm core, so any activate()/context
+  // failure silently falls through to the next option and never breaks the term.
+  var _rendererUpgraded = false;
+  try {
+    if (typeof WebglAddon !== 'undefined' && WebglAddon.WebglAddon) {
+      var webgl = new WebglAddon.WebglAddon();
+      // If the GPU context is lost (driver reset, too many contexts), drop the
+      // addon so xterm falls back to its DOM renderer instead of going blank.
+      if (webgl.onContextLoss) webgl.onContextLoss(function () { try { webgl.dispose(); } catch (e) {} });
+      term.loadAddon(webgl);
+      _rendererUpgraded = true;
+    }
+  } catch (e) { _rendererUpgraded = false; /* try canvas next */ }
+  if (!_rendererUpgraded) {
+    try {
+      if (typeof CanvasAddon !== 'undefined' && CanvasAddon.CanvasAddon) {
+        term.loadAddon(new CanvasAddon.CanvasAddon());
+      }
+    } catch (e) { /* keep DOM renderer */ }
+  }
   pane.term = term; pane.fit = fit;
 
   // Fit only when the host actually has a size. Fitting a zero-size / not-yet-
@@ -440,6 +591,7 @@ function _wsConnectPane(pane) {
       var msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
       if (msg.t === 'ready') {
         pane.cwd = msg.cwd;
+        pane.pid = msg.pid;   // shell pid — used to follow `cd` for session restore
         setStatus(_wsPaneLabel(pane));
         _wsAutoNameTab(pane);
         // Now that the pane is laid out and connected, re-fit and push the true
@@ -447,25 +599,96 @@ function _wsConnectPane(pane) {
         if (_wsFitPane() && sock.readyState === 1) {
           sock.send(JSON.stringify({ t: 'resize', cols: term.cols, rows: term.rows }));
         }
+        // The requested folder couldn't be opened, so the shell started in $HOME.
+        // Running an agent here would MISFILE its conversation under the wrong
+        // project (agents key history by cwd). Warn loudly and DON'T auto-run —
+        // this is exactly the "my dialog disappeared from that folder" trap.
+        if (msg.cwdFellBack) {
+          var wanted = _wsShortCwd(pane.wantCwd || msg.requestedCwd || '');
+          if (typeof showToast === 'function') showToast('⚠ Couldn’t open ' + wanted + ' — shell started in ~. Agent history would save under home. cd there first, or reopen the folder.');
+          term.write('\r\n\x1b[33m⚠ Requested folder unavailable — started in home (' + msg.cwd + ').\x1b[0m\r\n');
+          if (pane.restoreCmd) _wsShowRestoreBanner(pane);  // let the user decide, don't auto-run
+          _wsUpdateStatusBar();
+          return;
+        }
         // cmd auto-runs (trailing \r); prefill is typed but NOT executed so the
-        // user can review/edit a resume command before pressing Enter.
+        // user can review/edit a resume command before pressing Enter; restoreCmd
+        // is offered via a banner (one click to resume the remembered agent).
         if (pane.cmd) setTimeout(function () { if (sock.readyState === 1) sock.send(enc.encode(pane.cmd + '\r')); }, 120);
         else if (pane.prefill) setTimeout(function () { if (sock.readyState === 1) sock.send(enc.encode(pane.prefill)); if (pane.term) pane.term.focus(); }, 120);
+        else if (pane.restoreCmd) _wsShowRestoreBanner(pane);
       } else if (msg.t === 'exit') { pane.exited = true; setStatus('exited (' + msg.code + ')'); _wsUpdateStatusBar(); }
       else if (msg.t === 'error') { setStatus('error'); term.write('\r\n\x1b[31m' + (msg.message || 'error') + '\x1b[0m\r\n'); }
       return;
     }
-    // Raw output: mark the pane active and scan a bounded tail for account-limit
-    // cues so the top status bar can flag it.
+    // Raw output. Write with a completion callback so we can flow-control: xterm
+    // invokes the callback once it has PARSED this chunk, letting us track how
+    // much output is still in flight. Without this a burst blocks the main thread
+    // and typing appears to freeze.
     pane.lastOutputAt = _wsNow();
-    var text = dec.decode(new Uint8Array(ev.data));
-    if (WS_LIMIT_RE.test(text)) pane.flaggedLimit = true;
-    term.write(new Uint8Array(ev.data));
+    var bytes = new Uint8Array(ev.data);
+    pane._pending = (pane._pending || 0) + bytes.length;
+    term.write(bytes, function () {
+      pane._pending -= bytes.length;
+      if (pane._paused && pane._pending < WS_LOW_WATER) {
+        pane._paused = false;
+        if (sock.readyState === 1) sock.send(JSON.stringify({ t: 'resume' }));
+      }
+    });
+    if (!pane._paused && pane._pending > WS_HIGH_WATER) {
+      pane._paused = true;
+      if (sock.readyState === 1) sock.send(JSON.stringify({ t: 'pause' }));
+    }
+    // Account-limit detection: previously decoded + regex-scanned EVERY chunk,
+    // which amplified bursts. Now throttled to ~1/s and only on small chunks
+    // (a limit notice is short), decoding just what we scan.
+    if (bytes.length <= 8192 && (pane._lastLimitScan == null || _wsNow() - pane._lastLimitScan > 1000)) {
+      pane._lastLimitScan = _wsNow();
+      try { if (WS_LIMIT_RE.test(dec.decode(bytes))) pane.flaggedLimit = true; } catch (e) {}
+    }
   };
   sock.onclose = function () { setStatus('disconnected'); pane.exited = true; _wsUpdateStatusBar(); };
   sock.onerror = function () { setStatus('connection error'); };
 
-  term.onData(function (data) { if (sock.readyState === 1) sock.send(enc.encode(data)); });
+  // Shift+Enter → insert a newline instead of submitting. Plain xterm sends a
+  // bare CR for Enter with no Shift distinction, so multiline TUIs (Claude Code,
+  // Codex) can't tell them apart. We send ESC+CR (\x1b\r) — the exact sequence
+  // `claude /terminal-setup` binds Shift+Enter to — so newline works out of the
+  // box. Returning false stops xterm from also emitting a plain CR.
+  term.attachCustomKeyEventHandler(function (e) {
+    if (e.type === 'keydown' && e.key === 'Enter' && e.shiftKey && !e.ctrlKey && !e.metaKey) {
+      if (sock.readyState === 1) sock.send(enc.encode('\x1b\r'));
+      return false;
+    }
+    return true;
+  });
+
+  // Capture the shell input line so a window remembers the agent command it
+  // launched (folder + `HTTPS_PROXY=… claude`). We track keystrokes into a line
+  // buffer; on Enter, if the completed line launches an agent, store it verbatim
+  // on the pane (persisted by _wsSaveSession, offered back on next open). Reading
+  // the typed line — not the running process — is the only way to recover the
+  // proxy prefix, which macOS `ps` refuses to expose.
+  pane._lineBuf = '';
+  term.onData(function (data) {
+    if (sock.readyState === 1) sock.send(enc.encode(data));
+    try {
+      for (var i = 0; i < data.length; i++) {
+        var code = data.charCodeAt(i);
+        if (code === 0x1b) { pane._lineBuf = ''; break; }        // escape seq (arrows, etc.) — bail on this chunk
+        if (code === 0x0d || code === 0x0a) {                     // Enter — line committed
+          var line = pane._lineBuf; pane._lineBuf = '';
+          if (_wsIsAgentLine(line)) { pane.enteredCmd = line.trim(); _wsSaveSession(); }
+        } else if (code === 0x7f || code === 0x08) {              // backspace
+          pane._lineBuf = pane._lineBuf.slice(0, -1);
+        } else if (code === 0x15 || code === 0x03) {              // Ctrl-U / Ctrl-C — clear line
+          pane._lineBuf = '';
+        } else if (code >= 0x20) {                                // printable
+          pane._lineBuf += data[i];
+        }
+      }
+    } catch (e) { /* capture is best-effort — never break input */ }
+  });
 
   var rt = null;
   pane.ro = new ResizeObserver(function () {
@@ -487,21 +710,558 @@ function _wsPaneMarkup(pane) {
         '<span class="ws-pane-status" id="wsStatus-' + escHtml(pane.id) + '">connecting…</span>' +
         '<select class="ws-pane-launch" title="Launch an agent or saved command in this pane" ' +
           'onchange="launchAgentInPane(\'' + escHtml(pane.id) + '\', this.value); this.selectedIndex=0;">' + _wsLaunchOptionsHtml() + '</select>' +
+        '<button class="ws-pane-bm" title="Bookmark this folder + agent" aria-label="Bookmark" onclick="bookmarkPane(\'' + escHtml(pane.id) + '\')">&#9734;</button>' +
         '<button class="ws-pane-close" title="Close pane" onclick="closeWorkspacePane(\'' + escHtml(pane.id) + '\')">&times;</button>' +
       '</div>' +
       '<div class="ws-pane-term" id="wsTermHost-' + escHtml(pane.id) + '"></div>' +
+      '<div class="ws-restore-banner" id="wsRestore-' + escHtml(pane.id) + '" hidden></div>' +
     '</div>';
 }
 
-function _wsTabMarkup(tab) {
-  return '' +
-    '<div class="ws-tab' + (tab.id === _wsActiveTabId ? ' active' : '') + '" data-tab-id="' + escHtml(tab.id) + '" ' +
-      'onclick="activateWorkspaceTab(\'' + escHtml(tab.id) + '\')" ondblclick="renameWorkspaceTab(\'' + escHtml(tab.id) + '\')" ' +
-      'title="Double-click to rename">' +
-      '<span class="ws-tab-name">' + escHtml(tab.name) + '</span>' +
-      '<button class="ws-tab-rename-btn" title="Rename terminal" aria-label="Rename terminal" onclick="event.stopPropagation();renameWorkspaceTab(\'' + escHtml(tab.id) + '\')">&#9998;</button>' +
-      '<button class="ws-tab-close" title="Close tab" onclick="event.stopPropagation();closeWorkspaceTab(\'' + escHtml(tab.id) + '\')">&times;</button>' +
+// Turn a remembered launch command into the one that CONTINUES that agent's
+// last conversation in this folder — the browser-tab-state metaphor: reopening
+// restores the dialog, not a blank agent. We keep any `VAR=value` env prefix
+// (so the proxy survives) and only append/insert the agent's continue form.
+// If the command already resumes, or the agent has no known continue flag, it's
+// returned unchanged (so the worst case is a fresh agent, never a broken cmd).
+function _wsResumeVariant(cmd) {
+  var s = String(cmd || '').trim();
+  if (!s) return s;
+  var env = '';
+  var m = s.match(_WS_ENV_PREFIX_RE);
+  if (m) { env = m[0]; s = s.slice(m[0].length); }
+  // Already a resume/continue invocation — leave it be.
+  if (/(^|\s)(--continue|-c|--resume|resume)(\s|$)/.test(s)) return env + s;
+  var word = (s.split(/\s+/)[0] || '').toLowerCase();
+  switch (word) {
+    // Claude: `--continue` resumes the most recent conversation in the cwd,
+    // keeping any other flags (e.g. --dangerously-skip-permissions).
+    case 'claude':
+    case 'claude-ext': return env + s + ' --continue';
+    // Codex only resumes via a subcommand; safe when launched bare (`codex`).
+    case 'codex': return env + (s === 'codex' ? 'codex resume --last' : s);
+    default: return env + s;
+  }
+}
+
+// Show the "resume where you left off" banner for a restored pane: the folder it
+// opened in and a one-click button that CONTINUES the agent's last conversation
+// there (incl. its proxy prefix). Nothing runs until the user clicks — reopening
+// a tab shouldn't silently spend tokens.
+function _wsShowRestoreBanner(pane) {
+  var el = document.getElementById('wsRestore-' + pane.id);
+  if (!el || !pane.restoreCmd) return;
+  pane._resumeCmd = _wsResumeVariant(pane.restoreCmd);
+  var label = (typeof _wsMaskSecrets === 'function') ? _wsMaskSecrets(pane._resumeCmd) : pane._resumeCmd;
+  var where = _wsShortCwd(pane.cwd || pane.wantCwd || '');
+  var continues = pane._resumeCmd !== pane.restoreCmd;   // did we add a continue form?
+  el.innerHTML =
+    '<div class="ws-restore-inner">' +
+      '<div class="ws-restore-text">' +
+        '<span class="ws-restore-title">' + (continues ? 'Resume your conversation' : 'Reopen this terminal') + '</span>' +
+        '<span class="ws-restore-sub"><code>' + escHtml(label) + '</code> in ' + escHtml(where) + '</span>' +
+      '</div>' +
+      '<div class="ws-restore-actions">' +
+        '<button class="ws-restore-run" onclick="wsRestorePaneCmd(\'' + escHtml(pane.id) + '\')">' + (continues ? 'Resume' : 'Run') + '</button>' +
+        '<button class="ws-restore-dismiss" onclick="wsDismissRestore(\'' + escHtml(pane.id) + '\')" title="Dismiss">&times;</button>' +
+      '</div>' +
     '</div>';
+  el.hidden = false;
+}
+
+// Run the resume command in the pane (user clicked Resume) — the continue
+// variant when the agent supports it, otherwise the remembered command.
+function wsRestorePaneCmd(paneId) {
+  var pane = _wsFindPane(paneId);
+  if (!pane || !pane.restoreCmd) return;
+  var cmd = pane._resumeCmd || _wsResumeVariant(pane.restoreCmd);
+  if (pane.sock && pane.sock.readyState === 1) {
+    pane.sock.send(new TextEncoder().encode(cmd + '\r'));
+  }
+  pane.cmd = cmd;            // now it's the pane's running command (label, restore next time)
+  pane.restoreCmd = null;
+  pane._resumeCmd = null;
+  wsDismissRestore(paneId);
+  if (pane.term) pane.term.focus();
+  var st = document.getElementById('wsStatus-' + paneId);
+  if (st) st.textContent = _wsPaneLabel(pane);
+  _wsSaveSession();
+}
+
+// Dismiss the restore banner without running anything.
+function wsDismissRestore(paneId) {
+  var pane = _wsFindPane(paneId);
+  if (pane) pane.restoreCmd = null;
+  var el = document.getElementById('wsRestore-' + paneId);
+  if (el) { el.hidden = true; el.innerHTML = ''; }
+  _wsSaveSession();
+}
+
+// ── Bookmarks (Chrome-like bookmarks bar) ────────────────────────────────────
+// A bookmark is a saved "site" in the browser metaphor: a folder + the agent to
+// run in it. One click opens a new terminal there and launches that agent. This
+// is deliberately lighter than a saved Layout (a whole-workspace snapshot) — a
+// bookmark is a single target you reach for constantly, like a pinned tab.
+var _WS_BOOKMARKS_KEY = 'codbash-bookmarks';
+var _WS_BM_FOLDERS_KEY = 'codbash-bookmark-folders';
+var _wsBookmarks = [];
+var _wsBmFolders = [];   // [{ id, name, color }] — named groups, Chrome-like
+var _WS_BM_COLORS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#ef4444', '#06b6d4', '#eab308'];
+
+function _wsLoadBookmarks() {
+  try { var a = JSON.parse(localStorage.getItem(_WS_BOOKMARKS_KEY)); _wsBookmarks = Array.isArray(a) ? a : []; }
+  catch (e) { _wsBookmarks = []; }
+  try { var f = JSON.parse(localStorage.getItem(_WS_BM_FOLDERS_KEY)); _wsBmFolders = Array.isArray(f) ? f : []; }
+  catch (e) { _wsBmFolders = []; }
+}
+function _wsSaveBookmarks() {
+  try { localStorage.setItem(_WS_BOOKMARKS_KEY, JSON.stringify(_wsBookmarks)); } catch (e) {}
+  try { localStorage.setItem(_WS_BM_FOLDERS_KEY, JSON.stringify(_wsBmFolders)); } catch (e) {}
+}
+function _wsBmNextColor() {
+  return _WS_BM_COLORS[_wsBookmarks.length % _WS_BM_COLORS.length];
+}
+function _wsBmFolder(id) { return _wsBmFolders.find(function (f) { return f.id === id; }); }
+
+// The agent word a bookmark launches (for its label/icon), e.g. "claude".
+function _wsBmAgentWord(cmd) {
+  var s = String(cmd || '').trim().replace(_WS_ENV_PREFIX_RE, '');
+  return (s.split(/\s+/)[0] || '').toLowerCase();
+}
+
+// One bookmark chip (draggable — drop it on a folder to file it there).
+function _wsBmChipHtml(b) {
+  var sub = b.cmd ? _wsBmAgentWord(b.cmd) : (_wsShortCwd(b.cwd) || 'shell');
+  var tip = (b.cwd || '') + (b.cmd ? '  —  ' + _wsMaskSecrets(b.cmd) : '');
+  var id = escHtml(b.id);
+  return '' +
+    '<button class="ws-bm" data-bm-id="' + id + '" title="' + escHtml(tip) + '" draggable="true" ' +
+      'ondragstart="wsBmDragStart(event,\'' + id + '\')" ondragend="wsBmDragEnd(event)" ' +
+      'onclick="openBookmark(\'' + id + '\')" ondblclick="renameBookmark(\'' + id + '\')">' +
+      '<span class="ws-bm-dot" style="background:' + escHtml(b.color || '#3b82f6') + '"></span>' +
+      '<span class="ws-bm-label">' + escHtml(b.label || _wsProjectBasename(b.cwd) || 'shell') + '</span>' +
+      '<span class="ws-bm-sub">' + escHtml(sub) + '</span>' +
+      '<span class="ws-bm-x" title="Remove bookmark" onclick="event.stopPropagation();removeBookmark(\'' + id + '\')">&times;</span>' +
+    '</button>';
+}
+
+function _wsRenderBookmarks() {
+  var bar = document.getElementById('wsBookmarks');
+  if (!bar) return;
+  // Empty (no folders AND no bookmarks) → hide the strip. Add bookmarks via the
+  // ☆ in a pane's title bar, or make a folder with the 📁+ button.
+  if (!_wsBookmarks.length && !_wsBmFolders.length) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
+  bar.style.display = 'flex';
+
+  // Folder chips (dropdowns) first, then loose bookmarks (no valid folder).
+  var folderChips = _wsBmFolders.map(function (f) {
+    var count = _wsBookmarks.filter(function (b) { return b.folderId === f.id; }).length;
+    var id = escHtml(f.id);
+    return '' +
+      '<button class="ws-bm ws-bm-folder" data-folder-id="' + id + '" title="' + escHtml(f.name) + '" ' +
+        'onclick="toggleBookmarkFolder(event,\'' + id + '\')" ondblclick="renameBmFolder(\'' + id + '\')" ' +
+        'ondragover="wsBmDragOverFolder(event,\'' + id + '\')" ondragleave="wsBmDragLeaveFolder(event)" ondrop="wsBmDropOnFolder(event,\'' + id + '\')">' +
+        '<span class="ws-bm-folder-ico" style="color:' + escHtml(f.color || '#f59e0b') + '">▾</span>' +
+        '<span class="ws-bm-label">' + escHtml(f.name) + '</span>' +
+        '<span class="ws-bm-sub">' + count + '</span>' +
+      '</button>';
+  }).join('');
+  var loose = _wsBookmarks.filter(function (b) { return !b.folderId || !_wsBmFolder(b.folderId); });
+  var looseChips = loose.map(_wsBmChipHtml).join('');
+
+  bar.innerHTML =
+    '<span class="ws-bm-lead" title="Bookmarks">☆</span>' +
+    folderChips + looseChips +
+    '<button class="ws-bm-add" title="Bookmark the current terminal" onclick="addBookmarkFromFocused()">+</button>' +
+    '<button class="ws-bm-add ws-bm-newfolder" title="New bookmark group" onclick="createBmFolder()">▾+</button>';
+}
+
+// Open a bookmark: a new tab in its folder, launching its agent (explicit click
+// = intent to run, so this auto-runs — unlike passive session restore).
+function openBookmark(id) {
+  _wsCloseBmMenu();
+  var b = _wsBookmarks.find(function (x) { return x.id === id; });
+  if (!b) return;
+  openInWorkspace({ name: b.label || _wsProjectBasename(b.cwd), cwd: b.cwd || null, cmd: b.cmd || null });
+}
+
+// Save a bookmark from a pane (its folder + the agent command it launched).
+function _wsBookmarkFromPane(pane) {
+  if (!pane) return;
+  var cwd = pane.cwd || pane.wantCwd || '';
+  var cmd = pane.cmd || pane.enteredCmd || pane.detectedCmd || '';
+  if (!cwd && !cmd) { showToast('Nothing to bookmark yet — open a folder or run an agent first'); return; }
+  var suggested = _wsProjectBasename(cwd) || _wsBmAgentWord(cmd) || 'bookmark';
+  codbashPrompt('Bookmark name:', suggested).then(function (name) {
+    if (name == null) return;
+    name = String(name).trim() || suggested;
+    _wsBookmarks.push({ id: 'bm' + (++_wsPaneSeq), label: name, cwd: cwd, cmd: cmd, color: _wsBmNextColor() });
+    _wsSaveBookmarks();
+    _wsRenderBookmarks();
+    showToast('Bookmarked "' + name + '"');
+  });
+}
+
+// Pane-bar star button → bookmark this pane.
+function bookmarkPane(paneId) { _wsBookmarkFromPane(_wsFindPane(paneId)); }
+
+// Bar "+" → bookmark the focused pane (fallback: first pane of active tab).
+function addBookmarkFromFocused() {
+  var pane = (_wsFocusedPaneId && _wsFindPane(_wsFocusedPaneId));
+  if (!pane) { var t = _wsActiveTab(); pane = t && t.panes[0]; }
+  _wsBookmarkFromPane(pane);
+}
+
+function removeBookmark(id) {
+  _wsBookmarks = _wsBookmarks.filter(function (x) { return x.id !== id; });
+  _wsSaveBookmarks();
+  _wsRenderBookmarks();
+  _wsRefreshBmMenu();
+}
+
+function renameBookmark(id) {
+  var b = _wsBookmarks.find(function (x) { return x.id === id; });
+  if (!b) return;
+  codbashPrompt('Rename bookmark:', b.label || '').then(function (name) {
+    if (name == null) return;
+    b.label = String(name).trim() || b.label;
+    _wsSaveBookmarks();
+    _wsRenderBookmarks();
+    _wsRefreshBmMenu();
+  });
+}
+
+// ── Bookmark folders (named groups) ──────────────────────────────────────────
+function createBmFolder() {
+  codbashPrompt('New bookmark group name:', 'Group ' + (_wsBmFolders.length + 1)).then(function (name) {
+    if (name == null) return;
+    name = String(name).trim();
+    if (!name) return;
+    var color = _WS_BM_COLORS[_wsBmFolders.length % _WS_BM_COLORS.length];
+    _wsBmFolders.push({ id: 'bf' + (++_wsPaneSeq), name: name, color: color });
+    _wsSaveBookmarks();
+    _wsRenderBookmarks();
+    showToast('Created group "' + name + '"');
+  });
+}
+function renameBmFolder(id) {
+  var f = _wsBmFolder(id);
+  if (!f) return;
+  codbashPrompt('Rename group:', f.name || '').then(function (name) {
+    if (name == null) return;
+    f.name = String(name).trim() || f.name;
+    _wsSaveBookmarks();
+    _wsRenderBookmarks();
+  });
+}
+// Delete a group. Its bookmarks are kept (moved back out to loose) — deleting a
+// group should never silently drop the bookmarks inside it.
+function deleteBmFolder(id) {
+  var f = _wsBmFolder(id);
+  if (!f) return;
+  var n = _wsBookmarks.filter(function (b) { return b.folderId === id; }).length;
+  if (!confirm('Delete group "' + f.name + '"?' + (n ? ' Its ' + n + ' bookmark' + (n === 1 ? '' : 's') + ' will move out, not be deleted.' : ''))) return;
+  _wsBookmarks.forEach(function (b) { if (b.folderId === id) b.folderId = null; });
+  _wsBmFolders = _wsBmFolders.filter(function (x) { return x.id !== id; });
+  _wsSaveBookmarks();
+  _wsCloseBmMenu();
+  _wsRenderBookmarks();
+}
+function moveBookmarkToFolder(bmId, folderId) {
+  var b = _wsBookmarks.find(function (x) { return x.id === bmId; });
+  if (!b) return;
+  b.folderId = folderId || null;
+  _wsSaveBookmarks();
+  _wsRenderBookmarks();
+  _wsRefreshBmMenu();
+}
+
+// Drag a bookmark chip onto a folder to file it there.
+var _wsDragBmId = null;
+function wsBmDragStart(e, id) { _wsDragBmId = id; try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', id); } catch (_e) {} }
+function wsBmDragEnd(e) {
+  _wsDragBmId = null;
+  var bar = document.getElementById('wsBookmarks');
+  if (bar) Array.prototype.slice.call(bar.querySelectorAll('.drop-target')).forEach(function (x) { x.classList.remove('drop-target'); });
+}
+function wsBmDragOverFolder(e, fid) {
+  if (!_wsDragBmId) return;
+  e.preventDefault();
+  try { e.dataTransfer.dropEffect = 'move'; } catch (_e) {}
+  if (e.currentTarget) e.currentTarget.classList.add('drop-target');
+}
+function wsBmDragLeaveFolder(e) { if (e.currentTarget) e.currentTarget.classList.remove('drop-target'); }
+function wsBmDropOnFolder(e, fid) {
+  e.preventDefault();
+  if (e.currentTarget) e.currentTarget.classList.remove('drop-target');
+  if (_wsDragBmId) { moveBookmarkToFolder(_wsDragBmId, fid); _wsDragBmId = null; }
+}
+
+// Folder dropdown menu (contents of a group).
+function _wsCloseBmMenu() {
+  var m = document.getElementById('wsBmMenu');
+  if (m) m.remove();
+}
+function _wsBmMenuHtml(f) {
+  var items = _wsBookmarks.filter(function (b) { return b.folderId === f.id; });
+  var rows = items.length ? items.map(function (b) {
+    var sub = b.cmd ? _wsBmAgentWord(b.cmd) : (_wsShortCwd(b.cwd) || 'shell');
+    var id = escHtml(b.id);
+    return '' +
+      '<div class="ws-bmf-item" draggable="true" ondragstart="wsBmDragStart(event,\'' + id + '\')" ondragend="wsBmDragEnd(event)" onclick="openBookmark(\'' + id + '\')">' +
+        '<span class="ws-bm-dot" style="background:' + escHtml(b.color || '#3b82f6') + '"></span>' +
+        '<span class="ws-bmf-label">' + escHtml(b.label || _wsProjectBasename(b.cwd) || 'shell') + '</span>' +
+        '<span class="ws-bmf-sub">' + escHtml(sub) + '</span>' +
+        '<span class="ws-bmf-out" title="Move out of group" onclick="event.stopPropagation();moveBookmarkToFolder(\'' + id + '\',\'\')">↤</span>' +
+        '<span class="ws-bmf-x" title="Remove bookmark" onclick="event.stopPropagation();removeBookmark(\'' + id + '\')">&times;</span>' +
+      '</div>';
+  }).join('') : '<div class="ws-bmf-empty">Empty — drag bookmarks here</div>';
+  return '<div class="ws-bmf-list">' + rows + '</div>' +
+    '<div class="ws-bmf-foot">' +
+      '<button onclick="renameBmFolder(\'' + escHtml(f.id) + '\')">Rename</button>' +
+      '<button class="danger" onclick="deleteBmFolder(\'' + escHtml(f.id) + '\')">Delete group</button>' +
+    '</div>';
+}
+function _wsRefreshBmMenu() {
+  var m = document.getElementById('wsBmMenu');
+  if (!m) return;
+  var fid = m.getAttribute('data-folder-id');
+  var f = _wsBmFolder(fid);
+  if (!f) { m.remove(); return; }
+  m.innerHTML = _wsBmMenuHtml(f);
+}
+function toggleBookmarkFolder(ev, fid) {
+  if (ev) ev.stopPropagation();
+  var existing = document.getElementById('wsBmMenu');
+  if (existing && existing.getAttribute('data-folder-id') === fid) { existing.remove(); return; }
+  if (existing) existing.remove();
+  var f = _wsBmFolder(fid);
+  if (!f) return;
+  var m = document.createElement('div');
+  m.id = 'wsBmMenu';
+  m.className = 'ws-bmf-menu';
+  m.setAttribute('data-folder-id', fid);
+  m.innerHTML = _wsBmMenuHtml(f);
+  document.body.appendChild(m);
+  var chip = ev && ev.currentTarget;
+  if (chip && chip.getBoundingClientRect) {
+    var r = chip.getBoundingClientRect();
+    m.style.top = (r.bottom + 6) + 'px';
+    m.style.left = Math.min(r.left, window.innerWidth - 280) + 'px';
+  }
+  setTimeout(function () {
+    function off(e) { if (m.contains(e.target)) return; if (e.target.closest && e.target.closest('.ws-bm-folder')) return; m.remove(); document.removeEventListener('mousedown', off); document.removeEventListener('keydown', esc); }
+    function esc(e) { if (e.key === 'Escape') { m.remove(); document.removeEventListener('mousedown', off); document.removeEventListener('keydown', esc); } }
+    document.addEventListener('mousedown', off);
+    document.addEventListener('keydown', esc);
+  }, 0);
+}
+
+// ── Terminal settings (font / theme / cursor) ────────────────────────────────
+// Persisted appearance prefs applied live to every xterm instance. Themes are
+// xterm theme objects; the "dark" default matches the app chrome.
+var _WS_TERM_PREFS_KEY = 'codbash-term-prefs';
+var _WS_TERM_FONTS = [
+  { v: 'Menlo, Monaco, "Courier New", monospace', label: 'Menlo' },
+  { v: '"JetBrains Mono", Menlo, monospace', label: 'JetBrains Mono' },
+  { v: '"Fira Code", Menlo, monospace', label: 'Fira Code' },
+  { v: '"SF Mono", Menlo, monospace', label: 'SF Mono' },
+  { v: '"Cascadia Code", Menlo, monospace', label: 'Cascadia Code' },
+  { v: '"Source Code Pro", Menlo, monospace', label: 'Source Code Pro' },
+];
+var _WS_TERM_THEMES = {
+  // iTerm-like soft charcoal (Tomorrow Night palette) — the default. A warm dark
+  // grey instead of near-black, with a full ANSI palette so agent output (Claude
+  // Code's colors, diffs, spinners) looks like it does in iTerm2.
+  iterm: {
+    background: '#1d1f21', foreground: '#c5c8c6', cursor: '#c5c8c6', cursorAccent: '#1d1f21',
+    selectionBackground: '#373b41',
+    black: '#1d1f21', red: '#cc6666', green: '#b5bd68', yellow: '#f0c674',
+    blue: '#81a2be', magenta: '#b294bb', cyan: '#8abeb7', white: '#c5c8c6',
+    brightBlack: '#666666', brightRed: '#d54e53', brightGreen: '#b9ca4a', brightYellow: '#e7c547',
+    brightBlue: '#7aa6da', brightMagenta: '#c397d8', brightCyan: '#70c0b1', brightWhite: '#eaeaea',
+  },
+  dark:      { background: '#08090c', foreground: '#e6e6e6', cursor: '#e6e6e6', selectionBackground: '#264f78' },
+  midnight:  { background: '#0d1117', foreground: '#c9d1d9', cursor: '#58a6ff', selectionBackground: '#1f6feb55' },
+  monokai:   { background: '#272822', foreground: '#f8f8f2', cursor: '#f8f8f0', selectionBackground: '#49483e' },
+  dracula:   { background: '#282a36', foreground: '#f8f8f2', cursor: '#bd93f9', selectionBackground: '#44475a' },
+  solarized: { background: '#002b36', foreground: '#93a1a1', cursor: '#93a1a1', selectionBackground: '#073642' },
+  light:     { background: '#ffffff', foreground: '#1f2328', cursor: '#1f2328', selectionBackground: '#add6ff' },
+};
+var _WS_TERM_THEME_LABELS = { iterm: 'iTerm', dark: 'Dark', midnight: 'Midnight', monokai: 'Monokai', dracula: 'Dracula', solarized: 'Solarized', light: 'Light' };
+var _wsTermPrefs = { fontFamily: _WS_TERM_FONTS[0].v, fontSize: 13, theme: 'iterm', cursorStyle: 'block', cursorBlink: true };
+
+function _wsLoadTermPrefs() {
+  try {
+    var p = JSON.parse(localStorage.getItem(_WS_TERM_PREFS_KEY));
+    if (p && typeof p === 'object') Object.assign(_wsTermPrefs, p);
+  } catch (e) {}
+  if (!_WS_TERM_THEMES[_wsTermPrefs.theme]) _wsTermPrefs.theme = 'iterm';
+}
+function _wsSaveTermPrefs() { try { localStorage.setItem(_WS_TERM_PREFS_KEY, JSON.stringify(_wsTermPrefs)); } catch (e) {} }
+function _wsTermTheme() { return _WS_TERM_THEMES[_wsTermPrefs.theme] || _WS_TERM_THEMES.iterm; }
+
+// Match the pane frame (the padding around xterm's canvas, and the container
+// behind it) to the terminal theme's background so there's no dark seam around
+// a lighter theme.
+function _wsApplyPaneBg(pane) {
+  var host = document.getElementById('wsTermHost-' + pane.id);
+  if (!host) return;
+  var bg = _wsTermTheme().background;
+  host.style.background = bg;
+  var pel = host.closest ? host.closest('.ws-pane') : null;
+  if (pel) pel.style.background = bg;
+}
+
+// Push current prefs onto one pane's terminal, then re-fit (font size changes
+// the cell grid, so the pty must be resized to match).
+function _wsApplyTermPrefsToPane(pane) {
+  if (!pane || !pane.term) return;
+  var t = pane.term, p = _wsTermPrefs;
+  try {
+    t.options.fontFamily = p.fontFamily;
+    t.options.fontSize = p.fontSize;
+    t.options.theme = _wsTermTheme();
+    t.options.cursorStyle = p.cursorStyle;
+    t.options.cursorBlink = p.cursorBlink;
+  } catch (e) {}
+  _wsApplyPaneBg(pane);
+  if (pane.fit) { try { pane.fit.fit(); } catch (e) {} }
+  if (pane.sock && pane.sock.readyState === 1 && t) {
+    pane.sock.send(JSON.stringify({ t: 'resize', cols: t.cols, rows: t.rows }));
+  }
+}
+function _wsApplyTermPrefsAll() { _wsAllPanes().forEach(function (x) { _wsApplyTermPrefsToPane(x.pane); }); }
+
+// Change one setting → persist → apply to every open terminal immediately.
+function setTermPref(key, value) {
+  if (key === 'fontSize') value = Math.max(9, Math.min(24, parseInt(value, 10) || 13));
+  if (key === 'cursorBlink') value = !!value;
+  _wsTermPrefs[key] = value;
+  _wsSaveTermPrefs();
+  _wsApplyTermPrefsAll();
+  var fs = document.getElementById('wsSetFontSizeVal');
+  if (fs && key === 'fontSize') fs.textContent = value + 'px';
+}
+
+// Build (once) and toggle the settings popover anchored under the gear button.
+function toggleTerminalSettings(ev) {
+  if (ev) ev.stopPropagation();
+  var pop = document.getElementById('wsSettingsPop');
+  if (pop) { pop.remove(); return; }   // toggle off
+  pop = document.createElement('div');
+  pop.id = 'wsSettingsPop';
+  pop.className = 'ws-settings-pop';
+  var fontOpts = _WS_TERM_FONTS.map(function (f) {
+    return '<option value="' + escHtml(f.v) + '"' + (f.v === _wsTermPrefs.fontFamily ? ' selected' : '') + '>' + escHtml(f.label) + '</option>';
+  }).join('');
+  var themeOpts = Object.keys(_WS_TERM_THEMES).map(function (k) {
+    return '<option value="' + k + '"' + (k === _wsTermPrefs.theme ? ' selected' : '') + '>' + escHtml(_WS_TERM_THEME_LABELS[k] || k) + '</option>';
+  }).join('');
+  var cursorOpts = ['block', 'bar', 'underline'].map(function (c) {
+    return '<option value="' + c + '"' + (c === _wsTermPrefs.cursorStyle ? ' selected' : '') + '>' + c.charAt(0).toUpperCase() + c.slice(1) + '</option>';
+  }).join('');
+  pop.innerHTML =
+    '<div class="ws-set-head">Terminal settings</div>' +
+    '<label class="ws-set-row"><span>Font</span>' +
+      '<select onchange="setTermPref(\'fontFamily\', this.value)">' + fontOpts + '</select></label>' +
+    '<label class="ws-set-row"><span>Size</span>' +
+      '<span class="ws-set-size">' +
+        '<button onclick="setTermPref(\'fontSize\', _wsTermPrefs.fontSize-1)">&minus;</button>' +
+        '<b id="wsSetFontSizeVal">' + _wsTermPrefs.fontSize + 'px</b>' +
+        '<button onclick="setTermPref(\'fontSize\', _wsTermPrefs.fontSize+1)">+</button>' +
+      '</span></label>' +
+    '<label class="ws-set-row"><span>Theme</span>' +
+      '<select onchange="setTermPref(\'theme\', this.value)">' + themeOpts + '</select></label>' +
+    '<label class="ws-set-row"><span>Cursor</span>' +
+      '<select onchange="setTermPref(\'cursorStyle\', this.value)">' + cursorOpts + '</select></label>' +
+    '<label class="ws-set-row"><span>Blink</span>' +
+      '<input type="checkbox"' + (_wsTermPrefs.cursorBlink ? ' checked' : '') + ' onchange="setTermPref(\'cursorBlink\', this.checked)"></label>';
+  document.body.appendChild(pop);
+  // Anchor under the gear button.
+  var gear = ev && ev.currentTarget;
+  if (gear && gear.getBoundingClientRect) {
+    var r = gear.getBoundingClientRect();
+    pop.style.top = (r.bottom + 6) + 'px';
+    pop.style.right = Math.max(8, window.innerWidth - r.right) + 'px';
+  }
+  // Dismiss on outside click / Escape.
+  setTimeout(function () {
+    function off(e) {
+      if (pop.contains(e.target)) return;
+      pop.remove();
+      document.removeEventListener('mousedown', off);
+      document.removeEventListener('keydown', esc);
+    }
+    function esc(e) { if (e.key === 'Escape') { pop.remove(); document.removeEventListener('mousedown', off); document.removeEventListener('keydown', esc); } }
+    document.addEventListener('mousedown', off);
+    document.addEventListener('keydown', esc);
+  }, 0);
+}
+
+function _wsTabMarkup(tab) {
+  var id = escHtml(tab.id);
+  return '' +
+    '<div class="ws-tab' + (tab.id === _wsActiveTabId ? ' active' : '') + '" data-tab-id="' + id + '" ' +
+      'draggable="true" ' +
+      'ondragstart="wsTabDragStart(event,\'' + id + '\')" ondragover="wsTabDragOver(event,\'' + id + '\')" ' +
+      'ondragleave="wsTabDragLeave(event,\'' + id + '\')" ondrop="wsTabDrop(event,\'' + id + '\')" ondragend="wsTabDragEnd(event)" ' +
+      'onclick="activateWorkspaceTab(\'' + id + '\')" ondblclick="renameWorkspaceTab(\'' + id + '\')" ' +
+      'title="Drag to reorder · double-click to rename">' +
+      '<span class="ws-tab-name">' + escHtml(tab.name) + '</span>' +
+      '<button class="ws-tab-rename-btn" title="Rename terminal" aria-label="Rename terminal" onclick="event.stopPropagation();renameWorkspaceTab(\'' + id + '\')">&#9998;</button>' +
+      '<button class="ws-tab-close" title="Close tab" onclick="event.stopPropagation();closeWorkspaceTab(\'' + id + '\')">&times;</button>' +
+    '</div>';
+}
+
+// ── Tab reordering (drag to sort, Chrome-like) ───────────────────────────────
+var _wsDragTabId = null;
+function wsTabDragStart(e, id) {
+  _wsDragTabId = id;
+  try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', id); } catch (_e) {}
+  var el = e.currentTarget; if (el && el.classList) el.classList.add('dragging');
+}
+function wsTabDragOver(e, id) {
+  if (!_wsDragTabId || _wsDragTabId === id) return;
+  e.preventDefault();
+  try { e.dataTransfer.dropEffect = 'move'; } catch (_e) {}
+  // Show an insertion cue on the side the cursor is nearest.
+  var el = e.currentTarget; if (!el) return;
+  var r = el.getBoundingClientRect();
+  var before = (e.clientX - r.left) < r.width / 2;
+  el.classList.toggle('drop-before', before);
+  el.classList.toggle('drop-after', !before);
+}
+function wsTabDragLeave(e, id) {
+  var el = e.currentTarget; if (el) el.classList.remove('drop-before', 'drop-after');
+}
+function wsTabDrop(e, id) {
+  e.preventDefault();
+  var el = e.currentTarget;
+  var before = el && el.classList.contains('drop-before');
+  if (el) el.classList.remove('drop-before', 'drop-after');
+  if (_wsDragTabId && _wsDragTabId !== id) _wsMoveTab(_wsDragTabId, id, before);
+  _wsDragTabId = null;
+}
+function wsTabDragEnd(e) {
+  _wsDragTabId = null;
+  var bar = document.getElementById('wsTabbar');
+  if (bar) Array.prototype.slice.call(bar.querySelectorAll('.ws-tab')).forEach(function (t) {
+    t.classList.remove('dragging', 'drop-before', 'drop-after');
+  });
+}
+// Move tab `fromId` to sit before/after `toId`. Panes are keyed by tab id and
+// reconciled on render, so live terminals survive the reorder untouched.
+function _wsMoveTab(fromId, toId, before) {
+  var from = _wsTabs.findIndex(function (t) { return t.id === fromId; });
+  var to = _wsTabs.findIndex(function (t) { return t.id === toId; });
+  if (from < 0 || to < 0) return;
+  var moved = _wsTabs.splice(from, 1)[0];
+  // Recompute target index after removal, then insert before/after it.
+  to = _wsTabs.findIndex(function (t) { return t.id === toId; });
+  _wsTabs.splice(before ? to : to + 1, 0, moved);
+  _wsRenderTabbar();
+  _wsSaveSession();
 }
 
 // ── tab bar + active-tab rendering ──────────────────────────────────────────
@@ -520,6 +1280,7 @@ function _wsRefitTab(tab) {
       p.sock.send(JSON.stringify({ t: 'resize', cols: p.term.cols, rows: p.term.rows }));
     }
   });
+  _wsLayoutResizers(tab);   // keep drag handles aligned with the gaps
 }
 
 // Ensure every tab has a grid div; reconcile the active tab's panes; show only
@@ -557,10 +1318,12 @@ function _wsRenderPanes() {
         _wsConnectPane(p);
       }
     });
+    _wsApplyGrid(tab);   // honor any custom column/row fractions
   });
 
-  // Refit the active tab shortly after it becomes visible (0-size while hidden).
-  setTimeout(function () { _wsRefitTab(_wsActiveTab()); }, 60);
+  // Refit the active tab shortly after it becomes visible (0-size while hidden),
+  // then place the drag handles over the (now laid-out) pane gaps.
+  setTimeout(function () { var at = _wsActiveTab(); _wsRefitTab(at); _wsLayoutResizers(at); }, 60);
 
   // Ensure a focused pane is always highlighted within the active tab.
   var at = _wsActiveTab();
@@ -568,6 +1331,124 @@ function _wsRenderPanes() {
     var focusedInTab = _wsFocusedPaneId && at.panes.some(function (p) { return p.id === _wsFocusedPaneId; });
     _wsSetFocusedPane(focusedInTab ? _wsFocusedPaneId : at.panes[0].id);
   }
+}
+
+// ── Draggable pane splitters (resize by dragging the divider) ────────────────
+// Each tab stores column/row fractions; a drag adjusts the two tracks either
+// side of the divider, keeping their sum constant. Handles are absolutely
+// positioned over the gaps (the grid itself stays pure panes). Fractions
+// persist with the session so a restored layout keeps your sizes.
+var _WS_MIN_PANE_PX = 140;
+
+function _wsGridEl(tab) {
+  var area = document.getElementById('wsTabPanes');
+  return area ? area.querySelector('.workspace-grid[data-tab-id="' + tab.id + '"]') : null;
+}
+function _wsColRowCounts(n) { return n === 4 ? { cols: 2, rows: 2 } : { cols: n, rows: 1 }; }
+function _wsEqualFr(k) { var a = []; for (var i = 0; i < k; i++) a.push(1); return a; }
+
+// Make sure tab.cols/tab.rows exist and match the current pane count.
+function _wsEnsureSplit(tab) {
+  var c = _wsColRowCounts(tab.panes.length);
+  if (!Array.isArray(tab.cols) || tab.cols.length !== c.cols) tab.cols = _wsEqualFr(c.cols);
+  if (!Array.isArray(tab.rows) || tab.rows.length !== c.rows) tab.rows = _wsEqualFr(c.rows);
+}
+
+function _wsApplyGrid(tab) {
+  var grid = _wsGridEl(tab);
+  if (!grid) return;
+  var n = tab.panes.length;
+  if (n <= 1) { grid.style.gridTemplateColumns = ''; grid.style.gridTemplateRows = ''; return; }
+  _wsEnsureSplit(tab);
+  var fr = function (a) { return a.map(function (x) { return x.toFixed(4) + 'fr'; }).join(' '); };
+  grid.style.gridTemplateColumns = fr(tab.cols);
+  grid.style.gridTemplateRows = (tab.rows.length > 1) ? fr(tab.rows) : '';
+}
+
+var _wsRefitRaf = 0;
+function _wsThrottleRefit(tab) {
+  if (_wsRefitRaf) return;
+  _wsRefitRaf = requestAnimationFrame(function () {
+    _wsRefitRaf = 0;
+    tab.panes.forEach(function (p) { if (p.fit) { try { p.fit.fit(); } catch (e) {} } });
+  });
+}
+
+// Rebuild the drag handles for a tab's grid from live pane rects.
+function _wsLayoutResizers(tab) {
+  if (!tab || tab.id !== _wsActiveTabId) return;
+  var grid = _wsGridEl(tab);
+  if (!grid) return;
+  Array.prototype.slice.call(grid.querySelectorAll('.ws-resizer')).forEach(function (e) { e.remove(); });
+  var n = tab.panes.length;
+  if (n < 2) return;
+  _wsEnsureSplit(tab);
+  var gr = grid.getBoundingClientRect();
+  var els = tab.panes.map(function (p) { return grid.querySelector('.ws-pane[data-pane-id="' + p.id + '"]'); });
+  if (els.some(function (e) { return !e; })) return;
+  var rects = els.map(function (e) { return e.getBoundingClientRect(); });
+  var ncols = _wsColRowCounts(n).cols;
+
+  // Vertical dividers between adjacent columns (top-row panes give the x-span).
+  for (var j = 0; j < ncols - 1; j++) {
+    var x = ((rects[j].right + rects[j + 1].left) / 2) - gr.left;
+    _wsMakeResizer(grid, tab, 'v', x, gr, j);
+  }
+  // Horizontal divider between the two rows (count 4 only).
+  if (n === 4) {
+    var y = ((rects[0].bottom + rects[2].top) / 2) - gr.top;
+    _wsMakeResizer(grid, tab, 'h', y, gr, 0);
+  }
+}
+
+function _wsMakeResizer(grid, tab, dir, pos, gr, idx) {
+  var h = document.createElement('div');
+  h.className = 'ws-resizer ws-resizer-' + dir;
+  if (dir === 'v') { h.style.left = pos + 'px'; }
+  else { h.style.top = pos + 'px'; }
+  grid.appendChild(h);
+  h.addEventListener('pointerdown', function (e) {
+    e.preventDefault();
+    var els = tab.panes.map(function (p) { return grid.querySelector('.ws-pane[data-pane-id="' + p.id + '"]'); });
+    var gr2 = grid.getBoundingClientRect();
+    var arr = (dir === 'v') ? tab.cols : tab.rows;
+    var a = idx, b = idx + 1;
+    var sum = arr[a] + arr[b];
+    // Pixel span of the two tracks being resized.
+    var startPx, endPx;
+    if (dir === 'v') {
+      startPx = els[a].getBoundingClientRect().left;
+      endPx = els[b].getBoundingClientRect().right;   // adjacent top-row panes (works for 2/3/4)
+    } else {
+      startPx = els[0].getBoundingClientRect().top;      // top row
+      endPx = els[2].getBoundingClientRect().bottom;     // bottom row (count 4)
+    }
+    var S = endPx - startPx;
+    if (S < 2 * _WS_MIN_PANE_PX) return;
+    h.classList.add('dragging');
+    try { h.setPointerCapture(e.pointerId); } catch (_e) {}
+    function move(ev) {
+      var p = (dir === 'v') ? ev.clientX : ev.clientY;
+      var rel = Math.min(S - _WS_MIN_PANE_PX, Math.max(_WS_MIN_PANE_PX, p - startPx));
+      arr[a] = sum * (rel / S);
+      arr[b] = sum - arr[a];
+      _wsApplyGrid(tab);
+      if (dir === 'v') h.style.left = (p - gr2.left) + 'px';
+      else h.style.top = (p - gr2.top) + 'px';
+      _wsThrottleRefit(tab);
+    }
+    function up(ev) {
+      h.classList.remove('dragging');
+      try { h.releasePointerCapture(e.pointerId); } catch (_e) {}
+      document.removeEventListener('pointermove', move);
+      document.removeEventListener('pointerup', up);
+      _wsRefitTab(tab);
+      _wsLayoutResizers(tab);
+      _wsSaveSession();
+    }
+    document.addEventListener('pointermove', move);
+    document.addEventListener('pointerup', up);
+  });
 }
 
 function _wsSyncLayoutButtons() {
@@ -684,16 +1565,54 @@ function activateWorkspaceTab(id) {
   if (tab && tab.panes[0] && tab.panes[0].term) tab.panes[0].term.focus();
 }
 
+// Stack of recently-closed tabs, so Cmd/Ctrl+Shift+T can reopen them (Chrome).
+var _wsClosedTabs = [];
+var _WS_CLOSED_MAX = 12;
+
+function _wsSerializeTab(tab) {
+  return {
+    name: tab.name,
+    cols: Array.isArray(tab.cols) ? tab.cols.slice() : null,
+    rows: Array.isArray(tab.rows) ? tab.rows.slice() : null,
+    panes: tab.panes.map(function (p) {
+      return { cmd: p.cmd || '', prefill: p.prefill || '', cwd: p.cwd || p.wantCwd || '', detectedCmd: p.detectedCmd || '', enteredCmd: p.enteredCmd || '' };
+    }),
+  };
+}
+
 function closeWorkspaceTab(id) {
   var idx = _wsTabs.findIndex(function (t) { return t.id === id; });
   if (idx < 0) return;
   var live = _wsTabs[idx].panes.filter(_wsPaneLive).length;
   if (live > 0 && !confirm('Close this tab and its ' + live + ' running terminal' +
       (live === 1 ? '' : 's') + '?')) return;
+  // Remember it for Cmd+Shift+T before tearing it down.
+  _wsClosedTabs.push(_wsSerializeTab(_wsTabs[idx]));
+  if (_wsClosedTabs.length > _WS_CLOSED_MAX) _wsClosedTabs.shift();
   _wsTabs[idx].panes.forEach(_wsTeardownPane);
   _wsTabs.splice(idx, 1);
   if (_wsTabs.length === 0) { addWorkspaceTab(); return; }
   if (_wsActiveTabId === id) _wsActiveTabId = _wsTabs[Math.max(0, idx - 1)].id;
+  _wsRenderAll();
+}
+
+// Reopen the most recently closed tab (Cmd/Ctrl+Shift+T). The agent command
+// comes back as a restore offer (banner + button), same as session restore —
+// no auto-respawn.
+function reopenLastClosedTab() {
+  if (!_wsClosedTabs.length) return;
+  var spec = _wsClosedTabs.pop();
+  var panes = (spec.panes && spec.panes.length ? spec.panes : [{}])
+    .slice(0, MAX_WS_PANES)
+    .map(function (p) {
+      var cmd = (p && (p.cmd || p.enteredCmd || p.detectedCmd || p.prefill)) || '';
+      return { id: 'p' + (++_wsPaneSeq), cmd: null, prefill: null, restoreCmd: cmd || null, wantCwd: (p && p.cwd) || null };
+    });
+  var tab = { id: 't' + (++_wsTabSeq), name: spec.name || 'Tab', panes: panes,
+              cols: Array.isArray(spec.cols) ? spec.cols.slice() : null, rows: Array.isArray(spec.rows) ? spec.rows.slice() : null };
+  _wsTabs.push(tab);
+  _wsActiveTabId = tab.id;
+  if (typeof setView === 'function' && currentView !== 'workspace') setView('workspace');
   _wsRenderAll();
 }
 
@@ -766,6 +1685,10 @@ function closeWorkspacePane(id) {
     var tab = _wsTabs[i];
     var idx = tab.panes.findIndex(function (p) { return p.id === id; });
     if (idx < 0) continue;
+    // Closing a pane kills whatever runs in it (a shell, or a live agent), so
+    // confirm first when it's live — same guard as closing a whole tab.
+    if (_wsPaneLive(tab.panes[idx]) &&
+        !confirm('Close this terminal? The running ' + _wsPaneLabel(tab.panes[idx]) + ' session will be terminated.')) return;
     _wsTeardownPane(tab.panes[idx]);
     tab.panes.splice(idx, 1);
     if (tab.panes.length === 0) tab.panes.push({ id: 'p' + (++_wsPaneSeq), cmd: null });
@@ -903,11 +1826,15 @@ function _wsCaptureLayout() {
     tabs: _wsTabs.map(function (t) {
       return {
         name: t.name,
+        cols: Array.isArray(t.cols) ? t.cols.slice() : null,
+        rows: Array.isArray(t.rows) ? t.rows.slice() : null,
         panes: t.panes.map(function (p) {
           return {
             cmd: p.cmd || '',
             prefill: p.prefill || '',
             cwd: p.cwd || p.wantCwd || '',
+            detectedCmd: p.detectedCmd || '',
+            enteredCmd: p.enteredCmd || '',
           };
         }),
       };
@@ -1075,21 +2002,27 @@ async function renderWorkspace(container) {
 
   container.innerHTML =
     '<div class="workspace-wrap">' +
-      '<div class="ws-tabbar" id="wsTabbar"></div>' +
-      '<div class="workspace-bar">' +
-        '<div class="ws-layouts" role="group" aria-label="Split layout">' +
-          '<button class="toolbar-btn ws-layout-btn" id="wsLayout-1" title="1 pane" aria-label="1 pane" onclick="setWorkspaceLayout(1)">' + _WS_ICON_1 + '</button>' +
-          '<button class="toolbar-btn ws-layout-btn" id="wsLayout-2" title="2 panes" aria-label="2 panes" onclick="setWorkspaceLayout(2)">' + _WS_ICON_2 + '</button>' +
-          '<button class="toolbar-btn ws-layout-btn" id="wsLayout-3" title="3 panes" aria-label="3 panes" onclick="setWorkspaceLayout(3)">' + _WS_ICON_3 + '</button>' +
-          '<button class="toolbar-btn ws-layout-btn" id="wsLayout-4" title="4 panes (2×2)" aria-label="4 panes" onclick="setWorkspaceLayout(4)">' + _WS_ICON_4 + '</button>' +
+      // One compact top row: tabs on the left (scrollable), tools on the right —
+      // Chrome-like. Merging the old tab bar + toolbar reclaims a whole strip.
+      '<div class="ws-topbar">' +
+        '<div class="ws-tabbar" id="wsTabbar"></div>' +
+        '<div class="ws-tools">' +
+          '<div class="ws-layouts" role="group" aria-label="Split layout">' +
+            '<button class="toolbar-btn ws-layout-btn" id="wsLayout-1" title="1 pane" aria-label="1 pane" onclick="setWorkspaceLayout(1)">' + _WS_ICON_1 + '</button>' +
+            '<button class="toolbar-btn ws-layout-btn" id="wsLayout-2" title="2 panes" aria-label="2 panes" onclick="setWorkspaceLayout(2)">' + _WS_ICON_2 + '</button>' +
+            '<button class="toolbar-btn ws-layout-btn" id="wsLayout-3" title="3 panes" aria-label="3 panes" onclick="setWorkspaceLayout(3)">' + _WS_ICON_3 + '</button>' +
+            '<button class="toolbar-btn ws-layout-btn" id="wsLayout-4" title="4 panes (2×2)" aria-label="4 panes" onclick="setWorkspaceLayout(4)">' + _WS_ICON_4 + '</button>' +
+          '</div>' +
+          '<button class="toolbar-btn" id="wsAddPane" title="Add a pane to this tab" onclick="addWorkspacePane(null)">+ Pane</button>' +
+          '<span class="ws-tools-sep"></span>' +
+          '<button class="toolbar-btn ws-icon-btn" title="Terminal settings — font, theme, cursor" aria-label="Terminal settings" onclick="toggleTerminalSettings(event)">' + _WS_ICON_GEAR + '</button>' +
+          '<button class="toolbar-btn" title="Manage saved start commands" onclick="openWorkspaceCommands()">Commands</button>' +
+          '<button class="toolbar-btn" title="Save the current tabs, panes and commands as a reusable layout" onclick="saveWorkspaceLayout()">Save</button>' +
+          '<select class="ws-pane-launch" id="wsLayoutsMenu" title="Launch a saved workspace layout" ' +
+            'onchange="onWorkspaceLayoutsMenu(this.value); this.selectedIndex=0;"><option value="">Layouts ▾</option></select>' +
         '</div>' +
-        '<button class="toolbar-btn" id="wsAddPane" title="Add a pane to this tab" onclick="addWorkspacePane(null)">+ Pane</button>' +
-        '<button class="toolbar-btn" title="Manage saved start commands" onclick="openWorkspaceCommands()">Commands</button>' +
-        '<span style="flex:1"></span>' +
-        '<button class="toolbar-btn" title="Save the current tabs, panes and commands as a reusable layout" onclick="saveWorkspaceLayout()">Save layout</button>' +
-        '<select class="ws-pane-launch" id="wsLayoutsMenu" title="Launch a saved workspace layout" ' +
-          'onchange="onWorkspaceLayoutsMenu(this.value); this.selectedIndex=0;"><option value="">Layouts ▾</option></select>' +
       '</div>' +
+      '<div class="ws-bookmarks" id="wsBookmarks"></div>' +
       '<div class="workspace-tabpanes" id="wsTabPanes"></div>' +
     '</div>';
 
@@ -1101,16 +2034,114 @@ async function renderWorkspace(container) {
   _wsRoot = container.querySelector('.workspace-wrap');
   // If something asked to open a project/session before the terminal had
   // mounted, seed that tab as the initial one (no throwaway "Tab 1").
+  var _restoredSession = _wsLoadSession();
   if (_wsPendingOpen) {
     var spec = _wsPendingOpen; _wsPendingOpen = null;
     _wsTabs = [{ id: 't' + (++_wsTabSeq), name: _wsTabName(spec), panes: _wsBuildPanes(spec) }];
+  } else if (_restoredSession) {
+    // Reopen last session's tabs/panes (Chrome-like restore).
+    _wsRestoreTabsFromSession(_restoredSession);
   } else {
     _wsTabs = [{ id: 't' + (++_wsTabSeq), name: 'Tab 1', panes: [{ id: 'p' + (++_wsPaneSeq), cmd: null }] }];
   }
   _wsActiveTabId = _wsTabs[0].id;
+  _wsLoadTermPrefs();
+  _wsLoadBookmarks();
   _wsRenderAll();
+  _wsRenderBookmarks();
   _wsLoadCommands();
   _wsLoadLayouts();
   _wsStartStatusLoop();
   _wsUpdateStatusBar();
+  _wsBindReopenShortcut();
+  _wsBindWindowResize();
 }
+
+// Reposition split handles + refit terminals whenever the window resizes —
+// maximize, enter/exit fullscreen, or a manual drag. The resizers are absolutely
+// positioned by pixel offset over the pane gaps, so without this they keep their
+// old coordinates after the window changes size and drift off the dividers.
+// Bound once; debounced so it fires after the resize (incl. the fullscreen
+// animation) settles.
+var _wsResizeBound = false;
+var _wsResizeTimer = null;
+function _wsBindWindowResize() {
+  if (_wsResizeBound) return;
+  _wsResizeBound = true;
+  window.addEventListener('resize', function () {
+    clearTimeout(_wsResizeTimer);
+    _wsResizeTimer = setTimeout(function () {
+      var at = _wsActiveTab();
+      if (at) _wsRefitTab(at);   // refits panes AND re-lays the drag handles
+    }, 120);
+    // A second pass catches the end of macOS's fullscreen animation, where the
+    // final size arrives after the last 'resize' event.
+    setTimeout(function () { var at = _wsActiveTab(); if (at) _wsLayoutResizers(at); }, 450);
+  });
+}
+
+// Is focus in a real editable field (a rename box, the command modal…)? Then
+// browser-style tab shortcuts must NOT hijack the keystroke. The xterm terminal
+// uses a hidden helper textarea — that's the normal terminal case, so we DON'T
+// treat it as a form field (Cmd+T/W should still manage tabs while in a term).
+function _wsInFormField() {
+  var el = document.activeElement;
+  if (!el) return false;
+  if (el.classList && el.classList.contains('xterm-helper-textarea')) return false;
+  var tag = el.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
+}
+
+// Chrome-like tab keyboard shortcuts, bound once globally:
+//   Cmd/Ctrl+T        → new empty tab
+//   Cmd/Ctrl+W        → close the current tab (same as the × — confirms if live)
+//   Cmd/Ctrl+Shift+T  → reopen the last closed tab, fully (layout + panes)
+// The tab shortcuts only act inside the Workspace so they don't steal Cmd+W /
+// Cmd+T on other views (there Cmd+W keeps its native "close window" meaning).
+var _wsKeysBound = false;
+function _wsBindReopenShortcut() {
+  if (_wsKeysBound) return;
+  _wsKeysBound = true;
+  document.addEventListener('keydown', function (e) {
+    var mod = e.metaKey || e.ctrlKey;
+    if (!mod) return;
+    var isT = (e.key === 'T' || e.key === 't' || e.code === 'KeyT');
+    var isW = (e.key === 'W' || e.key === 'w' || e.code === 'KeyW');
+    var inWs = (typeof currentView === 'undefined') || currentView === 'workspace';
+
+    if (e.shiftKey && isT) {                       // reopen closed tab
+      if (_wsClosedTabs.length) { e.preventDefault(); reopenLastClosedTab(); }
+      return;
+    }
+    if (e.shiftKey) return;
+    if (_wsInFormField()) return;
+    if (isT && inWs) {                             // new empty tab
+      e.preventDefault();
+      addWorkspaceTab();
+      var nt = _wsActiveTab();
+      if (nt && nt.panes[0] && nt.panes[0].term) nt.panes[0].term.focus();
+      return;
+    }
+    if (isW && inWs && _wsActiveTabId) {           // close current tab (like the ×)
+      e.preventDefault();
+      closeWorkspaceTab(_wsActiveTabId);
+      return;
+    }
+  });
+}
+
+// In the desktop app the native menu grabs Cmd+W before the page can, so main
+// forwards it here (see desktop/main.js before-input-event). Bound once at load
+// so it works on every view. In a plain browser this is inert (no codbashDesktop).
+(function _wsBindDesktopShortcuts() {
+  if (typeof window === 'undefined' || !window.codbashDesktop || !window.codbashDesktop.onShortcut) return;
+  window.codbashDesktop.onShortcut(function (name) {
+    if (name !== 'close-tab') return;
+    var inWs = (typeof currentView === 'undefined') || currentView === 'workspace';
+    if (inWs && typeof _wsActiveTabId !== 'undefined' && _wsActiveTabId) {
+      closeWorkspaceTab(_wsActiveTabId);
+    } else if (window.codbashDesktop.closeWindow) {
+      window.codbashDesktop.closeWindow();   // nothing to close in-page → close window
+    }
+  });
+})();

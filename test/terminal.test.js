@@ -91,3 +91,62 @@ test('getToken returns a stable 64-char hex token', () => {
   assert.equal(t1, t2);
   assert.match(t1, /^[0-9a-f]{64}$/);
 });
+
+// ── env sanitization: nested-agent markers must not leak into a pane ──────────
+// If codbash is launched from inside an agent session, process.env carries
+// markers like CLAUDE_CODE_SESSION_ID; a `claude` spawned in a pane would then
+// nest under the parent and misfile its conversation. sanitizedPtyEnv strips them.
+test('sanitizedPtyEnv strips inherited agent-session markers', () => {
+  const saved = {};
+  const markers = {
+    CLAUDE_CODE_SESSION_ID: 'abc', CLAUDE_CODE_CHILD_SESSION: '1',
+    CLAUDE_PID: '123', CLAUDE_CODE_ENTRYPOINT: 'cli', CLAUDECODE: '1',
+    CLAUDE_EFFORT: 'medium', CLAUDE_REMOTE_URL: 'http://x',
+    // npm-injected vars that break nvm in the pane's shell.
+    npm_config_prefix: '/opt/homebrew', npm_package_name: 'codbash-app',
+    npm_lifecycle_event: 'start', npm_execpath: '/usr/lib/npm.js',
+  };
+  Object.keys(markers).forEach(k => { saved[k] = process.env[k]; process.env[k] = markers[k]; });
+  // Keep legit config + a normal var.
+  const savedCfg = process.env.CLAUDE_CONFIG_DIR; process.env.CLAUDE_CONFIG_DIR = '/tmp/cfg';
+  process.env.PATH = process.env.PATH || '/usr/bin';
+  try {
+    const env = terminal.sanitizedPtyEnv();
+    Object.keys(markers).forEach(k => assert.equal(env[k], undefined, k + ' should be stripped'));
+    assert.equal(env.CLAUDE_CONFIG_DIR, '/tmp/cfg', 'user config must be preserved');
+    assert.ok(env.PATH, 'PATH must be preserved');
+  } finally {
+    Object.keys(markers).forEach(k => { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; });
+    if (savedCfg === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = savedCfg;
+  }
+});
+
+// ── resolveCwd: honor real dirs, flag fallback (never silently misfile) ───────
+test('resolveCwd honors an existing real directory (even with () chars)', () => {
+  const os = require('os');
+  const fs = require('fs');
+  const path = require('path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cb (test)-'));  // parens in name
+  try {
+    const url = new URL('http://x/ws?cwd=' + encodeURIComponent(dir));
+    const r = terminal.resolveCwd(url, () => false);  // stricter check rejects → must still honor
+    assert.equal(r.cwd, dir);
+    assert.equal(r.fellBack, false);
+  } finally { fs.rmdirSync(dir); }
+});
+
+test('resolveCwd falls back to home and flags it for a non-existent dir', () => {
+  const os = require('os');
+  const url = new URL('http://x/ws?cwd=' + encodeURIComponent('/no/such/dir/xyz123'));
+  const r = terminal.resolveCwd(url, () => false);
+  assert.equal(r.cwd, os.homedir());
+  assert.equal(r.fellBack, true);
+});
+
+test('resolveCwd with no cwd param returns home, no fallback flag', () => {
+  const os = require('os');
+  const url = new URL('http://x/ws');
+  const r = terminal.resolveCwd(url, () => false);
+  assert.equal(r.cwd, os.homedir());
+  assert.equal(r.fellBack, false);
+});

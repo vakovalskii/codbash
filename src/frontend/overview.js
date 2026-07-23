@@ -48,9 +48,14 @@ function _ovStat(num, label, sub) {
 }
 
 function renderOverview(container) {
-  // Make sure the data we lean on is available even on a cold landing.
-  if (typeof _wsLoadCommands === 'function' && (!window._wsSavedCommands || !_wsSavedCommands.length)) _wsLoadCommands();
-  if (typeof _wsLoadLayouts === 'function' && (!window._wsSavedLayouts || !_wsSavedLayouts.length)) _wsLoadLayouts();
+  // Make sure the data we lean on is available even on a cold landing. Fire the
+  // fetch exactly ONCE (guarded by a request flag) — NOT "when the list is
+  // empty": renderOverview runs once per second, and a user with zero saved
+  // layouts/commands has a permanently-empty [] which made the old "if empty"
+  // guard re-fetch /api/terminal/{layouts,commands} every single second. Saving
+  // a layout/command calls the loader directly, so it still refreshes.
+  if (typeof _wsLoadCommands === 'function' && !window._ovCommandsRequested) { window._ovCommandsRequested = true; _wsLoadCommands(); }
+  if (typeof _wsLoadLayouts === 'function' && !window._ovLayoutsRequested) { window._ovLayoutsRequested = true; _wsLoadLayouts(); }
   if (typeof _wsStartStatusLoop === 'function') _wsStartStatusLoop();
   var sessions = (typeof allSessions !== 'undefined' && allSessions) ? allSessions : [];
   if (!sessions.length && typeof loadSessions === 'function') loadSessions();
@@ -100,8 +105,12 @@ function renderOverview(container) {
       groups[key].forEach(function (x) {
         var st = (typeof _wsPaneStatus === 'function') ? _wsPaneStatus(x.pane) : 'idle';
         var meta = (window.WS_STATUS_META && WS_STATUS_META[st]) || { label: st, cls: st };
-        var cmd = x.pane.cmd || 'shell';
-        var masked = (typeof _wsMaskSecrets === 'function') ? _wsMaskSecrets(cmd) : cmd;
+        // Clean, human label ("claude") — _wsPaneLabel strips leading VAR=value
+        // env assignments (e.g. HTTPS_PROXY='http://user:pass@host') so we never
+        // surface a raw proxy string, and masks any remaining secrets.
+        var masked = (typeof _wsPaneLabel === 'function')
+          ? _wsPaneLabel(x.pane)
+          : ((typeof _wsMaskSecrets === 'function') ? _wsMaskSecrets(x.pane.cmd || 'shell') : (x.pane.cmd || 'shell'));
         html += '<button class="ov-card ' + meta.cls + '" ' +
           'onclick="jumpToWorkspacePane(\'' + escHtml(x.tab.id) + '\',\'' + escHtml(x.pane.id) + '\')">' +
           '<div class="ov-card-top"><span class="ov-dot"></span>' +
