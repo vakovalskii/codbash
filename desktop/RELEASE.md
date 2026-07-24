@@ -73,17 +73,26 @@ env -u HTTPS_PROXY -u HTTP_PROXY -u ALL_PROXY -u https_proxy -u http_proxy -u al
   since electron-builder builds the DMG after the hook runs.
 
 **2b. Notarize + staple the DMG containers, then regenerate the update feed**
-(the staple mutates the DMG, so blockmaps + `latest-mac.yml` must be recomputed):
+(the staple mutates the DMG bytes, so any changed artifact's checksum/blockmap in
+`latest-mac.yml` must be recomputed):
 
 ```bash
 for dmg in dist/codbash-<ver>-arm64.dmg dist/codbash-<ver>.dmg; do
   xcrun notarytool submit "$dmg" --keychain-profile codbash-notary --wait
   xcrun stapler staple "$dmg"
-  ./node_modules/app-builder-bin/mac/app-builder_arm64 blockmap \
-    --input "$dmg" --output "$dmg.blockmap"   # prints the {size,sha512} for latest-mac.yml
 done
-# then rewrite dist/latest-mac.yml with the new size+sha512 for both DMGs.
+npm run refresh-update-feed   # scripts/regenerate-latest-mac.js
 ```
+
+`refresh-update-feed` parses electron-builder's own `dist/latest-mac.yml` and
+refreshes `sha512`/`size`/`blockMapSize` only for entries whose bytes actually
+changed on disk (detected by sha512 mismatch), then re-syncs the top-level
+`sha512` to the `path` file. It's schema-preserving (never hand-writes the feed)
+and idempotent. Since electron-updater's mac feed points at the untouched
+`.zip`, the `.zip` entries are left as-is and only stapled DMG entries (if the
+feed lists them) get recomputed. Pure transforms are covered by
+`test/desktop-update-feed.test.js`; **validate against the real feed on the first
+signed build** (electron-updater fails loudly on a checksum mismatch).
 
 Publish (include the **zips + their blockmaps** — electron-updater installs from
 the zip, and `latest-mac.yml` points at it; a Release with only the DMGs makes

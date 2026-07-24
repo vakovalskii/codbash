@@ -13,6 +13,7 @@
     "dist:mac": "electron-builder --mac --arm64 --x64",
     "dist:win": "electron-builder --win nsis",
     "release:mac": "electron-builder --mac --arm64 --x64 --publish always",
+    "refresh-update-feed": "node scripts/regenerate-latest-mac.js",
     "pack": "electron-builder --dir",
     "dev": "bash dev.sh"
   },
