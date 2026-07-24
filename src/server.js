@@ -988,6 +988,15 @@ function startServer(host, port, openBrowser = true) {
 
     // ── Self-update ─────────────────────────
     else if (req.method === 'POST' && pathname === '/api/update') {
+      // In the desktop app (Electron shell), this npm-based self-update is wrong:
+      // it would `npm i -g` an unrelated global copy while the app keeps running
+      // its bundled server, so the restart lands back on the old version. The
+      // desktop uses electron-updater instead — refuse here so nothing silently
+      // half-updates. CODBASH_DESKTOP=1 is set by desktop/main.js when it spawns us.
+      if (process.env.CODBASH_DESKTOP === '1') {
+        json(res, { ok: false, error: 'Use the built-in updater in the desktop app.' }, 400);
+        return;
+      }
       const pkg = require('../package.json');
       log('UPDATE', `Starting self-update from v${pkg.version}...`);
       json(res, { ok: true, message: 'Updating... Page will reload.' });

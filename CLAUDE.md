@@ -76,6 +76,7 @@ docs/
 - **Running-agents sidebar tree** (Workspace) is built from `activeSessions` grouped by real `cwd` and labeled by agent — do NOT reconstruct it from static project config
 - **Saved layouts round-trip the full pane** — `sanitizePane` preserves `cmd` + `prefill` + `cwd` (not just `cmd`); dropping any of these silently loses the user's launch command on restore
 - **No `window.prompt` in Electron** — use `codbashPrompt()` (app.js) for any text input; the native prompt is a no-op in the desktop shell
+- **Two update paths, mutually exclusive** — the npm CLI self-updates via `POST /api/update` (`npm i -g codbash-app@latest` + restart). The **desktop app updates in-place via `electron-updater`** (download-on-click → restart, driven by the frontend banner over `window.codbashDesktop.updater` IPC and `main.js`). `desktop/main.js` sets `CODBASH_DESKTOP=1` so the server **refuses `/api/update` (400)** — running `npm i -g` inside the signed, read-only app bundle would update an unrelated global copy and the restart would land back on the bundled old version. macOS in-place update needs the **`.zip` target + `latest-mac.yml`** (Squirrel.Mac can't apply a DMG) and a signed build; on failure the banner falls back to opening the releases page (`codbash:open-releases`). See `desktop/RELEASE.md` §4.
 
 ## API routes
 

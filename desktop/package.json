@@ -10,10 +10,14 @@
   "scripts": {
     "start": "electron .",
     "smoke": "CODBASH_SMOKE=1 electron .",
-    "dist:mac": "electron-builder --mac dmg",
-    "release:mac": "electron-builder --mac dmg --publish always",
+    "dist:mac": "electron-builder --mac --arm64 --x64",
+    "dist:win": "electron-builder --win nsis",
+    "release:mac": "electron-builder --mac --arm64 --x64 --publish always",
     "pack": "electron-builder --dir",
     "dev": "bash dev.sh"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
   },
   "devDependencies": {
     "@electron/notarize": "^2.5.0",
@@ -63,6 +67,13 @@
             "arm64",
             "x64"
           ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
         }
       ],
       "icon": "build/icon.png",
@@ -74,6 +85,23 @@
     },
     "dmg": {
       "title": "codbash ${version}"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false
     }
   }
 }

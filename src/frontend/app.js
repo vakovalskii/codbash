@@ -3578,6 +3578,10 @@ function showExportDialog() {
 
 // ── Update check ──────────────────────────────────────────────
 
+function _isDesktopUpdater() {
+  return !!(window.codbashDesktop && window.codbashDesktop.isDesktop && window.codbashDesktop.updater);
+}
+
 async function checkForUpdates() {
   try {
     var resp = await fetch('/api/version');
@@ -3605,6 +3609,15 @@ async function checkForUpdates() {
     }
     localStorage.setItem('codedash-last-version', data.current);
 
+    // Desktop app: updates are driven by electron-updater (real in-place update),
+    // NOT the npm-based `/api/update` route (which would update an unrelated
+    // npm-global copy while the bundled server keeps running the old version).
+    // The banner is state-driven via IPC — ignore the npm `updateAvailable` here.
+    if (_isDesktopUpdater()) {
+      wireDesktopUpdater();
+      return;
+    }
+
     if (data.updateAvailable) {
       if (badge) {
         badge.textContent = 'v' + data.current + ' → v' + data.latest;
@@ -3629,7 +3642,115 @@ async function checkForUpdates() {
   } catch {}
 }
 
+// ── Desktop in-app updater (electron-updater via IPC) ─────────────────────────
+// State-driven banner: 'available' → Download → 'downloading' (%) → 'downloaded'
+// → Restart. Mirrors what main.js emits over 'codbash:update-state'.
+var _desktopUpdaterWired = false;
+function wireDesktopUpdater() {
+  if (_desktopUpdaterWired || !_isDesktopUpdater()) return;
+  _desktopUpdaterWired = true;
+  // The npm command doesn't apply in the desktop app — hide the Copy button.
+  var copyBtn = document.getElementById('updateCopyBtn');
+  if (copyBtn) copyBtn.style.display = 'none';
+  window.codbashDesktop.updater.onState(function (s) { renderDesktopUpdateState(s || {}); });
+  // Kick off a check now; periodic re-checks run in main.js.
+  try { window.codbashDesktop.updater.check(); } catch (e) {}
+}
+
+function _setUpdatePrimary(label, handler, disabled) {
+  var btn = document.getElementById('updatePrimaryBtn');
+  if (!btn) return;
+  btn.textContent = label;
+  btn.onclick = disabled ? null : handler;
+  btn.disabled = !!disabled;
+  btn.style.opacity = disabled ? '0.6' : '1';
+}
+
+// The banner's second button (the npm "Copy Command" button in browser mode) is
+// repurposed as an optional secondary action in the desktop updater (e.g. the
+// manual "Open download page" fallback next to "Check again" on error).
+function _setUpdateSecondary(label, handler) {
+  var btn = document.getElementById('updateCopyBtn');
+  if (!btn) return;
+  if (!label) { btn.style.display = 'none'; btn.onclick = null; return; }
+  btn.textContent = label;
+  btn.onclick = handler;
+  btn.style.display = '';
+  btn.style.opacity = '0.7';
+}
+
+// True once we've surfaced an actual update to the user (available/downloading/
+// downloaded). Gates the error banner so a transient hiccup on the routine 6h
+// background check doesn't pop an alarming "auto-update unavailable" out of
+// nowhere — the error is only worth showing if the user was mid-flow.
+var _desktopUpdateSurfaced = false;
+function renderDesktopUpdateState(s) {
+  var banner = document.getElementById('updateBanner');
+  var text = document.getElementById('updateText');
+  var badge = document.getElementById('versionBadge');
+  if (!banner || !text) return;
+  var U = window.codbashDesktop.updater;
+  switch (s.state) {
+    case 'available':
+      _desktopUpdateSurfaced = true;
+      _setUpdateSecondary(null);
+      text.textContent = 'v' + (s.version || '') + ' available';
+      // Optimistically disable on click (before the IPC round-trip) so a fast
+      // double-click can't fire two downloads; main.js also guards server-side.
+      _setUpdatePrimary('Download', function () { _setUpdatePrimary('Downloading…', null, true); U.download(); }, false);
+      banner.style.display = 'flex';
+      if (badge) {
+        badge.classList.add('update-available');
+        badge.title = 'Download update';
+        badge.onclick = function () { U.download(); };
+      }
+      break;
+    case 'downloading':
+      _desktopUpdateSurfaced = true;
+      _setUpdateSecondary(null);
+      text.textContent = 'Downloading update… ' + (s.percent != null ? s.percent + '%' : '');
+      _setUpdatePrimary('Downloading…', null, true);
+      banner.style.display = 'flex';
+      break;
+    case 'downloaded':
+      _desktopUpdateSurfaced = true;
+      _setUpdateSecondary(null);
+      text.textContent = 'v' + (s.version || '') + ' ready — restart to apply';
+      _setUpdatePrimary('Restart to update', function () { U.install(); }, false);
+      banner.style.display = 'flex';
+      if (badge) { badge.title = 'Restart to update'; badge.onclick = function () { U.install(); }; }
+      break;
+    case 'error':
+      // In-place update couldn't apply. Only surface it if the user was already
+      // mid-flow (they clicked Download and it failed) — degrade gracefully with
+      // a retry plus a manual fallback. A background-check error with nothing
+      // offered stays silent.
+      if (!_desktopUpdateSurfaced) break;
+      text.textContent = 'Update failed — retry or open the download page';
+      _setUpdatePrimary('Check again', function () { U.check(); }, false);
+      _setUpdateSecondary('Open download page', function () { U.openReleases(); });
+      banner.style.display = 'flex';
+      break;
+    case 'none':
+      // Re-check found nothing new: clear any stale banner we had shown.
+      _desktopUpdateSurfaced = false;
+      _setUpdateSecondary(null);
+      banner.style.display = 'none';
+      break;
+    case 'checking':
+    default:
+      // Transient — leave the banner as it is.
+      break;
+  }
+}
+
 async function selfUpdate() {
+  // Desktop app: route to the in-place updater (download → restart), never the
+  // npm-based route which can't touch the running bundled server.
+  if (_isDesktopUpdater()) {
+    try { window.codbashDesktop.updater.download(); } catch (e) {}
+    return;
+  }
   if (!confirm('Update codbash to latest version? The page will reload.')) return;
   showToast('Updating...');
   try {
