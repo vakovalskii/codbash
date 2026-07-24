@@ -19,6 +19,7 @@ const crypto = require('crypto');
 const os = require('os');
 const fs = require('fs');
 const ptyRegistry = require('./pty-registry');
+const { checkSameOrigin } = require('./origin-guard');
 
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const WS_PATH = '/ws/terminal';
@@ -178,14 +179,10 @@ function verifyUpgradeAuth(req, url) {
     return { ok: false, reason: 'bad token' };
   }
   // Reject cross-origin upgrades (defense against a malicious page in the
-  // browser reaching the loopback socket). Origin, when present, must be the
-  // same host we are serving from.
-  const origin = req.headers.origin;
-  if (origin) {
-    let originHost;
-    try { originHost = new URL(origin).host; } catch (_e) { return { ok: false, reason: 'bad origin' }; }
-    if (originHost !== req.headers.host) return { ok: false, reason: 'origin mismatch' };
-  }
+  // browser reaching the loopback socket). Shared with the HTTP CSRF gate via
+  // origin-guard so the two never drift.
+  const oc = checkSameOrigin(req.headers);
+  if (oc.crossOrigin) return { ok: false, reason: oc.reason };
   return { ok: true };
 }
 
