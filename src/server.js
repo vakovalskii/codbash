@@ -28,6 +28,8 @@ const { repoRefreshManager } = require('./repo-refresh');
 const { handleRepoRefreshRoute } = require('./repo-refresh-routes');
 
 const SAFE_SESSION_ID = /^[A-Za-z0-9._-]{1,128}$/;
+const IS_DESKTOP = process.env.CODBASH_DESKTOP === '1';
+const DESKTOP_VERSION = process.env.CODBASH_DESKTOP_VERSION || '';
 
 // The agent command currently running inside a pane's shell, for session
 // restore — so a hand-typed `HTTPS_PROXY=… claude …` comes back, not just the
@@ -973,21 +975,29 @@ function startServer(host, port, openBrowser = true) {
     // ── Version check ────────────────────────
     else if (req.method === 'GET' && pathname === '/api/version') {
       const pkg = require('../package.json');
-      const current = pkg.version;
+      const current = IS_DESKTOP && DESKTOP_VERSION ? DESKTOP_VERSION : pkg.version;
       // `dev` marks a from-source run (NODE_ENV=development) so the UI can show a
       // DEV badge — an at-a-glance signal that you're looking at the live-editing
       // build (your uncommitted changes), NOT the installed DMG.
       const dev = process.env.NODE_ENV === 'development';
+      if (IS_DESKTOP) {
+        json(res, { current, latest: null, updateAvailable: false, dev, desktop: true });
+        return;
+      }
       // Fetch latest from npm registry
       fetchLatestVersion(pkg.name).then(latest => {
-        json(res, { current, latest, updateAvailable: latest && latest !== current && isNewer(latest, current), dev });
+        json(res, { current, latest, updateAvailable: latest && latest !== current && isNewer(latest, current), dev, desktop: false });
       }).catch(() => {
-        json(res, { current, latest: null, updateAvailable: false, dev });
+        json(res, { current, latest: null, updateAvailable: false, dev, desktop: false });
       });
     }
 
     // ── Self-update ─────────────────────────
     else if (req.method === 'POST' && pathname === '/api/update') {
+      if (IS_DESKTOP) {
+        json(res, { ok: false, error: 'Desktop builds are updated by the Electron updater.' }, 409);
+        return;
+      }
       const pkg = require('../package.json');
       log('UPDATE', `Starting self-update from v${pkg.version}...`);
       json(res, { ok: true, message: 'Updating... Page will reload.' });

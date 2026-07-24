@@ -3578,6 +3578,75 @@ function showExportDialog() {
 
 // ── Update check ──────────────────────────────────────────────
 
+var desktopUpdateReady = false;
+var desktopUpdateEventsBound = false;
+
+function getDesktopUpdater() {
+  return window.codbashDesktop || null;
+}
+
+function setUpdateBannerButtons(primaryText, copyVisible) {
+  var primary = document.getElementById('updatePrimaryBtn');
+  var copy = document.getElementById('updateCopyBtn');
+  if (primary && primaryText) primary.textContent = primaryText;
+  if (copy) copy.style.display = copyVisible ? '' : 'none';
+}
+
+function setUpdateBannerText(strongText, suffixText) {
+  var banner = document.getElementById('updateBanner');
+  var text = document.getElementById('updateText');
+  if (!banner || !text) return;
+  text.textContent = '';
+  if (strongText) {
+    var strong = document.createElement('strong');
+    strong.textContent = strongText;
+    text.appendChild(strong);
+  }
+  if (suffixText) text.appendChild(document.createTextNode(suffixText));
+  banner.style.display = 'flex';
+}
+
+function handleDesktopUpdateEvent(event) {
+  if (!event || !event.status) return;
+  var badge = document.getElementById('versionBadge');
+  if (event.status === 'checking') {
+    if (badge) badge.title = 'Checking for desktop updates...';
+  } else if (event.status === 'available' || event.status === 'downloading') {
+    desktopUpdateReady = false;
+    if (badge) {
+      badge.classList.add('update-available');
+      badge.title = 'Downloading desktop update';
+    }
+    var suffix = event.status === 'downloading' && typeof event.percent === 'number'
+      ? ' downloading (' + Math.round(event.percent) + '%)'
+      : ' downloading';
+    setUpdateBannerButtons('Downloading...', false);
+    setUpdateBannerText(event.version ? 'v' + event.version : 'Update', suffix);
+  } else if (event.status === 'downloaded') {
+    desktopUpdateReady = true;
+    if (badge) {
+      badge.textContent = 'v' + (event.current || '').replace(/^v/, '') + ' → v' + event.version;
+      badge.classList.add('update-available');
+      badge.title = 'Click to restart and install';
+      badge.onclick = function() { selfUpdate(); };
+    }
+    setUpdateBannerButtons('Restart to Update', false);
+    setUpdateBannerText('v' + String(event.version || ''), ' ready to install');
+  } else if (event.status === 'error') {
+    if (badge) badge.title = 'Desktop update check failed';
+  } else if (event.status === 'idle') {
+    desktopUpdateReady = false;
+    if (badge) badge.title = 'Click to check for desktop updates';
+  }
+}
+
+function bindDesktopUpdateEvents() {
+  var desktop = getDesktopUpdater();
+  if (desktopUpdateEventsBound || !(desktop && typeof desktop.onUpdateEvent === 'function')) return;
+  desktopUpdateEventsBound = true;
+  desktop.onUpdateEvent(handleDesktopUpdateEvent);
+}
+
 async function checkForUpdates() {
   try {
     var resp = await fetch('/api/version');
@@ -3605,6 +3674,20 @@ async function checkForUpdates() {
     }
     localStorage.setItem('codedash-last-version', data.current);
 
+    if (data.desktop) {
+      bindDesktopUpdateEvents();
+      if (badge) {
+        badge.title = 'Click to check for desktop updates';
+        badge.onclick = function() {
+          var desktop = getDesktopUpdater();
+          if (desktop && typeof desktop.checkForUpdates === 'function') {
+            desktop.checkForUpdates().then(handleDesktopUpdateEvent).catch(function() {});
+          }
+        };
+      }
+      return;
+    }
+
     if (data.updateAvailable) {
       if (badge) {
         badge.textContent = 'v' + data.current + ' → v' + data.latest;
@@ -3612,24 +3695,28 @@ async function checkForUpdates() {
         badge.title = 'Click to update';
         badge.onclick = function() { selfUpdate(); };
       }
-      var banner = document.getElementById('updateBanner');
-      var text = document.getElementById('updateText');
-      if (banner && text) {
-        // Build via textContent/DOM nodes — never interpolate the npm-supplied
-        // version string into innerHTML, otherwise a tampered registry response
-        // can inject arbitrary HTML into our update banner.
-        text.textContent = '';
-        var strong = document.createElement('strong');
-        strong.textContent = 'v' + String(data.latest || '');
-        text.appendChild(strong);
-        text.appendChild(document.createTextNode(' available'));
-        banner.style.display = 'flex';
-      }
+      // Build via textContent/DOM nodes — never interpolate the npm-supplied
+      // version string into innerHTML, otherwise a tampered registry response
+      // can inject arbitrary HTML into our update banner.
+      setUpdateBannerButtons('Update Now', true);
+      setUpdateBannerText('v' + String(data.latest || ''), ' available');
     }
   } catch {}
 }
 
 async function selfUpdate() {
+  var desktop = getDesktopUpdater();
+  if (desktop && typeof desktop.installUpdate === 'function') {
+    if (desktopUpdateReady) {
+      desktop.installUpdate().catch(function(e) { showToast('Update failed: ' + e.message); });
+    } else if (typeof desktop.checkForUpdates === 'function') {
+      showToast('Checking for desktop update...');
+      desktop.checkForUpdates().then(handleDesktopUpdateEvent).catch(function(e) {
+        showToast('Update check failed: ' + e.message);
+      });
+    }
+    return;
+  }
   if (!confirm('Update codbash to latest version? The page will reload.')) return;
   showToast('Updating...');
   try {

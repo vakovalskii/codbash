@@ -2,8 +2,8 @@
 
 The build is **signed** with a Developer ID Application cert, **notarized** by
 the `afterSign` hook (`scripts/notarize.js`) + a follow-up pass for the DMG
-containers, and **published** to GitHub Releases where the in-app notify-updater
-picks it up. Releases since **v7.14.4** are signed + notarized (arm64 + x64) and
+containers, and **published** to GitHub Releases where `electron-updater` picks
+it up. Releases since **v7.14.4** are signed + notarized (arm64 + x64) and
 open with no Gatekeeper warning. With no credentials the build still succeeds and
 produces an unsigned DMG for local smoke-testing (the notarize hook no-ops).
 
@@ -75,10 +75,8 @@ env -u HTTPS_PROXY -u HTTP_PROXY -u ALL_PROXY -u https_proxy -u http_proxy -u al
 for dmg in dist/codbash-<ver>-arm64.dmg dist/codbash-<ver>.dmg; do
   xcrun notarytool submit "$dmg" --keychain-profile codbash-notary --wait
   xcrun stapler staple "$dmg"
-  ./node_modules/app-builder-bin/mac/app-builder_arm64 blockmap \
-    --input "$dmg" --output "$dmg.blockmap"   # prints the {size,sha512} for latest-mac.yml
 done
-# then rewrite dist/latest-mac.yml with the new size+sha512 for both DMGs.
+npm run refresh-update-feed
 ```
 
 Publish:
@@ -109,15 +107,17 @@ hdiutil attach /tmp/q.dmg -nobrowse; spctl -a -vvv -t exec "/Volumes/codbash <ve
 
 ## 4. Updates
 
-- **Current model — notify-only.** On launch and every 6h the app queries the
-  GitHub `releases/latest` API and, if a newer version exists, offers to open
-  the download page (`main.js` → `checkForUpdates`). Robust and dependency-free;
-  just publish each release.
-- **Silent auto-update (now possible — builds are signed).** Swap
-  `checkForUpdates` for `electron-updater`: `npm i electron-updater`, call
-  `autoUpdater.checkForUpdatesAndNotify()`, and ensure `latest-mac.yml` +
-  signed/stapled DMGs are in the Release (they are — steps 2b/publish above).
-  macOS silent in-place update requires the signature, which is now in place.
+- **Current model — desktop OTA.** On launch and every 6h the app asks
+  `electron-updater` to check GitHub Releases, downloads a newer signed DMG in
+  the background, then prompts the user to restart and install. The bundled
+  server is marked with `CODBASH_DESKTOP=1`, so the web UI does not run the npm
+  self-updater inside a packaged app.
+- **Required release assets.** Upload both DMGs, both `.blockmap` files, and the
+  regenerated `latest-mac.yml`. The feed must be regenerated after stapling
+  because stapling changes the DMG bytes and therefore the updater checksums.
+- **CLI remains separate.** `codbash update` and `/api/update` still update the
+  global npm install when codbash is run as the CLI/source server. Packaged
+  desktop builds are updated only through Electron OTA.
 
 ## CI note
 

@@ -12,6 +12,7 @@
     "smoke": "CODBASH_SMOKE=1 electron .",
     "dist:mac": "electron-builder --mac dmg",
     "release:mac": "electron-builder --mac dmg --publish always",
+    "refresh-update-feed": "node scripts/regenerate-latest-mac.js",
     "pack": "electron-builder --dir",
     "dev": "bash dev.sh"
   },
@@ -19,6 +20,9 @@
     "@electron/notarize": "^2.5.0",
     "electron": "^33.2.0",
     "electron-builder": "^25.1.8"
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.9"
   },
   "build": {
     "appId": "dev.codbash.desktop",

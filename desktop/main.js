@@ -8,9 +8,9 @@
 'use strict';
 
 const { app, BrowserWindow, shell, dialog, Menu, ipcMain } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const { spawn } = require('child_process');
 const http = require('http');
-const https = require('https');
 const net = require('net');
 const path = require('path');
 const fs = require('fs');
@@ -20,6 +20,8 @@ const { execFileSync } = require('child_process');
 let serverProc = null;
 let win = null;
 let serverPort = 0;
+let updateState = { status: 'idle' };
+let updateCheckInFlight = null;
 const SMOKE = !!process.env.CODBASH_SMOKE; // launch, verify, auto-quit (CI/local test)
 
 // Grab an ephemeral loopback port the OS hands us, then release it for the server.
@@ -111,7 +113,12 @@ function startServer(port) {
   const entry = resolveServerEntry();
   const nodeBin = resolveNodeBin();
   serverProc = spawn(nodeBin, [entry, 'run', '--port=' + port, '--host=127.0.0.1', '--no-browser'], {
-    env: Object.assign({}, process.env, { CODEDASH_HOST: '127.0.0.1' }),
+    env: Object.assign({}, process.env, {
+      CODEDASH_HOST: '127.0.0.1',
+      CODBASH_DESKTOP: '1',
+      CODBASH_DESKTOP_VERSION: app.getVersion(),
+      CODBASH_DESKTOP_PACKAGED: app.isPackaged ? '1' : '0',
+    }),
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   serverProc.stdout.on('data', function (d) { process.stdout.write('[codbash] ' + d); });
@@ -159,6 +166,13 @@ function registerIpc() {
     });
     if (res.canceled || !res.filePaths || !res.filePaths.length) return null;
     return res.filePaths[0];
+  });
+  ipcMain.handle('codbash:update-check', async function () {
+    return checkForUpdates(true);
+  });
+  ipcMain.handle('codbash:update-install', async function () {
+    installDownloadedUpdate();
+    return { ok: true };
   });
   // The renderer decides a shortcut had no in-page meaning (e.g. Cmd+W outside
   // the Workspace) and asks us to close the window instead.
@@ -211,62 +225,90 @@ async function createWindow() {
   }
 }
 
-// Simple semver-ish "is a newer than b" (major.minor.patch).
-function isNewerVersion(a, b) {
-  const pa = String(a).split('.').map(Number);
-  const pb = String(b).split('.').map(Number);
-  for (let i = 0; i < 3; i++) {
-    if ((pa[i] || 0) > (pb[i] || 0)) return true;
-    if ((pa[i] || 0) < (pb[i] || 0)) return false;
+function sendUpdateEvent(type, payload) {
+  const event = Object.assign({ type: type }, payload || {});
+  if (win && win.webContents) {
+    try { win.webContents.send('codbash:update-event', event); } catch (_e) {}
   }
-  return false;
 }
 
-// Update check via GitHub Releases. We use a NOTIFY model (fetch the latest
-// release, and if it's newer, offer to open the download page) rather than
-// silent in-place replacement: silent auto-update on macOS requires a signed
-// build, and codbash currently ships unsigned. Once a Developer ID signing
-// identity is in place this can be swapped for electron-updater's silent flow.
-function checkForUpdates(interactive) {
+function setUpdateState(status, payload) {
+  updateState = Object.assign({ status: status }, payload || {});
+  sendUpdateEvent(status, updateState);
+  return updateState;
+}
+
+function installDownloadedUpdate() {
+  if (SMOKE || updateState.status !== 'downloaded') return;
+  app.isQuitting = true;
+  if (serverProc) { try { serverProc.kill(); } catch (_e) {} }
+  autoUpdater.quitAndInstall(false, true);
+}
+
+function promptInstallUpdate(info) {
   if (SMOKE) return;
-  const current = app.getVersion();
-  const opts = {
-    host: 'api.github.com',
-    path: '/repos/vakovalskii/codbash/releases/latest',
-    headers: { 'User-Agent': 'codbash-desktop', 'Accept': 'application/vnd.github+json' },
-    timeout: 8000,
-  };
-  const req = https.get(opts, function (res) {
-    let d = '';
-    res.on('data', function (c) { d += c; });
-    res.on('end', function () {
-      let rel;
-      try { rel = JSON.parse(d); } catch (_e) { return; }
-      const latest = String(rel.tag_name || '').replace(/^v/, '');
-      if (latest && isNewerVersion(latest, current)) {
-        const { dialog } = require('electron');
-        dialog.showMessageBox({
-          type: 'info',
-          message: 'codbash ' + latest + ' is available',
-          detail: 'You have ' + current + '. Open the download page?',
-          buttons: ['Download', 'Later'],
-          defaultId: 0,
-          cancelId: 1,
-        }).then(function (r) {
-          if (r.response === 0) shell.openExternal(rel.html_url || 'https://github.com/vakovalskii/codbash/releases/latest');
-        });
-      } else if (interactive) {
-        const { dialog } = require('electron');
-        dialog.showMessageBox({ type: 'info', message: 'codbash is up to date', detail: 'Version ' + current + '.', buttons: ['OK'] });
-      }
-    });
-  });
-  req.on('error', function () {});
-  req.on('timeout', function () { req.destroy(); });
+  dialog.showMessageBox(win || undefined, {
+    type: 'info',
+    message: 'codbash ' + info.version + ' is ready to install',
+    detail: 'Restart codbash now to finish the update?',
+    buttons: ['Restart to update', 'Later'],
+    defaultId: 0,
+    cancelId: 1,
+  }).then(function (r) {
+    if (r.response === 0) installDownloadedUpdate();
+  }).catch(function () {});
+}
+
+function checkForUpdates(interactive) {
+  if (SMOKE) return Promise.resolve(updateState);
+  if (!app.isPackaged) {
+    const state = setUpdateState('unavailable', { reason: 'dev', current: app.getVersion() });
+    if (interactive) {
+      dialog.showMessageBox(win || undefined, {
+        type: 'info',
+        message: 'Desktop auto-update is disabled in development',
+        detail: 'Packaged builds use GitHub Releases via electron-updater.',
+        buttons: ['OK'],
+      }).catch(function () {});
+    }
+    return Promise.resolve(state);
+  }
+  if (updateCheckInFlight) return updateCheckInFlight;
+  updateCheckInFlight = autoUpdater.checkForUpdates()
+    .then(function () { return updateState; })
+    .catch(function (e) {
+      return setUpdateState('error', { message: String((e && e.message) || e) });
+    })
+    .finally(function () { updateCheckInFlight = null; });
+  return updateCheckInFlight;
 }
 
 function initAutoUpdater() {
   if (SMOKE) return;
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = false;
+  autoUpdater.on('checking-for-update', function () {
+    setUpdateState('checking', { current: app.getVersion() });
+  });
+  autoUpdater.on('update-available', function (info) {
+    setUpdateState('available', { version: info.version, current: app.getVersion() });
+  });
+  autoUpdater.on('update-not-available', function (info) {
+    setUpdateState('idle', { version: info.version, current: app.getVersion() });
+  });
+  autoUpdater.on('download-progress', function (progress) {
+    setUpdateState('downloading', {
+      current: app.getVersion(),
+      percent: progress && typeof progress.percent === 'number' ? progress.percent : null,
+    });
+  });
+  autoUpdater.on('update-downloaded', function (info) {
+    setUpdateState('downloaded', { version: info.version, current: app.getVersion() });
+    promptInstallUpdate(info);
+  });
+  autoUpdater.on('error', function (e) {
+    setUpdateState('error', { message: String((e && e.message) || e), current: app.getVersion() });
+  });
   checkForUpdates(false);
   // Re-check every 6 hours while the app stays open.
   setInterval(function () { checkForUpdates(false); }, 6 * 60 * 60 * 1000);
