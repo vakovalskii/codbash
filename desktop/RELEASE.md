@@ -61,6 +61,10 @@ env -u HTTPS_PROXY -u HTTP_PROXY -u ALL_PROXY -u https_proxy -u http_proxy -u al
 - Pass `--arm64 --x64` explicitly. Passing a target on the CLI (`… dmg`)
   **overrides** the `arch` array in `package.json`, so `npm run dist:mac`
   builds only the host arch.
+- The `mac.target` array now builds **both `dmg` and `zip`** for each arch. The
+  DMG is the first-install download; the **`.zip` is what electron-updater
+  installs from** (Squirrel.Mac can't apply a DMG). `latest-mac.yml` must
+  reference the zips, so ship the zips + their blockmaps in the Release too.
 - The signing identity is pinned in `package.json` → `build.mac.identity` as
   `"Valeriy Kovalsky (A933C2TJXU)"` — **without** the `Developer ID Application:`
   prefix (electron-builder rejects the prefix).
@@ -69,24 +73,37 @@ env -u HTTPS_PROXY -u HTTP_PROXY -u ALL_PROXY -u https_proxy -u http_proxy -u al
   since electron-builder builds the DMG after the hook runs.
 
 **2b. Notarize + staple the DMG containers, then regenerate the update feed**
-(the staple mutates the DMG, so blockmaps + `latest-mac.yml` must be recomputed):
+(the staple mutates the DMG bytes, so any changed artifact's checksum/blockmap in
+`latest-mac.yml` must be recomputed):
 
 ```bash
 for dmg in dist/codbash-<ver>-arm64.dmg dist/codbash-<ver>.dmg; do
   xcrun notarytool submit "$dmg" --keychain-profile codbash-notary --wait
   xcrun stapler staple "$dmg"
-  ./node_modules/app-builder-bin/mac/app-builder_arm64 blockmap \
-    --input "$dmg" --output "$dmg.blockmap"   # prints the {size,sha512} for latest-mac.yml
 done
-# then rewrite dist/latest-mac.yml with the new size+sha512 for both DMGs.
+npm run refresh-update-feed   # scripts/regenerate-latest-mac.js
 ```
 
-Publish:
+`refresh-update-feed` parses electron-builder's own `dist/latest-mac.yml` and
+refreshes `sha512`/`size`/`blockMapSize` only for entries whose bytes actually
+changed on disk (detected by sha512 mismatch), then re-syncs the top-level
+`sha512` to the `path` file. It's schema-preserving (never hand-writes the feed)
+and idempotent. Since electron-updater's mac feed points at the untouched
+`.zip`, the `.zip` entries are left as-is and only stapled DMG entries (if the
+feed lists them) get recomputed. Pure transforms are covered by
+`test/desktop-update-feed.test.js`; **validate against the real feed on the first
+signed build** (electron-updater fails loudly on a checksum mismatch).
+
+Publish (include the **zips + their blockmaps** — electron-updater installs from
+the zip, and `latest-mac.yml` points at it; a Release with only the DMGs makes
+in-app update fail with a 404 for the zip):
 
 ```bash
 gh release create v<ver> --title "codbash <ver> (macOS desktop)" --target main \
-  dist/codbash-<ver>-arm64.dmg dist/codbash-<ver>-arm64.dmg.blockmap \
-  dist/codbash-<ver>.dmg       dist/codbash-<ver>.dmg.blockmap \
+  dist/codbash-<ver>-arm64.dmg        dist/codbash-<ver>-arm64.dmg.blockmap \
+  dist/codbash-<ver>.dmg              dist/codbash-<ver>.dmg.blockmap \
+  dist/codbash-<ver>-arm64-mac.zip    dist/codbash-<ver>-arm64-mac.zip.blockmap \
+  dist/codbash-<ver>-mac.zip          dist/codbash-<ver>-mac.zip.blockmap \
   dist/latest-mac.yml
 ```
 
@@ -109,15 +126,52 @@ hdiutil attach /tmp/q.dmg -nobrowse; spctl -a -vvv -t exec "/Volumes/codbash <ve
 
 ## 4. Updates
 
-- **Current model — notify-only.** On launch and every 6h the app queries the
-  GitHub `releases/latest` API and, if a newer version exists, offers to open
-  the download page (`main.js` → `checkForUpdates`). Robust and dependency-free;
-  just publish each release.
-- **Silent auto-update (now possible — builds are signed).** Swap
-  `checkForUpdates` for `electron-updater`: `npm i electron-updater`, call
-  `autoUpdater.checkForUpdatesAndNotify()`, and ensure `latest-mac.yml` +
-  signed/stapled DMGs are in the Release (they are — steps 2b/publish above).
-  macOS silent in-place update requires the signature, which is now in place.
+- **Current model — in-app update via `electron-updater`** (`main.js` →
+  `initAutoUpdater` / IPC handlers in `registerIpc`, driven by the dashboard's
+  update banner in `src/frontend/app.js`). On launch and every 6h the app checks
+  GitHub Releases (`latest-mac.yml` / `latest.yml`). Flow: **available → user
+  clicks Download → progress → downloaded → user clicks Restart → relaunch onto
+  the new version.** No manual DMG download. `autoDownload` is off so the user
+  controls when the download starts.
+- **What the Release MUST contain for it to work:**
+  - macOS: the **zips + blockmaps** and a `latest-mac.yml` that references them
+    (see step 2b / publish). The app must be **signed + notarized** (it is since
+    v7.14.4) — Squirrel.Mac refuses an unsigned in-place update.
+  - Windows: the **NSIS `*.exe`** (+ blockmap) and `latest.yml` (electron-builder
+    emits these for the `nsis` target). Without a Windows code-signing cert the
+    update still applies but SmartScreen warns on first run.
+- **Fallback:** if the in-place update can't apply (unsigned/dev/download error),
+  the app emits an `error` state and the banner switches to **"Open download
+  page"** (`codbash:open-releases` → GitHub releases). The user is never stuck.
+- **The web self-update route (`POST /api/update` → `npm i -g`) is disabled in
+  the desktop app** — `desktop/main.js` sets `CODBASH_DESKTOP=1` and the server
+  refuses it (returns 400). That route is only for the npm CLI (`codbash run`).
+
+### Windows build (NSIS)
+
+```bash
+cd desktop
+npm install
+./node_modules/.bin/electron-builder --win nsis   # or: npm run dist:win
+# emits dist/codbash Setup <ver>.exe (+ .blockmap) and dist/latest.yml
+gh release upload v<ver> \
+  "dist/codbash Setup <ver>.exe" "dist/codbash Setup <ver>.exe.blockmap" \
+  dist/latest.yml
+```
+
+> The `nsis` target (not `portable`) is required for electron-updater.
+>
+> **⚠️ Security — do not ship Windows *auto-update* to real users unsigned.**
+> electron-updater's `verifyUpdateCodeSignature` compares the running app's
+> Authenticode publisher against the downloaded installer's; with no Windows
+> code-signing cert on either side that check is a no-op, leaving only the
+> `sha512` in `latest.yml` (which comes from the same release pipeline an
+> attacker would compromise). An unsigned *in-place auto-updater* is strictly
+> worse than a manual download-and-run, because it removes the last human
+> checkpoint. Until an OV/EV cert is in place, keep Windows on the notify-only
+> fallback (open the releases page) rather than enabling silent download+install.
+> `allowDowngrade` and `allowPrerelease` are pinned `false` in `main.js` so a
+> mistagged or rolled-back release can't reach stable users regardless.
 
 ## CI note
 
