@@ -12,6 +12,7 @@ const { convertSession } = require('./convert');
 const { generateHandoff } = require('./handoff');
 const { CHANGELOG } = require('./changelog');
 const { getHTML } = require('./html');
+const { isDisallowedCrossOrigin } = require('./origin-guard');
 const projectsApi = require('./projects');
 const settingsApi = require('./settings');
 const terminal = require('./terminal');
@@ -150,6 +151,14 @@ function startServer(host, port, openBrowser = true) {
         res.end('Forbidden: host header must be localhost');
         return;
       }
+    }
+    // CSRF gate: block cross-origin state-changing requests before any route
+    // runs (covers every current and future POST/PUT/DELETE uniformly). Static
+    // GETs and the same-origin frontend are unaffected. See isDisallowedCrossOrigin.
+    if (isDisallowedCrossOrigin(req.method, req.headers)) {
+      res.writeHead(403, { 'Content-Type': 'text/plain' });
+      res.end('Forbidden: cross-origin request');
+      return;
     }
     // req.url is usually relative, so this base is only for URL parsing.
     // Keep it stable instead of reusing the bind host, which may be a wildcard listen address.
