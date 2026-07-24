@@ -478,6 +478,10 @@ function _wsHolder() {
 // live workspace into the hidden holder instead of destroying it, so panes and
 // their ptys keep running and everything is exactly as left on return.
 function detachWorkspaceIfMounted() {
+  // The "+ Project" popover lives on document.body (not inside _wsRoot) and holds
+  // global capture listeners — close it here so leaving the view can never orphan
+  // it, even via a non-click path (keyboard nav, programmatic setView).
+  if (typeof _wsCloseProjectLauncher === 'function') _wsCloseProjectLauncher();
   if (_wsRoot && _wsRoot.parentNode && _wsRoot.parentNode.id === 'content') {
     _wsHolder().appendChild(_wsRoot);
   }
@@ -486,6 +490,7 @@ function detachWorkspaceIfMounted() {
 // Full teardown — kills every pty and drops all state. Not used on normal view
 // switches (those detach); reserved for an explicit reset.
 function teardownWorkspaceIfActive() {
+  if (typeof _wsCloseProjectLauncher === 'function') _wsCloseProjectLauncher();
   if (_wsTabs.length) _wsTabs.forEach(function (t) { t.panes.forEach(_wsTeardownPane); });
   _wsTabs = []; _wsActiveTabId = null;
   if (_wsRoot) { try { _wsRoot.remove(); } catch (e) {} _wsRoot = null; }
@@ -1557,6 +1562,219 @@ function spawnProjectTerminals(cwd, n) {
   openInWorkspace({ name: _wsProjectBasename(cwd), cwd: cwd, panes: panes });
 }
 
+// ── "+ Project" launcher popover ─────────────────────────────────────────────
+// Pick a registered project and open an in-app terminal in its folder — plain
+// (no agent) or auto-running the last-used / a chosen agent. Same launch model
+// as the Projects tab, but targets the in-app Workspace instead of a native
+// terminal. Reuses openInWorkspace, which only auto-runs `cmd` when the folder
+// actually opened (a missing folder falls back to ~ WITHOUT running the agent),
+// so an agent never misfiles its history into the home directory.
+
+// Fresh-launch command per installed-agent id. Mirrors the server's authoritative
+// mapping in src/terminals.js (buildLaunchCommand, fresh mode) so an agent started
+// from this popover runs the exact entry point a native launch would — including
+// the gh-extension form for Copilot and the cursor-agent CLI for Cursor. `pi`
+// resolves per-machine (pi vs omp) via getPiCommand(); an unknown id yields null
+// and never launches.
+var _WS_AGENT_CMD = {
+  claude: 'claude', codex: 'codex', qwen: 'qwen', opencode: 'opencode',
+  kiro: 'kiro-cli', kilo: 'kilo', cursor: 'cursor-agent',
+  copilot: 'gh copilot suggest', 'copilot-chat': 'gh copilot suggest'
+};
+function _wsAgentCommand(id) {
+  if (id === 'pi') return (typeof getPiCommand === 'function') ? getPiCommand() : 'pi';
+  return (id && _WS_AGENT_CMD[id]) || null;
+}
+
+var _WS_PROJ_LAUNCHER_W = 340;
+var _wsProjLauncherAnchor = null;
+
+// Installed agents we can actually launch in a terminal here.
+function _wsLaunchableAgents() {
+  return (typeof window !== 'undefined' && window.installedAgents ? window.installedAgents : [])
+    .filter(function (a) { return _wsAgentCommand(a.id); });
+}
+
+// The default agent for a project's "▶" button: the app-wide preferred/last-used
+// tool (pickPreferredTool, from app.js) when it's terminal-launchable, else the
+// first launchable installed agent. Read-only — never mutates settings.
+function _wsPreferredAgent(projPath, launchable) {
+  var pref = (typeof pickPreferredTool === 'function') ? pickPreferredTool(projPath, null) : null;
+  if (pref && _wsAgentCommand(pref)) return pref;
+  return (launchable[0] && launchable[0].id) || null;
+}
+
+function _wsProjectLauncherRowsHtml(filter) {
+  var all = (typeof window !== 'undefined' && window.manualProjects) ? window.manualProjects : [];
+  if (!all.length) {
+    return '<div class="ws-proj-launcher-empty">No projects yet — add them on the ' +
+      '<a href="#" onclick="_wsGotoProjects();return false;">Projects</a> tab.</div>';
+  }
+  var projects = all.slice().sort(function (a, b) {
+    return String(a.name || '').toLowerCase().localeCompare(String(b.name || '').toLowerCase());
+  });
+  var f = String(filter || '').trim().toLowerCase();
+  if (f) {
+    projects = projects.filter(function (p) {
+      return (String(p.name || '') + ' ' + String(p.path || '')).toLowerCase().indexOf(f) >= 0;
+    });
+  }
+  if (!projects.length) return '<div class="ws-proj-launcher-empty">No projects match “' + escHtml(filter) + '”.</div>';
+
+  var launchable = _wsLaunchableAgents();
+  return projects.map(function (p) {
+    var exists = p.exists !== false;   // undefined (older payloads) counts as present
+    var name = p.name || _wsProjectBasename(p.path) || 'project';
+    var shortPath = _wsShortCwd(p.path || '');
+    if (!exists) {
+      return '<div class="ws-proj-row ws-proj-row-missing" role="listitem" aria-disabled="true">' +
+        '<div class="ws-proj-meta"><span class="ws-proj-name">' + escHtml(name) + '</span>' +
+        '<span class="ws-proj-path">' + escHtml(shortPath) + '</span></div>' +
+        '<span class="ws-proj-missing" title="Folder is missing on disk — restore it or remove it on the Projects tab">missing</span>' +
+        '</div>';
+    }
+    // Plain terminal in the folder (no agent) — always available.
+    var acts = '<button class="toolbar-btn ws-proj-term-btn" data-path="' + escHtml(p.path) + '" data-name="' + escHtml(name) + '" ' +
+      'title="Open a terminal in ' + escHtml(name) + ' (no agent)" aria-label="Open a terminal in ' + escHtml(name) + '" ' +
+      'onclick="wsLaunchProjectTerminal(this.dataset.path, this.dataset.name)">&#8862; Terminal</button>';
+    if (launchable.length) {
+      var pref = _wsPreferredAgent(p.path, launchable);
+      if (pref) {
+        acts += '<button class="toolbar-btn primary ws-proj-run-btn" data-path="' + escHtml(p.path) + '" data-name="' + escHtml(name) + '" data-tool="' + escHtml(pref) + '" ' +
+          'title="Launch ' + escHtml(agentLabel(pref)) + ' in ' + escHtml(name) + '" aria-label="Launch ' + escHtml(agentLabel(pref)) + ' in ' + escHtml(name) + '" ' +
+          'onclick="wsLaunchProjectAgent(this.dataset.path, this.dataset.name, this.dataset.tool)">&#9654; ' + escHtml(agentLabel(pref)) + '</button>';
+      }
+      var opts = '<option value="">Agent &#9662;</option>' + launchable.map(function (a) {
+        return '<option value="' + escHtml(a.id) + '">' + escHtml(a.label) + '</option>';
+      }).join('');
+      acts += '<select class="ws-pane-launch ws-proj-agent" data-path="' + escHtml(p.path) + '" data-name="' + escHtml(name) + '" ' +
+        'aria-label="Pick an agent to launch in ' + escHtml(name) + '" ' +
+        'onchange="wsLaunchProjectAgent(this.dataset.path, this.dataset.name, this.value); this.selectedIndex=0;">' + opts + '</select>';
+    }
+    return '<div class="ws-proj-row" role="listitem">' +
+      '<div class="ws-proj-meta"><span class="ws-proj-name">' + escHtml(name) + '</span>' +
+      '<span class="ws-proj-path">' + escHtml(shortPath) + '</span></div>' +
+      '<div class="ws-proj-acts">' + acts + '</div></div>';
+  }).join('');
+}
+
+function openWorkspaceProjectLauncher(event) {
+  if (event) { event.preventDefault(); event.stopPropagation(); }
+  // Toggle: a second click on the button closes it.
+  if (document.getElementById('wsProjLauncher')) { _wsCloseProjectLauncher(); return; }
+  var anchor = (event && event.currentTarget) ? event.currentTarget : document.getElementById('wsAddProject');
+  var el = document.createElement('div');
+  el.className = 'ws-proj-launcher open';
+  el.id = 'wsProjLauncher';
+  // role="group" (not "dialog") — this is a transient labeled popover, not a modal;
+  // it deliberately makes no focus-trap claim (matches the app's other lightweight
+  // popovers). Escape + outside-click close it and focus returns to the anchor.
+  el.setAttribute('role', 'group');
+  el.setAttribute('aria-label', 'Launch in a project');
+  el.style.width = _WS_PROJ_LAUNCHER_W + 'px';
+  el.innerHTML =
+    '<div class="ws-proj-launcher-head">' +
+      '<input type="text" class="ws-proj-launcher-filter" id="wsProjLauncherFilter" placeholder="Filter projects…" ' +
+        'aria-label="Filter projects" autocomplete="off" spellcheck="false" oninput="filterWorkspaceProjectLauncher(this.value)">' +
+    '</div>' +
+    '<div class="ws-proj-launcher-list" id="wsProjLauncherList" role="list">' + _wsProjectLauncherRowsHtml('') + '</div>';
+  document.body.appendChild(el);
+  _wsProjLauncherAnchor = anchor || null;
+
+  var rect = anchor ? anchor.getBoundingClientRect() : { bottom: 56, right: _WS_PROJ_LAUNCHER_W + 16 };
+  var vw = document.documentElement.clientWidth;
+  var vh = document.documentElement.clientHeight;
+  var left = Math.max(8, Math.min(vw - _WS_PROJ_LAUNCHER_W - 8, rect.right - _WS_PROJ_LAUNCHER_W));
+  var top = rect.bottom + 4;
+  el.style.top = top + 'px';
+  el.style.left = left + 'px';
+  // Clamp height to the space below the anchor so a short viewport can't push the
+  // list off-screen — the list scrolls internally (mirrors the horizontal clamp).
+  el.style.maxHeight = Math.max(160, vh - top - 8) + 'px';
+  if (anchor && anchor.setAttribute) anchor.setAttribute('aria-expanded', 'true');
+
+  // Escape can never be the same event that opened the popover, so bind it now
+  // (robust even if the user hits Escape in the same tick). The outside-click and
+  // scroll handlers are deferred a tick so the opening click doesn't self-close.
+  document.addEventListener('keydown', _wsProjLauncherEsc, true);
+  setTimeout(function () {
+    var fld = document.getElementById('wsProjLauncherFilter');
+    if (fld && fld.focus) fld.focus();
+    document.addEventListener('click', _wsProjLauncherOutside, true);
+    window.addEventListener('scroll', _wsProjLauncherScroll, { capture: true, passive: true });
+  }, 0);
+}
+
+function _wsCloseProjectLauncher() {
+  var el = document.getElementById('wsProjLauncher');
+  document.removeEventListener('click', _wsProjLauncherOutside, true);
+  document.removeEventListener('keydown', _wsProjLauncherEsc, true);
+  window.removeEventListener('scroll', _wsProjLauncherScroll, true);
+  var anchor = _wsProjLauncherAnchor;
+  _wsProjLauncherAnchor = null;
+  if (el) el.remove();
+  if (anchor && anchor.setAttribute) anchor.setAttribute('aria-expanded', 'false');
+  if (anchor && anchor.focus) { try { anchor.focus(); } catch (e) {} }
+}
+
+function _wsProjLauncherOutside(e) {
+  var el = document.getElementById('wsProjLauncher');
+  if (!el || el.contains(e.target)) return;
+  if (_wsProjLauncherAnchor && _wsProjLauncherAnchor.contains && _wsProjLauncherAnchor.contains(e.target)) return;
+  _wsCloseProjectLauncher();
+}
+function _wsProjLauncherEsc(e) {
+  if (e.key === 'Escape') { e.stopPropagation(); _wsCloseProjectLauncher(); }
+}
+// Close on page scroll, but NOT when scrolling the launcher's own list.
+function _wsProjLauncherScroll(e) {
+  var el = document.getElementById('wsProjLauncher');
+  if (el && el.contains(e.target)) return;
+  _wsCloseProjectLauncher();
+}
+
+function filterWorkspaceProjectLauncher(value) {
+  var list = document.getElementById('wsProjLauncherList');
+  if (list) list.innerHTML = _wsProjectLauncherRowsHtml(value);
+}
+
+// Open a plain in-app terminal in the project folder (no agent).
+function wsLaunchProjectTerminal(projPath, projName) {
+  _wsCloseProjectLauncher();
+  if (!projPath) return;
+  openInWorkspace({ name: projName || _wsProjectBasename(projPath), cwd: projPath });
+}
+
+// Open an in-app terminal in the project folder and auto-run `tool`'s agent.
+function wsLaunchProjectAgent(projPath, projName, tool) {
+  if (!tool) return;                       // the blank "Agent ▾" option
+  _wsCloseProjectLauncher();
+  if (!projPath) return;
+  var cmd = _wsAgentCommand(tool);
+  if (!cmd) {
+    if (typeof showToast === 'function') showToast('“' + agentLabel(tool) + '” can’t be launched as a terminal agent');
+    return;
+  }
+  // Remember the explicit choice for this session so the "▶" default reflects it.
+  // In-memory only — Workspace launches don't hit /api/launch, and PUT /api/settings
+  // won't persist lastUsedByPath (server writes it solely on native launch).
+  try {
+    window.codbashSettings = window.codbashSettings || {};
+    window.codbashSettings.lastUsedByPath = window.codbashSettings.lastUsedByPath || {};
+    // Guard the map key: a folder literally named __proto__/constructor/prototype
+    // must never be used as a bracket key (defense-in-depth against pollution).
+    if (projPath !== '__proto__' && projPath !== 'constructor' && projPath !== 'prototype') {
+      window.codbashSettings.lastUsedByPath[projPath] = tool;
+    }
+  } catch (e) {}
+  openInWorkspace({ name: projName || _wsProjectBasename(projPath), cwd: projPath, cmd: cmd });
+}
+
+function _wsGotoProjects() {
+  _wsCloseProjectLauncher();
+  if (typeof setView === 'function') setView('projects');
+}
+
 function activateWorkspaceTab(id) {
   if (id === _wsActiveTabId) return;
   _wsActiveTabId = id;
@@ -2014,6 +2232,8 @@ async function renderWorkspace(container) {
             '<button class="toolbar-btn ws-layout-btn" id="wsLayout-4" title="4 panes (2×2)" aria-label="4 panes" onclick="setWorkspaceLayout(4)">' + _WS_ICON_4 + '</button>' +
           '</div>' +
           '<button class="toolbar-btn" id="wsAddPane" title="Add a pane to this tab" onclick="addWorkspacePane(null)">+ Pane</button>' +
+          '<button class="toolbar-btn" id="wsAddProject" title="Open a terminal in a project — with or without an agent" ' +
+            'aria-haspopup="dialog" aria-expanded="false" onclick="openWorkspaceProjectLauncher(event)">+ Project &#9662;</button>' +
           '<span class="ws-tools-sep"></span>' +
           '<button class="toolbar-btn ws-icon-btn" title="Terminal settings — font, theme, cursor" aria-label="Terminal settings" onclick="toggleTerminalSettings(event)">' + _WS_ICON_GEAR + '</button>' +
           '<button class="toolbar-btn" title="Manage saved start commands" onclick="openWorkspaceCommands()">Commands</button>' +
