@@ -1061,6 +1061,7 @@ function startServer(host, port, openBrowser = true) {
     console.log(`  \x1b[2m${browserUrl}\x1b[0m`);
     if (host === '0.0.0.0' || host === '::' || host === '[::]') {
       console.log('  \x1b[2mListening on all interfaces\x1b[0m');
+      console.log('  \x1b[33mNote: Running Agents / /api/active lists every agent process on this host (all users) — reachable from your LAN in this mode.\x1b[0m');
     }
     console.log('  \x1b[2mPress Ctrl+C to stop\x1b[0m');
     console.log('');
