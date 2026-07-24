@@ -6056,23 +6056,40 @@ async function getActiveSessions() {
     if (entryScore > existingScore) deduped.set(key, entry);
   }
 
-  // Scope to agents launched from codbash — only those whose process tree
-  // descends from a codbash terminal pane (see pty-registry). Matches the
-  // "codbash-only" RUNNING AGENTS model: no panes open → nothing shown.
-  return await _scopeToCodbashAgents(Array.from(deduped.values()));
+  // Tag each live agent with `local`: true when its process tree descends from
+  // a codbash browser-pty pane, false when it runs in an EXTERNAL native
+  // terminal (iTerm/Terminal.app/Warp/cmux…). Nothing is dropped — the Workspace
+  // "Running agents" tree shows the external ones (they have no other UI home),
+  // while codbash panes are already visible as tabs. See
+  // docs/design/running-agents-external.md.
+  return await _tagCodbashAgents(Array.from(deduped.values()));
 }
 
-// Keep only active entries whose process ancestry reaches a live codbash pty.
-// Empty pty registry → empty result (nothing is running *in* codbash). If the
-// ppid scan itself fails we fail OPEN (return the unfiltered list) rather than
-// hiding genuine sessions on a transient `ps` error.
-async function _scopeToCodbashAgents(active) {
+// Pure ancestry tagging: return a new array where each agent carries
+// `local=true` iff walking its pid→ppid chain reaches a live codbash-pty pid
+// in `live` (Set<number>); otherwise `local=false` (external terminal). Never
+// mutates inputs; the walk is depth-bounded so a ppid cycle can't hang.
+function _tagLocalAgents(active, live, ppidOf) {
+  return active.map(a => {
+    let pid = a.pid, depth = 0, local = false;
+    while (pid && depth < 16) {
+      if (live.has(pid)) { local = true; break; }
+      pid = ppidOf.get(pid);
+      depth++;
+    }
+    return { ...a, local };
+  });
+}
+
+// Async wrapper: builds the live-pty set + pid→ppid map (one off-loop `ps`),
+// then tags. Fails OPEN by marking every agent external (local=false) so a
+// transient `ps` error surfaces agents rather than hiding them.
+async function _tagCodbashAgents(active) {
+  const asExternal = () => active.map(a => ({ ...a, local: false }));
   let ptyRegistry;
-  try { ptyRegistry = require('./pty-registry'); } catch { return active; }
-  const livePids = ptyRegistry.all();
-  if (!livePids.length) return [];
-  if (process.platform === 'win32') return active; // no ppid scan here
-  const live = new Set(livePids);
+  try { ptyRegistry = require('./pty-registry'); } catch { return asExternal(); }
+  if (process.platform === 'win32') return asExternal(); // no ppid scan here
+  const live = new Set(ptyRegistry.all());
 
   // Build a pid→ppid map in one cheap (async, off-loop) call so we can walk each
   // agent's ancestry without blocking the event loop.
@@ -6083,17 +6100,9 @@ async function _scopeToCodbashAgents(active) {
       const m = line.trim().match(/^(\d+)\s+(\d+)$/);
       if (m) ppidOf.set(parseInt(m[1], 10), parseInt(m[2], 10));
     }
-  } catch { return active; } // fail open
+  } catch { return asExternal(); } // fail open
 
-  return active.filter(a => {
-    let pid = a.pid, depth = 0;
-    while (pid && depth < 16) {
-      if (live.has(pid)) return true;
-      pid = ppidOf.get(pid);
-      depth++;
-    }
-    return false;
-  });
+  return _tagLocalAgents(active, live, ppidOf);
 }
 
 // ── Leaderboard stats ─────────────────────────────────────
@@ -6476,6 +6485,7 @@ module.exports = {
   HISTORY_FILE,
   PROJECTS_DIR,
   __test: {
+    _tagLocalAgents,
     parseWslDistroList,
     getWslDistroList,
     getRunningWslDistroSet,
