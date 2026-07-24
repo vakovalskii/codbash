@@ -4556,6 +4556,32 @@ body[data-view="overview"] .toolbar { display: none; }
     white-space: nowrap;
     flex: 1;
 }
+/* Missing folder — deleted/moved on disk. Dashed warning border + muted name
+   so it reads as "needs attention" without shouting. */
+.launcher-card-missing {
+    border-style: dashed;
+    border-color: var(--accent-red);
+    background: var(--bg-card); /* fallback if color-mix is unsupported */
+    background: color-mix(in srgb, var(--accent-red) 5%, var(--bg-card));
+}
+.launcher-card-missing:hover {
+    border-color: var(--accent-red);
+    transform: none;
+}
+/* Muted (not opacity-dimmed) so contrast stays AA across all three themes. */
+.launcher-card-missing .launcher-card-name { color: var(--text-secondary); }
+.launcher-card-warning {
+    font-size: 11px;
+    line-height: 1.4;
+    /* Body text in a high-contrast token (AA at 11px); the red border, tinted
+       background and ⚠ glyph carry the "warning" semantics without relying on
+       low-contrast red text. */
+    color: var(--text-primary);
+    background: color-mix(in srgb, var(--accent-red) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-red) 30%, transparent);
+    border-radius: 6px;
+    padding: 6px 8px;
+}
 .launcher-card-tag {
     font-size: 9px;
     text-transform: uppercase;

@@ -101,6 +101,44 @@ function isSafeLaunchPath(p) {
   return true;
 }
 
+// Cheap "does this registered folder still exist on disk?" check. Registry
+// entries persist a path; the user can delete the folder (rm -rf) at any time,
+// so existence is derived per-request, never stored. Follows symlinks (statSync)
+// on purpose — a still-resolvable symlinked directory counts as present; the
+// stricter no-symlink rule only applies when a path is first registered.
+function pathExists(p) {
+  if (!p || typeof p !== 'string') return false;
+  if (p.length > 1024) return false; // match isSafeLaunchPath's cap
+  try {
+    return fs.statSync(normalizePath(p)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+// True when `abs` is the home directory or lives under it.
+function isUnderHome(abs) {
+  return abs === os.homedir() || abs.startsWith(os.homedir() + path.sep);
+}
+
+// Resolve the realpath of the nearest existing ancestor of `abs` (including
+// `abs` itself if it exists). Used to detect a symlinked parent that would
+// redirect a write outside its apparent location. Returns '' if nothing
+// resolves (e.g. an unreadable ancestor).
+function realpathOfNearestAncestor(abs) {
+  let cur = abs;
+  // Walk up until we hit an existing path or the filesystem root.
+  for (let i = 0; i < 4096; i++) {
+    if (fs.existsSync(cur)) {
+      try { return fs.realpathSync(cur); } catch { return ''; }
+    }
+    const parent = path.dirname(cur);
+    if (parent === cur) break; // reached root
+    cur = parent;
+  }
+  return '';
+}
+
 const ALLOWED_SOURCES = new Set(['manual', 'github-clone', 'auto']);
 
 function addProject({ name, path: projectPath, source, remoteUrl, defaultBranch }) {
@@ -226,12 +264,23 @@ function cloneRepo(remoteUrl, destDir) {
     if (!remoteUrl || typeof remoteUrl !== 'string') {
       return reject(new Error('remoteUrl required'));
     }
-    if (!/^(https:\/\/github\.com\/|git@github\.com:)/.test(remoteUrl)) {
+    // Anchor the whole URL (not just the prefix) and forbid control characters
+    // in the suffix — defence-in-depth over the argv-form execFile below.
+    if (!/^(https:\/\/github\.com\/|git@github\.com:)[A-Za-z0-9._/-]+$/.test(remoteUrl)) {
       return reject(new Error('only GitHub remotes are supported'));
     }
     const abs = path.resolve(destDir);
-    if (!abs.startsWith(os.homedir() + path.sep) && abs !== os.homedir()) {
+    if (!isUnderHome(abs)) {
       return reject(new Error('clone destination must be under your home directory'));
+    }
+    // The textual startsWith check above can be defeated if an ANCESTOR of the
+    // (currently-missing) destination is a symlink pointing outside $HOME — the
+    // exact window the re-clone flow opens ("folder is missing"). Resolve the
+    // nearest existing ancestor's realpath and re-assert containment so a
+    // planted symlink can't redirect the clone (and its git write) out of home.
+    const resolvedAncestor = realpathOfNearestAncestor(abs);
+    if (resolvedAncestor && !isUnderHome(resolvedAncestor)) {
+      return reject(new Error('clone destination escapes your home directory via a symlinked parent'));
     }
     ensureDir(path.dirname(abs));
 
@@ -275,4 +324,5 @@ module.exports = {
   suggestCloneDir,
   isSafeRepoName,
   isSafeLaunchPath,
+  pathExists,
 };

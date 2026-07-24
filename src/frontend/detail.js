@@ -438,6 +438,11 @@ function launchSession(sessionId, tool, project, flags, resumeTarget) {
     return resp.json();
   }).then(function(data) {
     if (data.ok) showToast('Launched in terminal');
+    // Deleted project folder — surface the same "missing → offer re-clone" flow
+    // the Projects launcher uses, instead of a dead-end error toast.
+    else if (data.missing && typeof handleMissingProjectLaunch === 'function') {
+      handleMissingProjectLaunch(data, (project || '').split('/').pop());
+    }
     else showToast('Launch failed: ' + (data.error || 'unknown'));
   }).catch(function() {
     showToast('Launch failed');
