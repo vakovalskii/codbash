@@ -107,6 +107,65 @@ test('loadKiroCliDetail rejects path-traversal ids before touching the filesyste
   assert.deepEqual(data.__test.loadKiroCliDetail(''), { messages: [] });
 });
 
+test('symlinked session files are not followed by scan or detail', () => {
+  const home = tmpHome();
+  const dir = path.join(home, '.kiro', 'sessions', 'cli');
+  fs.mkdirSync(dir, { recursive: true });
+
+  // Targets living OUTSIDE KIRO_SESSIONS_DIR whose content WOULD surface in the
+  // dashboard if the symlinks were followed — this is what makes the test bite.
+  const outsideMeta = path.join(home, 'outside-meta.json');
+  fs.writeFileSync(outsideMeta, JSON.stringify({ title: 'LEAKED-TITLE', cwd: '/secret' }));
+  const outsideEvents = path.join(home, 'outside-events.jsonl');
+  fs.writeFileSync(outsideEvents, JSON.stringify(
+    { version: 1, kind: 'Prompt', data: { message_id: 'x', content: [{ kind: 'text', data: 'LEAKED-CONTENT' }] } }
+  ) + '\n');
+
+  // Craft UUID-named symlinks pointing at those out-of-tree files.
+  const linkUuid = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+  fs.symlinkSync(outsideMeta, path.join(dir, linkUuid + '.json'));
+  fs.symlinkSync(outsideEvents, path.join(dir, linkUuid + '.jsonl'));
+
+  const data = freshDataWithHome(home);
+
+  // Scanner must not surface the symlinked session (nor its leaked title).
+  const scanned = data.__test.scanKiroCliSessions();
+  assert.equal(scanned.some(s => s.id === linkUuid), false);
+  assert.equal(scanned.some(s => s.first_message === 'LEAKED-TITLE'), false);
+
+  // Detail loader must refuse to read through the symlinked .jsonl even though
+  // its target is a perfectly valid events file.
+  const detail = data.__test.loadKiroCliDetail(linkUuid);
+  assert.deepEqual(detail, { messages: [] });
+});
+
+test('a real .json with a symlinked .jsonl reports no detail and leaks nothing', () => {
+  const home = tmpHome();
+  const dir = path.join(home, '.kiro', 'sessions', 'cli');
+  fs.mkdirSync(dir, { recursive: true });
+
+  // Out-of-tree events file with content that WOULD surface if followed.
+  const outsideEvents = path.join(home, 'outside-events.jsonl');
+  fs.writeFileSync(outsideEvents, JSON.stringify(
+    { version: 1, kind: 'Prompt', data: { message_id: 'x', content: [{ kind: 'text', data: 'LEAKED-CONTENT' }] } }
+  ) + '\n');
+
+  // Genuine metadata file, but the events file is a symlink to the out-of-tree file.
+  fs.writeFileSync(path.join(dir, UUID + '.json'), JSON.stringify(sampleMeta('/tmp/project')));
+  fs.symlinkSync(outsideEvents, path.join(dir, UUID + '.jsonl'));
+
+  const data = freshDataWithHome(home);
+
+  const scanned = data.__test.scanKiroCliSessions();
+  const s = scanned.find(x => x.id === UUID);
+  assert.ok(s, 'metadata-only session should still be listed');
+  assert.equal(s.has_detail, false);
+  assert.equal(s.file_size, 0);
+
+  const detail = data.__test.loadKiroCliDetail(UUID);
+  assert.deepEqual(detail, { messages: [] });
+});
+
 test('findSessionFile resolves file-based Kiro sessions to the kiro-cli format', () => {
   const home = tmpHome();
   writeKiroCliSession(home, UUID, sampleMeta('/tmp/project'), sampleEvents());

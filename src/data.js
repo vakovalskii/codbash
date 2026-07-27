@@ -1845,9 +1845,13 @@ function scanKiroCliSessions() {
   if (!fs.existsSync(KIRO_SESSIONS_DIR)) return sessions;
 
   let files;
-  try { files = fs.readdirSync(KIRO_SESSIONS_DIR); } catch { return sessions; }
+  try { files = fs.readdirSync(KIRO_SESSIONS_DIR, { withFileTypes: true }); } catch { return sessions; }
 
-  for (const f of files) {
+  for (const entry of files) {
+    const f = entry.name;
+    // Reject symlinks so a crafted <uuid>.json link can't leak an out-of-tree
+    // file through the dashboard (matches the Claude reader's symlink guard).
+    if (entry.isSymbolicLink() || !entry.isFile()) continue;
     if (!f.endsWith('.json')) continue;
     const sessionId = f.slice(0, -5);
     // skip if not a strict UUID name
@@ -1858,7 +1862,12 @@ function scanKiroCliSessions() {
       const createdMs = meta.created_at ? new Date(meta.created_at).getTime() : 0;
       const updatedMs = meta.updated_at ? new Date(meta.updated_at).getTime() : 0;
       const jsonlPath = path.join(KIRO_SESSIONS_DIR, sessionId + '.jsonl');
-      const fileSize = fs.existsSync(jsonlPath) ? fs.statSync(jsonlPath).size : 0;
+      // Only trust a regular (non-symlink) events file; a symlinked .jsonl
+      // would otherwise be followed by loadKiroCliDetail's readFileSync.
+      let jsonlStat = null;
+      try { jsonlStat = fs.lstatSync(jsonlPath); } catch {}
+      const hasDetail = !!(jsonlStat && jsonlStat.isFile());
+      const fileSize = hasDetail ? jsonlStat.size : 0;
 
       sessions.push({
         id: sessionId,
@@ -1870,7 +1879,7 @@ function scanKiroCliSessions() {
         last_ts: updatedMs || Date.now(),
         messages: fileSize > 0 ? Math.max(2, Math.floor(fileSize / 3000)) : 0,
         first_message: meta.title || '',
-        has_detail: fs.existsSync(jsonlPath),
+        has_detail: hasDetail,
         file_size: fileSize,
         detail_messages: 0,
       });
@@ -1887,7 +1896,11 @@ function loadKiroCliDetail(sessionId) {
     return { messages: [] };
   }
   const jsonlPath = path.join(KIRO_SESSIONS_DIR, sessionId + '.jsonl');
-  if (!fs.existsSync(jsonlPath)) return { messages: [] };
+  // Reject symlinks (and non-regular files) before reading so a crafted link
+  // named <uuid>.jsonl can't leak an out-of-tree file through the dashboard.
+  let jsonlStat;
+  try { jsonlStat = fs.lstatSync(jsonlPath); } catch { return { messages: [] }; }
+  if (!jsonlStat.isFile()) return { messages: [] };
 
   const messages = [];
   try {
@@ -4216,7 +4229,9 @@ function _buildSessionFileIndex() {
   // Index Kiro CLI file-based sessions (~/.kiro/sessions/cli/, since ~May 2026)
   if (fs.existsSync(KIRO_SESSIONS_DIR)) {
     try {
-      for (const f of fs.readdirSync(KIRO_SESSIONS_DIR)) {
+      for (const entry of fs.readdirSync(KIRO_SESSIONS_DIR, { withFileTypes: true })) {
+        if (entry.isSymbolicLink() || !entry.isFile()) continue;
+        const f = entry.name;
         if (!f.endsWith('.jsonl')) continue;
         const sid = f.slice(0, -6);
         if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sid)) continue;
