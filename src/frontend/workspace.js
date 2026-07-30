@@ -178,7 +178,7 @@ function _wsSaveSession() {
     var snap = _wsCaptureLayout();
     // Don't persist a lone empty pane — that's just the default blank state.
     var meaningful = snap.tabs.some(function (t) {
-      return t.panes.some(function (p) { return p.cmd || p.prefill || p.cwd || p.enteredCmd; });
+      return t.panes.some(function (p) { return p.cmd || p.prefill || p.cwd || p.enteredCmd || p.name; });
     }) || snap.tabs.length > 1 || (snap.tabs[0] && snap.tabs[0].panes.length > 1);
     var sig = meaningful ? JSON.stringify(snap) : '';
     if (sig === _wsLastSessionSig) return;
@@ -210,7 +210,7 @@ function _wsRestoreTabsFromSession(sess) {
       .slice(0, MAX_WS_PANES)
       .map(function (p) {
         var restoreCmd = (p && (p.cmd || p.enteredCmd || p.detectedCmd || p.prefill)) || '';
-        return { id: 'p' + (++_wsPaneSeq), cmd: null, prefill: null, restoreCmd: restoreCmd || null, wantCwd: (p && p.cwd) || null };
+        return { id: 'p' + (++_wsPaneSeq), cmd: null, prefill: null, restoreCmd: restoreCmd || null, wantCwd: (p && p.cwd) || null, name: (p && p.name) || '' };
       });
     return { id: 't' + (++_wsTabSeq), name: t.name || ('Tab ' + (ti + 1)), panes: panes,
              cols: Array.isArray(t.cols) ? t.cols.slice() : null, rows: Array.isArray(t.rows) ? t.rows.slice() : null };
@@ -529,6 +529,8 @@ function _wsShortCwd(cwd) {
 // A short, human label for a pane's title bar: the running agent (if any),
 // otherwise the folder name (e.g. "CoWork"), or "~" for the home directory.
 function _wsPaneLabel(pane) {
+  // A name the user typed always wins — it's the whole point of renaming.
+  if (pane && pane.name) return pane.name;
   if (pane && pane.cmd) {
     // Strip leading `VAR=value` env assignments (value may be quoted and hold
     // secrets, e.g. HTTPS_PROXY='http://user:pass@host') so the label is the
@@ -734,7 +736,11 @@ function _wsPaneMarkup(pane) {
   return '' +
     '<div class="ws-pane" data-pane-id="' + escHtml(pane.id) + '">' +
       '<div class="ws-pane-bar">' +
-        '<span class="ws-pane-status" id="wsStatus-' + escHtml(pane.id) + '">connecting…</span>' +
+        '<span class="ws-pane-status" id="wsStatus-' + escHtml(pane.id) + '" ' +
+          'title="Double-click to rename this terminal" ' +
+          'ondblclick="renameWorkspacePane(\'' + escHtml(pane.id) + '\')">connecting…</span>' +
+        '<button class="ws-pane-ren" title="Rename this terminal" aria-label="Rename terminal" ' +
+          'onclick="renameWorkspacePane(\'' + escHtml(pane.id) + '\')">&#9998;</button>' +
         '<select class="ws-pane-launch" title="Launch an agent or saved command in this pane" ' +
           'onchange="launchAgentInPane(\'' + escHtml(pane.id) + '\', this.value); this.selectedIndex=0;">' + _wsLaunchOptionsHtml() + '</select>' +
         '<button class="ws-pane-bm" title="Bookmark this folder + agent" aria-label="Bookmark" onclick="bookmarkPane(\'' + escHtml(pane.id) + '\')">&#9734;</button>' +
@@ -1531,7 +1537,7 @@ function _wsBuildPanes(spec) {
     : [{ cwd: spec.cwd, cmd: spec.cmd, prefill: spec.prefill }];
   list = list.slice(0, MAX_WS_PANES);
   return list.map(function (pc) {
-    return { id: 'p' + (++_wsPaneSeq), cmd: pc.cmd || null, prefill: pc.prefill || null, wantCwd: pc.cwd || null };
+    return { id: 'p' + (++_wsPaneSeq), cmd: pc.cmd || null, prefill: pc.prefill || null, wantCwd: pc.cwd || null, name: pc.name || '' };
   });
 }
 
@@ -1815,7 +1821,7 @@ function _wsSerializeTab(tab) {
     cols: Array.isArray(tab.cols) ? tab.cols.slice() : null,
     rows: Array.isArray(tab.rows) ? tab.rows.slice() : null,
     panes: tab.panes.map(function (p) {
-      return { cmd: p.cmd || '', prefill: p.prefill || '', cwd: p.cwd || p.wantCwd || '', detectedCmd: p.detectedCmd || '', enteredCmd: p.enteredCmd || '' };
+      return { cmd: p.cmd || '', prefill: p.prefill || '', cwd: p.cwd || p.wantCwd || '', name: p.name || '', detectedCmd: p.detectedCmd || '', enteredCmd: p.enteredCmd || '' };
     }),
   };
 }
@@ -1846,7 +1852,7 @@ function reopenLastClosedTab() {
     .slice(0, MAX_WS_PANES)
     .map(function (p) {
       var cmd = (p && (p.cmd || p.enteredCmd || p.detectedCmd || p.prefill)) || '';
-      return { id: 'p' + (++_wsPaneSeq), cmd: null, prefill: null, restoreCmd: cmd || null, wantCwd: (p && p.cwd) || null };
+      return { id: 'p' + (++_wsPaneSeq), cmd: null, prefill: null, restoreCmd: cmd || null, wantCwd: (p && p.cwd) || null, name: (p && p.name) || '' };
     });
   var tab = { id: 't' + (++_wsTabSeq), name: spec.name || 'Tab', panes: panes,
               cols: Array.isArray(spec.cols) ? spec.cols.slice() : null, rows: Array.isArray(spec.rows) ? spec.rows.slice() : null };
@@ -1918,6 +1924,23 @@ function addWorkspacePane(cmd) {
   if (!tab || tab.panes.length >= MAX_WS_PANES) return;
   tab.panes.push({ id: 'p' + (++_wsPaneSeq), cmd: cmd || null });
   _wsRenderPanes(); _wsSyncLayoutButtons();
+}
+
+// Give a pane its own name, shown in the title bar instead of the folder/agent
+// label. Uses codbashPrompt, not window.prompt — the latter is a no-op in the
+// Electron shell. An empty answer clears the name and falls back to the
+// auto-label; the name round-trips through saved layouts and the session.
+function renameWorkspacePane(id) {
+  var pane = _wsFindPane(id);
+  if (!pane) return;
+  codbashPrompt('Terminal name:', pane.name || _wsPaneLabel(pane)).then(function (name) {
+    if (name === null) return;                     // cancelled — leave as-is
+    var next = String(name).trim().slice(0, 120);  // matches MAX_NAME server-side
+    pane.name = next;                              // '' clears it → auto-label
+    var st = document.getElementById('wsStatus-' + pane.id);
+    if (st) st.textContent = _wsPaneLabel(pane);
+    _wsSaveSession();
+  });
 }
 
 function closeWorkspacePane(id) {
@@ -2073,6 +2096,7 @@ function _wsCaptureLayout() {
             cmd: p.cmd || '',
             prefill: p.prefill || '',
             cwd: p.cwd || p.wantCwd || '',
+            name: p.name || '',       // user-chosen pane label
             detectedCmd: p.detectedCmd || '',
             enteredCmd: p.enteredCmd || '',
           };
@@ -2145,6 +2169,7 @@ function applyWorkspaceLayout(id) {
           cmd: (p && p.cmd) || null,
           prefill: (p && p.prefill) || null,
           wantCwd: (p && p.cwd) || null,
+          name: (p && p.name) || '',
         };
       });
     return { id: 't' + (++_wsTabSeq), name: t.name || ('Tab ' + (ti + 1)), panes: panes };

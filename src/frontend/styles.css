@@ -3387,6 +3387,20 @@ body[data-view="overview"] .toolbar { display: none; }
     cursor: pointer;
 }
 .ws-pane-bm:hover { color: var(--accent-orange, #f59e0b); border-color: var(--accent-orange, #f59e0b); }
+/* Rename this terminal — same chrome as the bookmark button next to it. */
+.ws-pane-ren {
+    font-size: 12px;
+    line-height: 1;
+    width: 22px; height: 22px;
+    background: transparent;
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+}
+.ws-pane-ren:hover { color: var(--accent, #3b82f6); border-color: var(--accent, #3b82f6); }
+/* The pane title doubles as a rename target (double-click). */
+.ws-pane-status { cursor: default; }
 .ws-pane-close {
     font-size: 15px;
     line-height: 1;
