@@ -552,7 +552,16 @@ function _wsConnectPane(pane) {
   var term = new Terminal({
     cursorBlink: _tp.cursorBlink, cursorStyle: _tp.cursorStyle,
     fontSize: _tp.fontSize, fontFamily: _tp.fontFamily,
-    theme: _wsTermTheme(), scrollback: 5000, allowProposedApi: true
+    theme: _wsTermTheme(), scrollback: 5000, allowProposedApi: true,
+    // Guarantee readable text against whatever background a TUI paints.
+    // Without this (xterm's default is 1 = no adjustment) *dimmed* text on a
+    // filled background renders as an apparently EMPTY highlighted bar — the
+    // WebGL renderer applies dim by cutting the foreground alpha, so e.g. the
+    // grey "message above" rows Claude Code draws lost their text entirely,
+    // while the same output stayed legible in iTerm. 4.5 is the WCAG AA ratio;
+    // xterm only nudges a foreground when it falls below it, so normal colors
+    // are left alone.
+    minimumContrastRatio: 4.5
   });
   var fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
