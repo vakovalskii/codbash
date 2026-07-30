@@ -52,9 +52,14 @@ function sanitizePane(p) {
   const cwdRaw = p && typeof p === 'object' && typeof p.cwd === 'string' ? p.cwd.trim() : '';
   if (cwdRaw.length > MAX_COMMAND) return null;
   if (cwdRaw && CONTROL_CHARS.test(cwdRaw)) return null;
+  // A user-chosen pane label. Kept short: it only has to fit the pane title bar.
+  const nameRaw = p && typeof p === 'object' && typeof p.name === 'string' ? p.name.trim() : '';
+  if (nameRaw.length > MAX_NAME) return null;
+  if (nameRaw && CONTROL_CHARS.test(nameRaw)) return null;
   const out = { cmd };
   if (prefillRaw) out.prefill = prefillRaw;
   if (cwdRaw) out.cwd = cwdRaw;
+  if (nameRaw) out.name = nameRaw;
   return out;
 }
 

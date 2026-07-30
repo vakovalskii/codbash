@@ -31,6 +31,34 @@ test('sanitizeLayout accepts a multi-tab, multi-pane layout', () => {
   assert.equal(l.tabs[1].panes[0].cmd, '');
 });
 
+test('sanitizeLayout preserves a user-chosen pane name', () => {
+  const { m } = freshModule();
+  const l = m.sanitizeLayout({
+    name: 'named panes',
+    tabs: [{ name: 'work', panes: [{ cmd: 'claude', name: 'API server', cwd: '/Users/me/proj' }] }],
+  });
+  assert.ok(l);
+  const p = l.tabs[0].panes[0];
+  assert.equal(p.name, 'API server');
+  assert.equal(p.cmd, 'claude');
+  assert.equal(p.cwd, '/Users/me/proj');
+});
+
+test('sanitizeLayout drops a pane name with control characters', () => {
+  const { m } = freshModule();
+  assert.equal(
+    m.sanitizeLayout({ name: 'bad', tabs: [{ name: 't', panes: [{ cmd: '', name: 'evil\x07name' }] }] }),
+    null
+  );
+});
+
+test('sanitizeLayout omits an empty pane name instead of storing it', () => {
+  const { m } = freshModule();
+  const l = m.sanitizeLayout({ name: 'blank', tabs: [{ name: 't', panes: [{ cmd: 'claude', name: '   ' }] }] });
+  assert.ok(l);
+  assert.equal('name' in l.tabs[0].panes[0], false);
+});
+
 test('sanitizeLayout preserves per-pane prefill and cwd', () => {
   const { m } = freshModule();
   const l = m.sanitizeLayout({
