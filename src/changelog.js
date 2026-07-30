@@ -2,6 +2,15 @@
 
 const CHANGELOG = [
   {
+    version: '7.17.0',
+    date: '2026-07-30',
+    title: 'Name your terminals — and dimmed text is readable again',
+    changes: [
+      'Terminal panes can be named: click the ✎ in a pane\'s title bar (or double-click the title) to label it, e.g. "API" and "worker" for two shells in the same folder. An empty name restores the automatic label (agent → folder → ~), and the name survives reloads, saved layouts and restored sessions',
+      'Fixed dimmed text on a filled background rendering as an empty highlighted bar with no text at all — some rows (e.g. the grey "message above" bars a coding agent draws) lost their text entirely in a codbash pane while staying legible in iTerm. Terminal panes now enforce a minimum contrast ratio, so a dimmed foreground is never washed out to invisible',
+    ],
+  },
+  {
     version: '7.16.0',
     date: '2026-07-30',
     title: 'Working in-app updates, project launcher in the Terminal, external running agents, missing-folder recovery — plus a CSRF gate',
