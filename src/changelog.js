@@ -2,6 +2,19 @@
 
 const CHANGELOG = [
   {
+    version: '7.16.0',
+    date: '2026-07-30',
+    title: 'Working in-app updates, project launcher in the Terminal, external running agents, missing-folder recovery — plus a CSRF gate',
+    changes: [
+      'Desktop app: "Update Now" actually updates now — the app updates itself in place via electron-updater (download, then restart onto the new version). Previously it ran npm i -g on an unrelated global copy and restarted onto the same old bundled version. Thanks @NovakPAai',
+      'Terminal: new "+ Project" control opens an in-app terminal straight in a project folder — plain shell, your preferred agent, or a specific agent of your choice (a fresh tab no longer lands in your home directory). Thanks @NovakPAai',
+      'Running Agents again lists agents running in external terminals (iTerm, Terminal.app, Warp, cmux) — including the ones codbash itself launches — and clicking a row raises that real terminal window instead of opening a blank pane. Thanks @NovakPAai',
+      'Projects: a folder deleted from disk is now flagged on its tile instead of failing with "invalid or unsafe project path", and can be re-cloned in one click when a GitHub remote is known. Thanks @NovakPAai',
+      'Security: state-changing API requests and the terminal WebSocket now reject cross-origin callers, so a malicious page open in your browser can no longer trigger launches, deletions or clones on your local dashboard. Thanks @NovakPAai',
+      'Kiro: support for the new per-session file format under ~/.kiro/sessions/cli (detail, preview, search, replay and export now all resolve these sessions). Thanks @Sean10',
+    ],
+  },
+  {
     version: '7.15.0',
     date: '2026-07-23',
     title: 'Browser-like terminal: session resume, bookmarks & groups, settings, resizable panes — plus input-freeze & lost-dialog fixes',
