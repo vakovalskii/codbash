@@ -15,4 +15,17 @@ contextBridge.exposeInMainWorld('codbashDesktop', {
   onShortcut: (cb) => ipcRenderer.on('codbash:shortcut', (_e, name) => cb(name)),
   // Ask main to close the window (used when a shortcut has no in-page meaning).
   closeWindow: () => ipcRenderer.send('codbash:close-window'),
+  // In-app updater (electron-updater). The dashboard's update banner drives this:
+  //   onState(cb) → receives {state, version?, percent?, message?} pushes
+  //   download() → start downloading the available update
+  //   install()  → relaunch onto the downloaded update
+  //   check()    → force a check now
+  //   openReleases() → fallback: open the GitHub releases page in the browser
+  updater: {
+    onState: (cb) => ipcRenderer.on('codbash:update-state', (_e, s) => cb(s)),
+    check: () => ipcRenderer.invoke('codbash:update-check'),
+    download: () => ipcRenderer.invoke('codbash:update-download'),
+    install: () => ipcRenderer.invoke('codbash:update-install'),
+    openReleases: () => ipcRenderer.send('codbash:open-releases'),
+  },
 });
