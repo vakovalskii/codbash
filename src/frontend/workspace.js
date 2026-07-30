@@ -271,19 +271,22 @@ function _wsToolLabel(kind) {
   return _WS_TOOL_LABELS[kind] || (kind.charAt(0).toUpperCase() + kind.slice(1));
 }
 
-// Group *running agents* (from the live /api/active map, not Workspace panes)
-// by their real project folder — so agents launched here, in another terminal,
-// or that cd'd elsewhere are all detected correctly. Skips the home dir and
-// entries with no cwd. Used by the sidebar running-agents tree.
+// Group *running agents in EXTERNAL native terminals* (from the live /api/active
+// map, not Workspace panes) by their real project folder. Agents running inside
+// a codbash browser-pty pane (tagged `local` server-side) are excluded — they
+// are already visible as Workspace tabs, so surfacing them here too is just
+// noise. See docs/design/running-agents-external.md. Used by the sidebar tree.
 function _wsRunningByProject() {
   var map = (typeof activeSessions === 'object' && activeSessions) || {};
   var groups = {}, order = [];
   Object.keys(map).forEach(function (k) {
     var a = map[k];
+    // Skip codbash's own panes: this tree is for agents in external terminals,
+    // the ones that have no other UI home. (Undefined `local` — an older server
+    // payload — is treated as external so nothing silently disappears.)
+    if (a && a.local === true) return;
     var cwd = (a && a.cwd) || '';
-    // Only skip entries with no cwd (can't group or jump). Home-dir agents used
-    // to be skipped as noise, but RUNNING AGENTS is now scoped server-side to
-    // codbash-launched agents, so a home-dir agent is legitimate — show it.
+    // Only skip entries with no cwd (can't group or focus a window).
     if (!cwd) return;
     var isHome = /^(\/Users\/[^/]+|\/home\/[^/]+|\/root)\/?$/.test(cwd);
     var key = cwd; // group by full path so two same-named folders don't merge
@@ -296,29 +299,45 @@ function _wsRunningByProject() {
   return order.map(function (k) { return groups[k]; });
 }
 
-// Find a live Workspace pane sitting in `cwd` (so clicking a running agent can
-// jump straight to its terminal when we have one). Returns {tab,pane} or null.
-function _wsPaneForCwd(cwd) {
-  var hit = null;
-  _wsAllPanes().forEach(function (x) {
-    if (hit) return;
-    var p = x.pane;
-    if (!p.sock || p.exited || p.sock.readyState !== 1) return;
-    if ((p.cwd || p.wantCwd) === cwd) hit = x;
-  });
-  return hit;
+// Sanitize a pid for an inline onclick arg: a positive integer, else 0. Mirrors
+// the server's /api/focus check (Number.isInteger(pid) > 0) — a truncated float
+// would be rejected there anyway, so we reject it here too rather than round it.
+function _wsPidArg(pid) {
+  var n = typeof pid === 'number' ? pid : parseInt(pid, 10);
+  return (Number.isInteger(n) && n > 0) ? String(n) : '0';
 }
 
-// Click a running-agent row: jump to its Workspace pane if one is open here,
-// otherwise open a plain terminal in the project folder. The agent is ALREADY
-// running, so we must NOT prefill a resume command — that would spawn a second
-// instance. (sessionId/kind are accepted for signature stability but unused.)
-function jumpToRunningAgent(cwd, sessionId, kind) {
-  var hit = _wsPaneForCwd(cwd);
-  if (hit) { jumpToWorkspacePane(hit.tab.id, hit.pane.id); return; }
-  if (cwd && typeof openInWorkspace === 'function') {
-    openInWorkspace({ name: _wsProjectBasename(cwd), cwd: cwd });
+// Click a running-agent row. These rows are agents in EXTERNAL native terminals
+// (codbash's own panes are filtered out of the tree), so the honest action is to
+// raise that real terminal window by PID — reusing /api/focus (focusTerminalByPid,
+// same path the session cards' "Focus Terminal" uses). We deliberately do NOT
+// open a blank in-app terminal as a stand-in: an empty shell is not the agent,
+// and resuming (claude --continue) would spawn a SECOND instance of a live agent.
+// `cwd`/`kind` are kept in the signature for call-site stability but unused here
+// (focus is keyed purely by pid); `sessionId` is forwarded for the server log.
+function jumpToRunningAgent(cwd, sessionId, kind, pid) {
+  var n = typeof pid === 'number' ? pid : parseInt(pid, 10);
+  if (!Number.isInteger(n) || n <= 0) {
+    if (typeof showToast === 'function') showToast('No terminal window to focus for this agent.');
+    return;
   }
+  fetch('/api/focus', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pid: n, sessionId: sessionId || '' })
+  })
+    .then(function (r) {
+      return r.json().then(function (d) { return { ok: r.ok, d: d }; },
+        function () { return { ok: r.ok, d: {} }; });
+    })
+    .then(function (res) {
+      if (!res.ok || !res.d || res.d.ok === false) {
+        if (typeof showToast === 'function') showToast('Couldn’t focus its terminal window.');
+      }
+    })
+    .catch(function () {
+      if (typeof showToast === 'function') showToast('Couldn’t focus its terminal window.');
+    });
 }
 
 // Render a compact tree at the bottom of the sidebar: each project folder with a
@@ -337,17 +356,20 @@ function _wsRenderRunningTree() {
   _wsRunTreeSig = sig;
 
   if (!groups.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
-  var html = '<div class="ws-run-title">Running agents</div>';
+  var html = '<div class="ws-run-title" title="Agents running in external terminals — click to bring their window forward">Running agents</div>';
   groups.forEach(function (g) {
+    // The project header focuses the first agent's window (a reasonable default
+    // when a folder hosts several).
+    var headPid = _wsPidArg(g.items[0] && g.items[0].pid);
     html += '<div class="ws-run-proj" title="' + escHtml(g.cwd) + '" ' +
-      'onclick="jumpToRunningAgent(' + _wsJsStr(g.cwd) + ',null,null)">' +
+      'onclick="jumpToRunningAgent(' + _wsJsStr(g.cwd) + ',null,null,' + headPid + ')">' +
       '<span class="ws-run-dot"></span><span class="ws-run-name">' + escHtml(g.name) + '</span>' +
       '<span class="ws-run-count">' + g.items.length + '</span></div>';
     g.items.forEach(function (a) {
       var waiting = a.status === 'waiting';
       html += '<div class="ws-run-term' + (waiting ? ' ws-run-idle' : '') + '" ' +
-        'title="' + escHtml(_wsToolLabel(a.kind) + (waiting ? ' — idle' : ' — active')) + '" ' +
-        'onclick="jumpToRunningAgent(' + _wsJsStr(g.cwd) + ',' + _wsJsStr(a.sessionId || '') + ',' + _wsJsStr(a.kind || '') + ')">' +
+        'title="' + escHtml(_wsToolLabel(a.kind) + (waiting ? ' — idle' : ' — active') + ' — click to focus its terminal window') + '" ' +
+        'onclick="jumpToRunningAgent(' + _wsJsStr(g.cwd) + ',' + _wsJsStr(a.sessionId || '') + ',' + _wsJsStr(a.kind || '') + ',' + _wsPidArg(a.pid) + ')">' +
         escHtml(_wsToolLabel(a.kind)) + '</div>';
     });
   });
