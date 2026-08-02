@@ -1,5 +1,13 @@
 # Running Agents = agents in external terminals (focus, don't spawn)
 
+> **Amendment (unified tree):** the sidebar tree now shows local (in-codbash)
+> AND external agents together, colored differently, with a project/agent
+> grouping toggle. The `local` tag and the "focus by PID, never spawn a blank
+> terminal" rule below are unchanged for external agents — only the "external
+> only" scoping was reversed. See "Unified local + external tree" at the
+> bottom of this doc for the current design; the sections above it describe
+> the external-focus mechanics, which still apply verbatim.
+
 ## Goal
 
 The Workspace "Running agents" sidebar should list agents actually running in
@@ -127,3 +135,60 @@ regression; a full keyboard-navigable list is a follow-up, `deferred_to: issue`)
 raises the native terminal window.
 
 **Touch targets:** tree rows keep their existing height (unchanged).
+
+## Unified local + external tree
+
+### Goal
+
+Users report the "external-only" tree was confusing: it silently hid agents
+running in codbash's own panes, so a user watching a project with both an
+in-app Claude session and an iTerm one saw only half the picture. Merge them
+into one tree, colored by where each agent runs, and let the user pick whether
+the tree groups by project (default) or by agent kind.
+
+### Data model
+
+No server change: `getActiveSessions()` already tags every live agent with
+`local`. The frontend just stops dropping `local:true` entries.
+
+`_wsRunningGroups(mode)` (`workspace.js`) replaces `_wsRunningByProject()`:
+- `mode: 'project'` (default) — groups by `cwd`, same as before, but items now
+  include local agents too.
+- `mode: 'agent'` — groups by `kind` (tool), items are the projects that tool
+  is running in.
+
+Each item carries `{agent, cwd, projName, kind}` so either grouping can label
+its rows correctly (tool name in project-mode rows, project name in
+agent-mode rows).
+
+### Click dispatch
+
+`jumpToRunningAgent(cwd, sessionId, kind, pid, local)`:
+- `local === true` → `_wsFindLivePaneForCwd(cwd)` looks up a live (connected,
+  not exited) pane whose shell cwd matches, then `jumpToWorkspacePane(tabId,
+  paneId)`. If no pane is found (a stale tag right after a tab closed), falls
+  back to `setView('workspace')` rather than doing nothing.
+- `local === false` — unchanged: `POST /api/focus` by PID.
+
+### Grouping preference
+
+Stored in `localStorage['codedash-running-group']` (`'project'` | `'agent'`),
+not a server setting — it's a per-browser display toggle, not something that
+needs to sync across machines. A compact 2-button segmented control sits in
+the tree header (`.ws-run-mode`).
+
+### "No ghost sessions"
+
+The tree was never actually showing ghosts in the sense of dead processes —
+`activeSessions` is a live `ps` scan re-polled every 5s (1s while Workspace is
+open), so an exited process drops out on the next poll. The dimmed rows in the
+old design were `status: 'waiting'` (idle — low CPU, sleeping — but still a
+live process), which reads as "maybe gone" without a legend. The new tree
+keeps that dimming for idle but adds an explicit color legend (blue/orange)
+for *where* an agent runs, so dimmed no longer doubles as an ambiguous signal.
+
+### Color legend
+
+- Blue dot — running inside a codbash browser-pty pane (`local: true`).
+- Orange dot — running in an external native terminal (`local: false`).
+- Either dimmed to muted gray — idle (waiting for input), not exited.

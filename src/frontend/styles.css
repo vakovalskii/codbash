@@ -3074,10 +3074,27 @@ body[data-view="overview"] .toolbar { display: none; }
 .ws-running-tree {
     margin: 8px 8px 4px; padding-top: 8px; border-top: 1px solid var(--border);
 }
+.ws-run-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 6px;
+    padding: 0 8px 4px;
+}
 .ws-run-title {
     font-size: 10px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase;
-    color: var(--text-muted); padding: 0 8px 4px;
+    color: var(--text-muted);
 }
+/* Compact 2-way segmented control — the "grouping" setting the user toggles
+   inline instead of hunting for it in a settings dialog. */
+.ws-run-mode {
+    display: inline-flex; border: 1px solid var(--border); border-radius: 5px; overflow: hidden; flex-shrink: 0;
+}
+.ws-run-mode-btn {
+    font-size: 9px; font-weight: 600; letter-spacing: 0.02em; line-height: 1;
+    padding: 3px 6px; background: transparent; color: var(--text-muted);
+    border: none; cursor: pointer;
+}
+.ws-run-mode-btn + .ws-run-mode-btn { border-left: 1px solid var(--border); }
+.ws-run-mode-btn:hover { color: var(--text-primary); background: rgba(255,255,255,0.05); }
+.ws-run-mode-btn.active { color: #fff; background: var(--accent-blue); }
 .ws-run-proj {
     display: flex; align-items: center; gap: 6px; padding: 4px 8px;
     font-size: 12px; color: var(--text-primary); cursor: pointer; border-radius: 6px;
@@ -3089,6 +3106,8 @@ body[data-view="overview"] .toolbar { display: none; }
     font-size: 10px; color: var(--text-muted); background: var(--bg-hover);
     border-radius: 8px; padding: 0 6px; min-width: 16px; text-align: center;
 }
+/* Per-agent row — dot color is the terminal-type legend: orange = running in
+   an external native terminal (default), blue = running inside codbash itself. */
 .ws-run-term {
     position: relative;
     padding: 2px 8px 2px 22px; font-size: 11px; color: var(--text-secondary);
@@ -3096,11 +3115,15 @@ body[data-view="overview"] .toolbar { display: none; }
 }
 .ws-run-term::before {
     content: ''; position: absolute; left: 11px; top: 50%; transform: translateY(-50%);
-    width: 5px; height: 5px; border-radius: 50%; background: var(--accent-green);
+    width: 5px; height: 5px; border-radius: 50%; background: var(--accent-orange, #f59e0b);
 }
+.ws-run-term.ws-run-local::before { background: var(--accent-blue); }
+.ws-run-term:hover { background: rgba(255,255,255,0.05); color: var(--text-primary); }
+/* Idle (waiting for input, still a live process — not "gone") always wins over
+   the terminal-type color so a dimmed dot reliably means "idle", not a second
+   meaning collision with local/external. */
 .ws-run-term.ws-run-idle { color: var(--text-muted); }
 .ws-run-term.ws-run-idle::before { background: var(--text-muted); }
-.ws-run-term:hover { background: rgba(255,255,255,0.05); color: var(--text-primary); }
 
 /* In-app prompt (codbashPrompt) — replaces window.prompt (no-op in Electron). */
 .cb-prompt-overlay {
