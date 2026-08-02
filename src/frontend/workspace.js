@@ -921,10 +921,10 @@ function _wsPaneMarkup(pane) {
           'ondblclick="renameWorkspacePane(\'' + escHtml(pane.id) + '\')">connecting…</span>' +
         '<button class="ws-pane-ren" title="Rename this terminal" aria-label="Rename terminal" ' +
           'onclick="renameWorkspacePane(\'' + escHtml(pane.id) + '\')">&#9998;</button>' +
-        '<select class="ws-pane-launch" title="Launch an agent or saved command in this pane" ' +
+        '<select class="ws-pane-launch" title="Launch an agent or saved command in this pane" aria-label="Launch an agent or saved command in this pane" ' +
           'onchange="launchAgentInPane(\'' + escHtml(pane.id) + '\', this.value); this.selectedIndex=0;">' + _wsLaunchOptionsHtml() + '</select>' +
         '<button class="ws-pane-bm" title="Bookmark this folder + agent" aria-label="Bookmark" onclick="bookmarkPane(\'' + escHtml(pane.id) + '\')">&#9734;</button>' +
-        '<button class="ws-pane-close" title="Close pane" onclick="closeWorkspacePane(\'' + escHtml(pane.id) + '\')">&times;</button>' +
+        '<button class="ws-pane-close" title="Close pane" aria-label="Close pane" onclick="closeWorkspacePane(\'' + escHtml(pane.id) + '\')">&times;</button>' +
       '</div>' +
       '<div class="ws-pane-term" id="wsTermHost-' + escHtml(pane.id) + '"></div>' +
       '<div class="ws-restore-banner" id="wsRestore-' + escHtml(pane.id) + '" hidden></div>' +
@@ -1423,7 +1423,7 @@ function _wsTabMarkup(tab) {
       'title="Drag to reorder · double-click to rename">' +
       '<span class="ws-tab-name">' + escHtml(tab.name) + '</span>' +
       '<button class="ws-tab-rename-btn" title="Rename terminal" aria-label="Rename terminal" onclick="event.stopPropagation();renameWorkspaceTab(\'' + id + '\')">&#9998;</button>' +
-      '<button class="ws-tab-close" title="Close tab" onclick="event.stopPropagation();closeWorkspaceTab(\'' + id + '\')">&times;</button>' +
+      '<button class="ws-tab-close" title="Close tab" aria-label="Close tab" onclick="event.stopPropagation();closeWorkspaceTab(\'' + id + '\')">&times;</button>' +
     '</div>';
 }
 
@@ -1619,6 +1619,47 @@ function _wsMakeResizer(grid, tab, dir, pos, gr, idx) {
   h.className = 'ws-resizer ws-resizer-' + dir;
   if (dir === 'v') { h.style.left = pos + 'px'; }
   else { h.style.top = pos + 'px'; }
+  // Pointer-only by default (like a native <input type=range> splitter with
+  // no keyboard equivalent) — make it a real ARIA separator so arrow keys
+  // can resize too, not just drag.
+  h.tabIndex = 0;
+  h.setAttribute('role', 'separator');
+  h.setAttribute('aria-orientation', dir === 'v' ? 'vertical' : 'horizontal');
+  h.setAttribute('aria-label', dir === 'v' ? 'Resize panes (left/right arrow keys)' : 'Resize panes (up/down arrow keys)');
+  h.addEventListener('keydown', function (e) {
+    var forward = (dir === 'v') ? e.key === 'ArrowRight' : e.key === 'ArrowDown';
+    var backward = (dir === 'v') ? e.key === 'ArrowLeft' : e.key === 'ArrowUp';
+    if (!forward && !backward) return;
+    e.preventDefault();
+    var els = tab.panes.map(function (p) { return grid.querySelector('.ws-pane[data-pane-id="' + p.id + '"]'); });
+    var gr2 = grid.getBoundingClientRect();
+    var arr = (dir === 'v') ? tab.cols : tab.rows;
+    var a = idx, b = idx + 1;
+    var sum = arr[a] + arr[b];
+    var startPx, endPx;
+    if (dir === 'v') {
+      startPx = els[a].getBoundingClientRect().left;
+      endPx = els[b].getBoundingClientRect().right;
+    } else {
+      startPx = els[0].getBoundingClientRect().top;
+      endPx = els[2].getBoundingClientRect().bottom;
+    }
+    var S = endPx - startPx;
+    if (S < 2 * _WS_MIN_PANE_PX) return;
+    var curRel = (arr[a] / sum) * S;
+    var stepPx = Math.max(8, S * 0.05); // ~5% of the two tracks' span per keypress
+    var nextRel = Math.min(S - _WS_MIN_PANE_PX, Math.max(_WS_MIN_PANE_PX, curRel + (forward ? stepPx : -stepPx)));
+    arr[a] = sum * (nextRel / S);
+    arr[b] = sum - arr[a];
+    _wsApplyGrid(tab);
+    // Reposition this handle in place (like a live drag) rather than calling
+    // _wsLayoutResizers — that rebuilds every handle from scratch and would
+    // destroy (and unfocus) the one the user is actively adjusting.
+    if (dir === 'v') h.style.left = (startPx + nextRel - gr2.left) + 'px';
+    else h.style.top = (startPx + nextRel - gr2.top) + 'px';
+    _wsThrottleRefit(tab);
+    _wsSaveSession();
+  });
   grid.appendChild(h);
   h.addEventListener('pointerdown', function (e) {
     e.preventDefault();
@@ -2465,7 +2506,7 @@ async function renderWorkspace(container) {
           '<button class="toolbar-btn ws-icon-btn" title="Terminal settings — font, theme, cursor" aria-label="Terminal settings" onclick="toggleTerminalSettings(event)">' + _WS_ICON_GEAR + '</button>' +
           '<button class="toolbar-btn" title="Manage saved start commands" onclick="openWorkspaceCommands()">Commands</button>' +
           '<button class="toolbar-btn" title="Save the current tabs, panes and commands as a reusable layout" onclick="saveWorkspaceLayout()">Save</button>' +
-          '<select class="ws-pane-launch" id="wsLayoutsMenu" title="Launch a saved workspace layout" ' +
+          '<select class="ws-pane-launch" id="wsLayoutsMenu" title="Launch a saved workspace layout" aria-label="Launch a saved workspace layout" ' +
             'onchange="onWorkspaceLayoutsMenu(this.value); this.selectedIndex=0;"><option value="">Layouts ▾</option></select>' +
         '</div>' +
       '</div>' +

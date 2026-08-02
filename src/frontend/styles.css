@@ -695,7 +695,7 @@ body[data-view="overview"] .toolbar { display: none; }
     box-shadow: 0 0 0 1px var(--accent-blue);
 }
 
-.card.focused {
+.card.focused, .card:focus-visible {
     outline: 2px solid var(--accent-blue);
     outline-offset: 2px;
 }
@@ -949,6 +949,7 @@ body[data-view="overview"] .toolbar { display: none; }
     z-index: 50;
 }
 .calendar-popup.open { display: block; }
+.calendar-popup:focus { outline: none; } /* dialog container itself isn't the visible target — the first day/nav control is */
 
 .cal-header {
     display: flex;
@@ -987,8 +988,10 @@ body[data-view="overview"] .toolbar { display: none; }
     cursor: pointer;
     color: var(--text-secondary);
     transition: all 0.1s;
+    background: none; border: none; font-family: inherit; width: 100%;
 }
 .cal-day:hover { background: rgba(255,255,255,0.08); color: var(--text-primary); }
+.cal-day:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: -1px; }
 .cal-day.other-month { color: var(--text-muted); opacity: 0.3; }
 .cal-day.today { font-weight: 700; color: var(--accent-blue); }
 .cal-day.in-range { background: rgba(96,165,250,0.1); }
@@ -2225,6 +2228,7 @@ body[data-view="overview"] .toolbar { display: none; }
 .qa-item:last-child { border-bottom: none; }
 .qa-item:hover { background: var(--bg-card-hover); }
 .qa-item.selected { background: rgba(96, 165, 250, 0.08); }
+.qa-item:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: -2px; }
 
 .qa-question {
     flex: 1;
@@ -3228,8 +3232,10 @@ body[data-view="overview"] .toolbar { display: none; }
     display: flex; flex-direction: column; gap: 6px; text-align: left;
     padding: 14px; background: var(--bg-card); border: 1px solid var(--border);
     border-radius: 12px; cursor: pointer; transition: border-color 0.15s;
+    font: inherit; width: 100%;
 }
 .ov-card:hover { border-color: var(--accent-blue); }
+.ov-card:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 2px; }
 .ov-card.limit { border-color: var(--accent-red); }
 .ov-card-top { display: flex; align-items: center; gap: 8px; }
 .ov-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); }
@@ -3348,6 +3354,8 @@ body[data-view="overview"] .toolbar { display: none; }
 .ws-resizer-h::before { left: 0; right: 0; top: 50%; height: 2px; transform: translateY(-50%); }
 .ws-resizer:hover::before, .ws-resizer.dragging::before { background: var(--accent-blue); }
 .ws-resizer.dragging::before { box-shadow: 0 0 8px color-mix(in srgb, var(--accent-blue) 60%, transparent); }
+.ws-resizer:focus-visible::before { background: var(--accent-blue); box-shadow: 0 0 8px color-mix(in srgb, var(--accent-blue) 60%, transparent); }
+.ws-resizer:focus-visible { outline: none; } /* the ::before line itself is the focus indicator */
 
 .ws-pane {
     display: flex;
@@ -4468,7 +4476,7 @@ body[data-view="overview"] .toolbar { display: none; }
     border-color: var(--accent-blue);
 }
 
-.list-row.focused {
+.list-row.focused, .list-row:focus-visible {
     outline: 2px solid var(--accent-blue);
     outline-offset: -2px;
 }

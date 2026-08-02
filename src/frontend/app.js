@@ -1416,7 +1416,8 @@ function renderCard(s, idx) {
     return '<span class="tag-pill tag-' + escHtml(t) + '" onclick="event.stopPropagation();removeTag(\'' + s.id + '\',\'' + t + '\')">' + escHtml(t) + ' &times;</span>';
   }).join('');
 
-  var html = '<div class="' + classes + '" data-id="' + s.id + '" onclick="onCardClick(\'' + s.id + '\', event)">';
+  var cardLabel = escHtml(projName + ': ' + getSessionDisplayName(s).slice(0, 80) + ' — ' + toolLabel + ', ' + timeAgo(s.last_ts));
+  var html = '<div class="' + classes + '" data-id="' + s.id + '" tabindex="0" aria-label="' + cardLabel + '" onclick="onCardClick(\'' + s.id + '\', event)" onkeydown="onCardKeydown(event)">';
   html += '<div class="card-top">';
   html += '<input type="checkbox" class="card-checkbox" style="' + checkboxStyle + '" ' + (isSelected ? 'checked' : '') + ' onclick="toggleSelect(\'' + s.id + '\', event)">';
   html += renderToolBadges(s.tool, s);
@@ -1519,7 +1520,8 @@ function renderListCard(s, idx) {
   if (isSelected) classes += ' selected';
   if (isFocused) classes += ' focused';
 
-  var html = '<div class="' + classes + '" data-id="' + s.id + '" onclick="onCardClick(\'' + s.id + '\', event)">';
+  var listLabel = escHtml(projName + ': ' + getSessionDisplayName(s).slice(0, 80) + ' — ' + getToolLabel(s.tool, true) + ', ' + timeAgo(s.last_ts));
+  var html = '<div class="' + classes + '" data-id="' + s.id + '" tabindex="0" aria-label="' + listLabel + '" onclick="onCardClick(\'' + s.id + '\', event)" onkeydown="onCardKeydown(event)">';
   html += renderToolBadges(s.tool, s);
   if (showBadges && s.mcp_servers && s.mcp_servers.length > 0) {
     s.mcp_servers.forEach(function(m) {
@@ -1649,6 +1651,21 @@ function onCardClick(id, event) {
   } else {
     var s = allSessions.find(function(x) { return x.id === id; });
     if (s) openDetail(s);
+  }
+}
+
+// Session cards (.card / .list-row / .qa-item) are plain divs with nested
+// interactive controls (checkbox, star, tag, launch buttons) — not real
+// <button>s, so Enter/Space don't activate them for free like a native
+// button would. This makes the card itself keyboard-activatable while
+// leaving its nested controls' own native key handling alone: only react
+// when the key event's target IS the card (not a bubbled event from a
+// descendant button/checkbox, which already handles its own Enter/Space).
+function onCardKeydown(e) {
+  if (e.target !== e.currentTarget) return;
+  if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault();
+    e.currentTarget.click(); // reuses the card's own onclick handler
   }
 }
 
@@ -1909,7 +1926,8 @@ function renderQACard(s, idx) {
   var costStr = cost > 0 ? '~$' + cost.toFixed(2) : '';
   var classes = 'qa-item' + (selectedIds.has(s.id) ? ' selected' : '');
 
-  var html = '<div class="' + classes + '" data-id="' + s.id + '" onclick="onCardClick(\'' + s.id + '\', event)">';
+  var qaLabel = escHtml(getSessionDisplayName(s).slice(0, 100) + ' — ' + toolLabel + ', ' + timeAgo(s.last_ts));
+  var html = '<div class="' + classes + '" data-id="' + s.id + '" tabindex="0" aria-label="' + qaLabel + '" onclick="onCardClick(\'' + s.id + '\', event)" onkeydown="onCardKeydown(event)">';
   html += renderToolBadges(s.tool, s);
   html += '<span class="qa-question">' + escHtml(getSessionDisplayName(s).slice(0, 160)) + '</span>';
   html += '<span class="qa-meta">';
@@ -4028,9 +4046,10 @@ function _installModalFocusTrap(overlay) {
   _modalTrapFn = function(e) {
     if (e.key === 'Escape') {
       e.stopPropagation();
-      // Both modals route close through the same callback chain.
+      // All three modals route close through the same callback chain.
       if (overlay.id === 'projectsSettingsOverlay') closeProjectsSettings();
       else if (overlay.id === 'addProjectOverlay' && typeof closeAddProject === 'function') closeAddProject();
+      else if (overlay.id === 'detailPanel' && typeof closeDetail === 'function') closeDetail();
       return;
     }
     if (e.key !== 'Tab') return;
@@ -4051,7 +4070,12 @@ function _uninstallModalFocusTrap() {
     document.removeEventListener('keydown', _modalTrapFn, true);
     _modalTrapFn = null;
   }
-  if (_modalFocusReturn && _modalFocusReturn.focus) {
+  // A background poll/re-render (e.g. the 5s active-sessions refresh) can
+  // rebuild the session grid while the modal was open, detaching the node we
+  // captured. Focusing a detached element is a silent no-op that strands
+  // focus wherever it happened to be (often the modal's own now-hidden close
+  // button) — check it's still on the page first.
+  if (_modalFocusReturn && _modalFocusReturn.focus && document.body.contains(_modalFocusReturn)) {
     try { _modalFocusReturn.focus(); } catch (e) {}
   }
   _modalFocusReturn = null;
@@ -4314,7 +4338,14 @@ function closeAddProject() {
 function addProjectSwitchTab(tab) {
   ['local', 'owned', 'contributing'].forEach(function(t) {
     var btn = document.querySelector('.ap-tab[data-tab="' + t + '"]');
-    if (btn) btn.classList.toggle('active', t === tab);
+    if (!btn) return;
+    var isActive = t === tab;
+    btn.classList.toggle('active', isActive);
+    // WAI-ARIA tab pattern: aria-selected + roving tabindex must track the
+    // active tab, not just the visual .active class — otherwise a screen
+    // reader keeps announcing the first tab as selected forever.
+    btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    btn.setAttribute('tabindex', isActive ? '0' : '-1');
   });
   document.getElementById('apPaneLocal').style.display = tab === 'local' ? '' : 'none';
   document.getElementById('apPaneOwned').style.display = tab === 'owned' ? '' : 'none';
@@ -4327,6 +4358,28 @@ function addProjectSwitchTab(tab) {
     if (!_githubReposCache[apiType]) loadGithubRepos(apiType);
     else renderRepoList(apiType);
   }
+}
+
+// Left/Right cycle between the three Add Project tabs, Home/End jump to ends
+// — same WAI-ARIA tablist behavior as the Projects/History subtab strip
+// (onProjectsSubtabKey). Wired via the tablist's onkeydown in index.html.
+var AP_TAB_ORDER = ['local', 'owned', 'contributing'];
+function onAddProjectTabKey(e) {
+  var k = e.key;
+  if (k !== 'ArrowLeft' && k !== 'ArrowRight' && k !== 'Home' && k !== 'End') return;
+  e.preventDefault();
+  var current = document.querySelector('.ap-tab.active');
+  var idx = current ? AP_TAB_ORDER.indexOf(current.getAttribute('data-tab')) : 0;
+  if (idx < 0) idx = 0;
+  var next;
+  if (k === 'Home') next = 0;
+  else if (k === 'End') next = AP_TAB_ORDER.length - 1;
+  else if (k === 'ArrowRight') next = (idx + 1) % AP_TAB_ORDER.length;
+  else next = (idx - 1 + AP_TAB_ORDER.length) % AP_TAB_ORDER.length;
+  var nextTab = AP_TAB_ORDER[next];
+  addProjectSwitchTab(nextTab);
+  var btn = document.querySelector('.ap-tab[data-tab="' + nextTab + '"]');
+  if (btn) btn.focus();
 }
 
 async function submitAddLocalProject() {

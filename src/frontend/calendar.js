@@ -11,7 +11,7 @@ function toggleCalendar() {
   var btn = document.getElementById('dateBtn');
   if (!popup || !btn) return;
   if (popup.classList.contains('open')) {
-    popup.classList.remove('open');
+    closeCalendar();
     return;
   }
   renderCalendar();
@@ -26,16 +26,40 @@ function toggleCalendar() {
   popup.style.left = left + 'px';
   popup.style.top = (rect.bottom + 4) + 'px';
   popup.classList.add('open');
+  btn.setAttribute('aria-expanded', 'true');
+  // Move focus into the dialog (it's a real dialog now — role="dialog" +
+  // aria-modal) so keyboard/screen-reader users land inside it, not on
+  // whatever was behind the button.
+  popup.focus();
   setTimeout(function() {
     document.addEventListener('click', closeCalendarOutside, { once: true });
   }, 0);
+}
+
+// Closes the popup and — unless the trigger button itself is what's about to
+// receive focus anyway (a plain outside click on unrelated UI) — returns
+// focus to the date button, so a keyboard user isn't dropped onto <body>.
+function closeCalendar(returnFocus) {
+  var popup = document.getElementById('calendarPopup');
+  var btn = document.getElementById('dateBtn');
+  if (!popup) return;
+  popup.classList.remove('open');
+  if (btn) btn.setAttribute('aria-expanded', 'false');
+  if (returnFocus !== false && btn) btn.focus();
+}
+
+function onCalendarPopupKeydown(e) {
+  if (e.key === 'Escape') {
+    e.stopPropagation();
+    closeCalendar();
+  }
 }
 
 function closeCalendarOutside(e) {
   var popup = document.getElementById('calendarPopup');
   var btn = document.getElementById('dateBtn');
   if (popup && !popup.contains(e.target) && btn && !btn.contains(e.target)) {
-    popup.classList.remove('open');
+    closeCalendar(false); // the click already moved focus elsewhere — don't fight it
   } else if (popup && popup.classList.contains('open')) {
     document.addEventListener('click', closeCalendarOutside, { once: true });
   }
@@ -64,28 +88,31 @@ function renderCalendar() {
 
   var prevLastDay = new Date(calYear, calMonth, 0).getDate();
   for (var i = startWeekday - 1; i >= 0; i--) {
-    html += '<div class="cal-day other-month">' + (prevLastDay - i) + '</div>';
+    html += '<div class="cal-day other-month" aria-hidden="true">' + (prevLastDay - i) + '</div>';
   }
 
   for (var d = 1; d <= daysInMonth; d++) {
     var dateStr = calYear + '-' + String(calMonth+1).padStart(2,'0') + '-' + String(d).padStart(2,'0');
     var cls = 'cal-day';
+    var selected = false;
     if (dateStr === todayStr) cls += ' today';
     if (calStart && calEnd) {
-      if (dateStr === calStart) cls += ' range-start';
-      if (dateStr === calEnd) cls += ' range-end';
+      if (dateStr === calStart) { cls += ' range-start'; selected = true; }
+      if (dateStr === calEnd) { cls += ' range-end'; selected = true; }
       if (dateStr > calStart && dateStr < calEnd) cls += ' in-range';
       if (calStart === calEnd && dateStr === calStart) cls += ' range-start range-end';
     } else if (calStart && dateStr === calStart) {
       cls += ' range-start range-end';
+      selected = true;
     }
-    html += '<div class="' + cls + '" onclick="event.stopPropagation();calPickDay(\'' + dateStr + '\')">' + d + '</div>';
+    html += '<button type="button" class="' + cls + '" aria-pressed="' + selected + '" ' +
+      'onclick="event.stopPropagation();calPickDay(\'' + dateStr + '\')">' + d + '</button>';
   }
 
   var totalCells = startWeekday + daysInMonth;
   var remaining = (7 - (totalCells % 7)) % 7;
   for (var n = 1; n <= remaining; n++) {
-    html += '<div class="cal-day other-month">' + n + '</div>';
+    html += '<div class="cal-day other-month" aria-hidden="true">' + n + '</div>';
   }
   html += '</div>';
 
@@ -147,8 +174,7 @@ function calPreset(days) {
   }
   renderCalendar();
   onDateFilter();
-  var popup = document.getElementById('calendarPopup');
-  if (popup) popup.classList.remove('open');
+  closeCalendar(false); // the preset button stays visually in place; no need to yank focus
 }
 
 function updateDateBtn() {
