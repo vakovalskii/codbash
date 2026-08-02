@@ -1,12 +1,14 @@
 'use strict';
 
-// Running-agents = external terminals. See docs/design/running-agents-external.md
-// and specs/running-agents-external.feature.
+// Running-agents tree = every currently-running agent, local (inside codbash)
+// and external (native terminal) alike. See
+// docs/design/running-agents-external.md and specs/running-agents-external.feature.
 //
 // Core logic under test: _tagLocalAgents — pure ancestry tagging that marks each
 // live agent local=true when its process tree reaches a codbash-pty pid, else
 // local=false (an agent running in an external native terminal). The Running
-// agents tree shows only the external ones and clicking focuses their real
+// agents tree shows BOTH, colored by which, and dispatches clicks differently:
+// local → jump to the matching Workspace tab/pane, external → focus the real
 // window (never spawns a blank terminal).
 
 const test = require('node:test');
@@ -87,18 +89,75 @@ function wsSource() {
   return fs.readFileSync(path.join(__dirname, '..', 'src', 'frontend', 'workspace.js'), 'utf8');
 }
 
-test('running-agents tree excludes codbash-pane agents (local=true)', () => {
+test('running-agents tree includes both local and external agents', () => {
   const src = wsSource();
-  const fn = src.match(/function _wsRunningByProject\(\)[\s\S]*?\n\}/);
-  assert.ok(fn, '_wsRunningByProject should exist');
-  assert.match(fn[0], /a\.local/, 'must filter out local (codbash-pane) agents');
+  const fn = src.match(/function _wsRunningTree\(mode\)[\s\S]*?\n\}/);
+  assert.ok(fn, '_wsRunningTree should exist');
+  assert.doesNotMatch(fn[0], /if\s*\(a\.local/, 'must not filter out local (codbash-pane) agents');
+  assert.doesNotMatch(fn[0], /return;\s*\/\/.*local/i, 'must not early-return on local agents');
 });
 
-test('clicking a running agent focuses its window via /api/focus', () => {
+test('_wsRunningTree supports grouping by project or by agent kind, 3 levels deep', () => {
+  const src = wsSource();
+  const fn = src.match(/function _wsRunningTree\(mode\)[\s\S]*?\n\}/);
+  assert.ok(fn, '_wsRunningTree should exist');
+  assert.match(fn[0], /mode === 'agent'/, 'must branch on the agent grouping mode');
+  assert.match(fn[0], /subgroups/, 'must nest an inner group under the outer group (3-level tree)');
+  assert.match(fn[0], /sessions:/, 'each subgroup must carry its individual sessions, not just a flat label');
+});
+
+test('a subgroup with a single session collapses instead of adding a redundant leaf row', () => {
+  const src = wsSource();
+  assert.match(src, /ws-run-leaf/, 'single-session subgroups must render with the collapsed leaf style');
+  assert.match(src, /sg\.sessions\.length === 1/, 'render must special-case the single-session subgroup');
+});
+
+// ── Accordion (L1 groups collapsed by default) ──────────────────────────────
+
+test('top-level groups render collapsed by default', () => {
+  const src = wsSource();
+  const fn = src.match(/function _wsRenderRunningTree\(\)[\s\S]*?\n\}/);
+  assert.ok(fn, '_wsRenderRunningTree should exist');
+  assert.match(fn[0], /_wsRunExpanded\[key\] === true/, 'a group must be expanded only when explicitly recorded true — collapsed is the default');
+});
+
+test('the L1 header toggles the accordion instead of jumping to a session', () => {
+  const src = wsSource();
+  const fn = src.match(/function _wsRenderRunningTree\(\)[\s\S]*?\n\}/);
+  assert.ok(fn, '_wsRenderRunningTree should exist');
+  const l1Row = fn[0].match(/<div class="ws-run-l1"[\s\S]*?<\/div>/);
+  assert.ok(l1Row, 'the L1 row markup should exist');
+  assert.match(l1Row[0], /_wsToggleRunGroup\(this\)/, 'clicking the L1 header must toggle expand/collapse');
+  assert.doesNotMatch(l1Row[0], /jumpToRunningAgent/, 'the L1 header must not jump — that action lives on leaf rows');
+});
+
+test('_wsToggleRunGroup flips the collapsed class and records the choice', () => {
+  const src = wsSource();
+  const fn = src.match(/function _wsToggleRunGroup\([\s\S]*?\n\}/);
+  assert.ok(fn, '_wsToggleRunGroup should exist');
+  assert.match(fn[0], /classList\.toggle\('collapsed'\)/, 'must toggle the collapsed class on the group wrapper');
+  assert.match(fn[0], /_wsRunExpanded\[key\]/, 'must record the expand choice for later rebuilds');
+});
+
+test('the grouping mode preference persists to localStorage', () => {
+  const src = wsSource();
+  assert.match(src, /function _wsSetRunningGroupMode/, '_wsSetRunningGroupMode should exist');
+  assert.match(src, /localStorage\.setItem\(WS_RUN_GROUP_KEY/, 'must persist the chosen mode');
+});
+
+test('clicking a local running agent jumps to its Workspace pane, not /api/focus', () => {
   const src = wsSource();
   const fn = src.match(/function jumpToRunningAgent\([\s\S]*?\n\}/);
   assert.ok(fn, 'jumpToRunningAgent should exist');
-  assert.match(fn[0], /\/api\/focus/, 'must POST to /api/focus');
+  assert.match(fn[0], /if \(local\)/, 'must branch on the local flag');
+  assert.match(fn[0], /jumpToWorkspacePane/, 'local agents must jump to their pane');
+});
+
+test('clicking an external running agent focuses its window via /api/focus', () => {
+  const src = wsSource();
+  const fn = src.match(/function jumpToRunningAgent\([\s\S]*?\n\}/);
+  assert.ok(fn, 'jumpToRunningAgent should exist');
+  assert.match(fn[0], /\/api\/focus/, 'must POST to /api/focus for external agents');
 });
 
 test('clicking a running agent never opens a blank terminal', () => {

@@ -1,5 +1,13 @@
 # Running Agents = agents in external terminals (focus, don't spawn)
 
+> **Amendment (unified tree):** the sidebar tree now shows local (in-codbash)
+> AND external agents together, colored differently, with a project/agent
+> grouping toggle. The `local` tag and the "focus by PID, never spawn a blank
+> terminal" rule below are unchanged for external agents — only the "external
+> only" scoping was reversed. See "Unified local + external tree" at the
+> bottom of this doc for the current design; the sections above it describe
+> the external-focus mechanics, which still apply verbatim.
+
 ## Goal
 
 The Workspace "Running agents" sidebar should list agents actually running in
@@ -127,3 +135,89 @@ regression; a full keyboard-navigable list is a follow-up, `deferred_to: issue`)
 raises the native terminal window.
 
 **Touch targets:** tree rows keep their existing height (unchanged).
+
+## Unified local + external tree
+
+### Goal
+
+Users report the "external-only" tree was confusing: it silently hid agents
+running in codbash's own panes, so a user watching a project with both an
+in-app Claude session and an iTerm one saw only half the picture. Merge them
+into one tree, colored by where each agent runs, and let the user pick whether
+the tree groups by project (default) or by agent kind.
+
+A first pass grouped project/agent as a flat 2-level list — one header, then
+every session underneath as a same-labeled row ("Claude", "Claude", …). Users
+found that read as noise/duplication rather than a real hierarchy, so it grew
+a third level: outer group → inner group → individual sessions.
+
+### Data model
+
+No server change: `getActiveSessions()` already tags every live agent with
+`local`. The frontend just stops dropping `local:true` entries.
+
+`_wsRunningTree(mode)` (`workspace.js`) builds a 3-level tree:
+- `mode: 'project'` (default) — project → agent kind → sessions.
+- `mode: 'agent'` — agent kind → project → sessions (the mirror nesting, not
+  just a relabel — switching the toggle re-parents the whole tree).
+
+Built via a small generic `_wsGroupBy(items, keyFn)` applied twice (outer key,
+then inner key within each outer group). Each item carries `{agent, cwd,
+projName, kind}` so either grouping direction can label its rows correctly.
+
+A subgroup (project+agent pair) holding exactly one live session collapses
+its leaf row into the subgroup row itself — no redundant single-child row —
+and takes that session's true color/idle state directly (`.ws-run-leaf`).
+Once a subgroup holds 2+ sessions, it renders as a real subheader (neutral
+green dot, session count) with one leaf row per session underneath, each
+labeled by `_wsSessionLeafLabel` (a live pane's user-given name if local and
+matched, else the session id prefix — same convention as the session cards'
+"Resume last session (id12345)" — else a bare pid) so same-project,
+same-agent sessions read as distinct instead of repeating the same label.
+
+### Click dispatch
+
+`jumpToRunningAgent(cwd, sessionId, kind, pid, local)`:
+- `local === true` → `_wsFindLivePaneForCwd(cwd)` looks up a live (connected,
+  not exited) pane whose shell cwd matches, then `jumpToWorkspacePane(tabId,
+  paneId)`. If no pane is found (a stale tag right after a tab closed), falls
+  back to `setView('workspace')` rather than doing nothing.
+- `local === false` — unchanged: `POST /api/focus` by PID.
+
+### Grouping preference
+
+Stored in `localStorage['codedash-running-group']` (`'project'` | `'agent'`),
+not a server setting — it's a per-browser display toggle, not something that
+needs to sync across machines. A compact 2-button segmented control sits in
+the tree header (`.ws-run-mode`).
+
+### Accordion (L1 collapsed by default)
+
+Top-level groups start collapsed; clicking a project (project-mode) or agent
+kind (agent-mode) header expands it to reveal its running sessions. Expand
+state is in-memory only (`_wsRunExpanded`, resets on reload), keyed
+`mode|groupKey` so project-mode and agent-mode expand choices don't collide.
+Toggling flips a `collapsed` class directly on the group's wrapper DOM node
+(`.ws-run-group`) rather than forcing a full tree rebuild — cheap, and a later
+rebuild triggered by a real `activeSessions` change re-reads `_wsRunExpanded`
+so the user's open/closed choices survive it. Because the header's click now
+means "toggle", the "jump to a session" action moved entirely to leaf rows
+(`.ws-run-l2.ws-run-leaf` / `.ws-run-l3`) — there is no single-click shortcut
+from an L1 header to a specific session anymore, by design (an accordion
+header disclosing multiple children has no unambiguous single default action).
+
+### "No ghost sessions"
+
+The tree was never actually showing ghosts in the sense of dead processes —
+`activeSessions` is a live `ps` scan re-polled every 5s (1s while Workspace is
+open), so an exited process drops out on the next poll. The dimmed rows in the
+old design were `status: 'waiting'` (idle — low CPU, sleeping — but still a
+live process), which reads as "maybe gone" without a legend. The new tree
+keeps that dimming for idle but adds an explicit color legend (blue/orange)
+for *where* an agent runs, so dimmed no longer doubles as an ambiguous signal.
+
+### Color legend
+
+- Blue dot — running inside a codbash browser-pty pane (`local: true`).
+- Orange dot — running in an external native terminal (`local: false`).
+- Either dimmed to muted gray — idle (waiting for input), not exited.

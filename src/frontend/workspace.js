@@ -271,32 +271,131 @@ function _wsToolLabel(kind) {
   return _WS_TOOL_LABELS[kind] || (kind.charAt(0).toUpperCase() + kind.slice(1));
 }
 
-// Group *running agents in EXTERNAL native terminals* (from the live /api/active
-// map, not Workspace panes) by their real project folder. Agents running inside
-// a codbash browser-pty pane (tagged `local` server-side) are excluded — they
-// are already visible as Workspace tabs, so surfacing them here too is just
-// noise. See docs/design/running-agents-external.md. Used by the sidebar tree.
-function _wsRunningByProject() {
+// Grouping mode for the sidebar tree — 'project' (project → agents, default)
+// or 'agent' (agent kind → projects). A per-browser preference, not a synced
+// setting: it's a display toggle, not something that needs to follow the user
+// across machines.
+var WS_RUN_GROUP_KEY = 'codedash-running-group';
+function _wsGetRunningGroupMode() {
+  try {
+    return window.localStorage.getItem(WS_RUN_GROUP_KEY) === 'agent' ? 'agent' : 'project';
+  } catch (e) { return 'project'; }
+}
+function _wsSetRunningGroupMode(mode) {
+  mode = mode === 'agent' ? 'agent' : 'project';
+  if (_wsGetRunningGroupMode() === mode) return;
+  try { window.localStorage.setItem(WS_RUN_GROUP_KEY, mode); } catch (e) {}
+  _wsRunTreeSig = ''; // force a rebuild even though activeSessions didn't change
+  _wsRenderRunningTree();
+}
+
+// Accordion state for the tree's top-level (L1) groups — collapsed by default
+// so the tree opens compact; expanding a project (or agent, in agent-mode)
+// reveals its running sessions. In-memory only (resets on reload), keyed by
+// `mode|groupKey` so project-mode and agent-mode expand state don't collide.
+var _wsRunExpanded = {};
+function _wsRunGroupKey(mode, g) {
+  return mode + '|' + (mode === 'agent' ? g.kind : g.cwd);
+}
+// Toggles the DOM directly (cheap, no full rebuild) and records the choice so
+// a later full rebuild (triggered by a real activeSessions change) preserves it.
+function _wsToggleRunGroup(rowEl) {
+  var wrap = rowEl.closest ? rowEl.closest('.ws-run-group') : null;
+  if (!wrap) return;
+  var key = wrap.getAttribute('data-key') || '';
+  var collapsed = wrap.classList.toggle('collapsed');
+  _wsRunExpanded[key] = !collapsed;
+  rowEl.setAttribute('aria-expanded', String(!collapsed));
+}
+function _wsRunGroupKeydown(ev, rowEl) {
+  if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); _wsToggleRunGroup(rowEl); }
+}
+
+// Find a live (connected, not exited) Workspace pane whose shell sits in `cwd`.
+// Used to make an agent tagged `local:true` (running inside a codbash pty)
+// clickable — jump straight to its tab/pane instead of the external-focus path.
+function _wsFindLivePaneForCwd(cwd) {
+  if (!cwd || typeof _wsAllPanes !== 'function') return null;
+  var all = _wsAllPanes();
+  for (var i = 0; i < all.length; i++) {
+    var x = all[i];
+    if (x.pane && !x.pane.exited && x.pane.cwd === cwd) return x;
+  }
+  return null;
+}
+
+// Plain two-key groupBy: returns [{key, items}] in first-seen order.
+function _wsGroupBy(items, keyFn) {
+  var map = {}, order = [];
+  items.forEach(function (it) {
+    var k = keyFn(it);
+    if (!Object.prototype.hasOwnProperty.call(map, k)) { map[k] = []; order.push(k); }
+    map[k].push(it);
+  });
+  return order.map(function (k) { return { key: k, items: map[k] }; });
+}
+
+// A short, stable per-instance label for a running-agent leaf row — needed
+// once a project+agent pair has more than one live session, so the rows read
+// as distinct sessions instead of the same label repeated. Prefers a pane's
+// user-given name (local agents), falls back to the session id prefix (same
+// convention as the session cards' "Resume last session (id12345)"), then a
+// bare pid.
+function _wsSessionLeafLabel(x) {
+  var a = x.agent;
+  if (a.local) {
+    var hit = _wsFindLivePaneForCwd(x.cwd);
+    if (hit && hit.pane && hit.pane.name) return hit.pane.name;
+  }
+  if (a.sessionId) return a.sessionId.slice(0, 8);
+  if (a.pid) return 'pid ' + a.pid;
+  return 'session';
+}
+
+// Build the 3-level running-agents tree: outer group → inner group → individual
+// sessions. `mode: 'project'` (default) nests project → agent → sessions;
+// `mode: 'agent'` nests agent → project → sessions — same data, mirrored
+// nesting order, so switching the toggle re-parents instead of just relabeling
+// a flat list. Built from the live /api/active map (a fresh `ps` scan each
+// poll — an exited agent simply isn't in it, so there is no separate "ghost"
+// entry to filter). Each agent carries `local` (server-tagged: true = running
+// inside a codbash browser-pty pane, false = an external native terminal) so
+// the render step can color and route clicks correctly. See
+// docs/design/running-agents-external.md for the external-focus half of this;
+// the local half jumps to the matching pane.
+function _wsRunningTree(mode) {
   var map = (typeof activeSessions === 'object' && activeSessions) || {};
-  var groups = {}, order = [];
+  var items = [];
   Object.keys(map).forEach(function (k) {
     var a = map[k];
-    // Skip codbash's own panes: this tree is for agents in external terminals,
-    // the ones that have no other UI home. (Undefined `local` — an older server
-    // payload — is treated as external so nothing silently disappears.)
-    if (a && a.local === true) return;
     var cwd = (a && a.cwd) || '';
-    // Only skip entries with no cwd (can't group or focus a window).
-    if (!cwd) return;
+    if (!cwd) return; // nothing to group or act on without a known folder
     var isHome = /^(\/Users\/[^/]+|\/home\/[^/]+|\/root)\/?$/.test(cwd);
-    var key = cwd; // group by full path so two same-named folders don't merge
-    if (!groups[key]) {
-      groups[key] = { name: isHome ? '~' : _wsProjectBasename(cwd), cwd: cwd, items: [] };
-      order.push(key);
-    }
-    groups[key].items.push(a);
+    items.push({ agent: a, cwd: cwd, projName: isHome ? '~' : _wsProjectBasename(cwd), kind: a.kind || '' });
   });
-  return order.map(function (k) { return groups[k]; });
+
+  var outerKeyFn = mode === 'agent' ? function (it) { return it.kind || 'agent'; } : function (it) { return it.cwd; };
+  var innerKeyFn = mode === 'agent' ? function (it) { return it.cwd; } : function (it) { return it.kind || 'agent'; };
+
+  return _wsGroupBy(items, outerKeyFn).map(function (outer) {
+    var rep = outer.items[0];
+    return {
+      name: mode === 'agent' ? _wsToolLabel(rep.kind) : rep.projName,
+      cwd: mode === 'agent' ? '' : rep.cwd,
+      kind: mode === 'agent' ? rep.kind : '',
+      count: outer.items.length,
+      rep: rep,
+      subgroups: _wsGroupBy(outer.items, innerKeyFn).map(function (inner) {
+        var rep2 = inner.items[0];
+        return {
+          name: mode === 'agent' ? rep2.projName : _wsToolLabel(rep2.kind),
+          count: inner.items.length,
+          rep: rep2,
+          sessions: inner.items,
+        };
+      }),
+    };
+  });
 }
 
 // Sanitize a pid for an inline onclick arg: a positive integer, else 0. Mirrors
@@ -307,15 +406,24 @@ function _wsPidArg(pid) {
   return (Number.isInteger(n) && n > 0) ? String(n) : '0';
 }
 
-// Click a running-agent row. These rows are agents in EXTERNAL native terminals
-// (codbash's own panes are filtered out of the tree), so the honest action is to
-// raise that real terminal window by PID — reusing /api/focus (focusTerminalByPid,
-// same path the session cards' "Focus Terminal" uses). We deliberately do NOT
-// open a blank in-app terminal as a stand-in: an empty shell is not the agent,
-// and resuming (claude --continue) would spawn a SECOND instance of a live agent.
-// `cwd`/`kind` are kept in the signature for call-site stability but unused here
-// (focus is keyed purely by pid); `sessionId` is forwarded for the server log.
-function jumpToRunningAgent(cwd, sessionId, kind, pid) {
+// Click a running-agent row. Dispatches on where the agent actually runs:
+//   - local (inside a codbash browser-pty pane) → jump straight to that tab/pane.
+//     We look the pane up by cwd at click time (not baked into the onclick) so a
+//     tab opened/closed after the tree last rendered is still found correctly.
+//   - external (native terminal — iTerm/Terminal.app/Warp/cmux…) → raise that
+//     real window by PID via /api/focus (focusTerminalByPid, same path the
+//     session cards' "Focus Terminal" uses). We deliberately do NOT open a blank
+//     in-app terminal as a stand-in: an empty shell is not the agent, and
+//     resuming (claude --continue) would spawn a SECOND instance of a live agent.
+function jumpToRunningAgent(cwd, sessionId, kind, pid, local) {
+  if (local) {
+    var hit = _wsFindLivePaneForCwd(cwd);
+    if (hit) { jumpToWorkspacePane(hit.tab.id, hit.pane.id); return; }
+    // The agent is tagged local but we can't find its pane (e.g. a stale tag
+    // right after a tab closed) — land on Workspace rather than doing nothing.
+    if (typeof setView === 'function') setView('workspace');
+    return;
+  }
   var n = typeof pid === 'number' ? pid : parseInt(pid, 10);
   if (!Number.isInteger(n) || n <= 0) {
     if (typeof showToast === 'function') showToast('No terminal window to focus for this agent.');
@@ -340,38 +448,101 @@ function jumpToRunningAgent(cwd, sessionId, kind, pid) {
     });
 }
 
-// Render a compact tree at the bottom of the sidebar: each project folder with a
-// running agent, the agents underneath labeled by agent name — click to jump.
+// One <div> for a jumpToRunningAgent(...) call bound to a specific agent instance.
+function _wsRunJumpAttr(x) {
+  var a = x.agent;
+  return 'jumpToRunningAgent(' + _wsJsStr(x.cwd) + ',' + _wsJsStr(a.sessionId || '') + ',' +
+    _wsJsStr(x.kind || '') + ',' + _wsPidArg(a.pid) + ',' + (a.local === true) + ')';
+}
+
+// Render a compact 3-level accordion tree at the bottom of the sidebar: outer
+// group → inner group → individual sessions (project → agent → sessions, or
+// the mirror — agent → project → sessions — depending on the user's toggle,
+// see _wsGetRunningGroupMode). Top-level (L1) groups start collapsed —
+// clicking a project (or agent, in agent-mode) header expands it to reveal
+// its running sessions; the jump-to-instance action lives on the leaf rows
+// instead. A subgroup with a single session collapses its leaf row into the
+// subgroup row itself (no redundant 1-child nesting); once a project+agent
+// pair has 2+ live sessions, each gets its own leaf row so they read as
+// distinct sessions instead of the same label repeated. Rows are colored by
+// where the agent runs — blue inside codbash, orange external.
 var _wsRunTreeSig = '';
 function _wsRenderRunningTree() {
   var el = document.getElementById('wsRunningTree');
   if (!el) return;
-  var groups = _wsRunningByProject();
-  var sig = groups.map(function (g) {
-    return g.cwd + ':' + g.items.map(function (a) {
-      return (a.sessionId || a.pid) + '=' + a.kind + '/' + a.status;
-    }).join(',');
+  var mode = _wsGetRunningGroupMode();
+  var tree = _wsRunningTree(mode);
+  // Fold in the live-pane set (incl. names, for the leaf-label lookup) so a
+  // tab opened/closed/renamed for a `local` agent's folder forces a rebuild
+  // even though activeSessions itself didn't change.
+  var paneSig = (typeof _wsAllPanes === 'function' ? _wsAllPanes() : [])
+    .filter(function (x) { return x.pane && !x.pane.exited; })
+    .map(function (x) { return x.tab.id + '/' + x.pane.id + '=' + x.pane.cwd + '/' + (x.pane.name || ''); }).join(',');
+  var sig = mode + '|' + paneSig + '|' + tree.map(function (g) {
+    return (g.cwd || g.kind) + ':' + g.subgroups.map(function (sg) {
+      return sg.sessions.map(function (x) {
+        return (x.agent.sessionId || x.agent.pid) + '=' + x.kind + '/' + x.agent.status + '/' + x.agent.local;
+      }).join(',');
+    }).join(';');
   }).join('|');
   if (sig === _wsRunTreeSig) return;   // no change → no rebuild
   _wsRunTreeSig = sig;
 
-  if (!groups.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
-  var html = '<div class="ws-run-title" title="Agents running in external terminals — click to bring their window forward">Running agents</div>';
-  groups.forEach(function (g) {
-    // The project header focuses the first agent's window (a reasonable default
-    // when a folder hosts several).
-    var headPid = _wsPidArg(g.items[0] && g.items[0].pid);
-    html += '<div class="ws-run-proj" title="' + escHtml(g.cwd) + '" ' +
-      'onclick="jumpToRunningAgent(' + _wsJsStr(g.cwd) + ',null,null,' + headPid + ')">' +
+  if (!tree.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
+
+  var html = '<div class="ws-run-head">' +
+    '<span class="ws-run-title" title="Every agent currently running — inside codbash or a native terminal — click to jump to it">Running agents</span>' +
+    '<span class="ws-run-mode" role="group" aria-label="Group running agents by">' +
+    '<button type="button" class="ws-run-mode-btn' + (mode === 'project' ? ' active' : '') + '" ' +
+    'aria-pressed="' + (mode === 'project') + '" title="Project → agent → sessions" onclick="_wsSetRunningGroupMode(\'project\')">Project</button>' +
+    '<button type="button" class="ws-run-mode-btn' + (mode === 'agent' ? ' active' : '') + '" ' +
+    'aria-pressed="' + (mode === 'agent') + '" title="Agent → project → sessions" onclick="_wsSetRunningGroupMode(\'agent\')">Agent</button>' +
+    '</span></div>';
+
+  tree.forEach(function (g) {
+    var key = _wsRunGroupKey(mode, g);
+    var expanded = _wsRunExpanded[key] === true; // collapsed by default
+    html += '<div class="ws-run-group' + (expanded ? '' : ' collapsed') + '" data-key="' + escHtml(key) + '">';
+    html += '<div class="ws-run-l1" role="button" tabindex="0" aria-expanded="' + expanded + '" ' +
+      'title="' + escHtml(g.cwd || g.name) + ' — click to ' + (expanded ? 'collapse' : 'expand') + '" ' +
+      'onclick="_wsToggleRunGroup(this)" onkeydown="_wsRunGroupKeydown(event, this)">' +
+      '<span class="ws-run-l1-chevron">&#9656;</span>' +
       '<span class="ws-run-dot"></span><span class="ws-run-name">' + escHtml(g.name) + '</span>' +
-      '<span class="ws-run-count">' + g.items.length + '</span></div>';
-    g.items.forEach(function (a) {
-      var waiting = a.status === 'waiting';
-      html += '<div class="ws-run-term' + (waiting ? ' ws-run-idle' : '') + '" ' +
-        'title="' + escHtml(_wsToolLabel(a.kind) + (waiting ? ' — idle' : ' — active') + ' — click to focus its terminal window') + '" ' +
-        'onclick="jumpToRunningAgent(' + _wsJsStr(g.cwd) + ',' + _wsJsStr(a.sessionId || '') + ',' + _wsJsStr(a.kind || '') + ',' + _wsPidArg(a.pid) + ')">' +
-        escHtml(_wsToolLabel(a.kind)) + '</div>';
+      '<span class="ws-run-count">' + g.count + '</span></div>';
+
+    html += '<div class="ws-run-l1-body">';
+    g.subgroups.forEach(function (sg) {
+      if (sg.sessions.length === 1) {
+        // Single session in this project+agent pair — the subgroup row IS the
+        // leaf, so it takes the leaf's true color/idle state directly instead
+        // of an extra indistinguishable child row underneath.
+        var only = sg.sessions[0];
+        var a0 = only.agent;
+        var waiting0 = a0.status === 'waiting';
+        var local0 = a0.local === true;
+        html += '<div class="ws-run-l2 ws-run-leaf' + (waiting0 ? ' ws-run-idle' : '') + (local0 ? ' ws-run-local' : '') + '" ' +
+          'title="' + escHtml(sg.name + (waiting0 ? ' — idle' : ' — active') + ' — ' + (local0 ? 'inside codbash' : 'external terminal') + ' — click to jump to it') + '" ' +
+          'onclick="' + _wsRunJumpAttr(only) + '">' +
+          '<span class="ws-run-l2-dot"></span><span class="ws-run-l2-name">' + escHtml(sg.name) + '</span></div>';
+        return;
+      }
+      // Multiple sessions — the subgroup is a real header (neutral color),
+      // and each session gets its own leaf row underneath.
+      html += '<div class="ws-run-l2" title="' + escHtml(sg.name) + '" onclick="' + _wsRunJumpAttr(sg.rep) + '">' +
+        '<span class="ws-run-l2-dot"></span><span class="ws-run-l2-name">' + escHtml(sg.name) + '</span>' +
+        '<span class="ws-run-count">' + sg.sessions.length + '</span></div>';
+      sg.sessions.forEach(function (x) {
+        var a = x.agent;
+        var waiting = a.status === 'waiting';
+        var local = a.local === true;
+        var leafLabel = _wsSessionLeafLabel(x);
+        html += '<div class="ws-run-l3' + (waiting ? ' ws-run-idle' : '') + (local ? ' ws-run-local' : '') + '" ' +
+          'title="' + escHtml(sg.name + ' — ' + leafLabel + (waiting ? ' — idle' : ' — active') + ' — ' +
+            (local ? 'inside codbash' : 'external terminal') + ' — click to jump to it') + '" ' +
+          'onclick="' + _wsRunJumpAttr(x) + '">' + escHtml(leafLabel) + '</div>';
+      });
     });
+    html += '</div></div>'; // .ws-run-l1-body, .ws-run-group
   });
   el.innerHTML = html;
   el.style.display = '';
