@@ -289,6 +289,28 @@ function _wsSetRunningGroupMode(mode) {
   _wsRenderRunningTree();
 }
 
+// Accordion state for the tree's top-level (L1) groups — collapsed by default
+// so the tree opens compact; expanding a project (or agent, in agent-mode)
+// reveals its running sessions. In-memory only (resets on reload), keyed by
+// `mode|groupKey` so project-mode and agent-mode expand state don't collide.
+var _wsRunExpanded = {};
+function _wsRunGroupKey(mode, g) {
+  return mode + '|' + (mode === 'agent' ? g.kind : g.cwd);
+}
+// Toggles the DOM directly (cheap, no full rebuild) and records the choice so
+// a later full rebuild (triggered by a real activeSessions change) preserves it.
+function _wsToggleRunGroup(rowEl) {
+  var wrap = rowEl.closest ? rowEl.closest('.ws-run-group') : null;
+  if (!wrap) return;
+  var key = wrap.getAttribute('data-key') || '';
+  var collapsed = wrap.classList.toggle('collapsed');
+  _wsRunExpanded[key] = !collapsed;
+  rowEl.setAttribute('aria-expanded', String(!collapsed));
+}
+function _wsRunGroupKeydown(ev, rowEl) {
+  if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); _wsToggleRunGroup(rowEl); }
+}
+
 // Find a live (connected, not exited) Workspace pane whose shell sits in `cwd`.
 // Used to make an agent tagged `local:true` (running inside a codbash pty)
 // clickable — jump straight to its tab/pane instead of the external-focus path.
@@ -433,15 +455,17 @@ function _wsRunJumpAttr(x) {
     _wsJsStr(x.kind || '') + ',' + _wsPidArg(a.pid) + ',' + (a.local === true) + ')';
 }
 
-// Render a compact 3-level tree at the bottom of the sidebar: outer group →
-// inner group → individual sessions (project → agent → sessions, or the
-// mirror — agent → project → sessions — depending on the user's toggle, see
-// _wsGetRunningGroupMode). A subgroup with a single session collapses its
-// leaf row into the subgroup row itself (no redundant 1-child nesting); once
-// a project+agent pair has 2+ live sessions, each gets its own leaf row so
-// they read as distinct sessions instead of the same label repeated. Rows are
-// colored by where the agent runs — blue inside codbash, orange external —
-// and clicking any row jumps straight to that instance.
+// Render a compact 3-level accordion tree at the bottom of the sidebar: outer
+// group → inner group → individual sessions (project → agent → sessions, or
+// the mirror — agent → project → sessions — depending on the user's toggle,
+// see _wsGetRunningGroupMode). Top-level (L1) groups start collapsed —
+// clicking a project (or agent, in agent-mode) header expands it to reveal
+// its running sessions; the jump-to-instance action lives on the leaf rows
+// instead. A subgroup with a single session collapses its leaf row into the
+// subgroup row itself (no redundant 1-child nesting); once a project+agent
+// pair has 2+ live sessions, each gets its own leaf row so they read as
+// distinct sessions instead of the same label repeated. Rows are colored by
+// where the agent runs — blue inside codbash, orange external.
 var _wsRunTreeSig = '';
 function _wsRenderRunningTree() {
   var el = document.getElementById('wsRunningTree');
@@ -476,10 +500,17 @@ function _wsRenderRunningTree() {
     '</span></div>';
 
   tree.forEach(function (g) {
-    html += '<div class="ws-run-l1" title="' + escHtml(g.cwd || g.name) + '" onclick="' + _wsRunJumpAttr(g.rep) + '">' +
+    var key = _wsRunGroupKey(mode, g);
+    var expanded = _wsRunExpanded[key] === true; // collapsed by default
+    html += '<div class="ws-run-group' + (expanded ? '' : ' collapsed') + '" data-key="' + escHtml(key) + '">';
+    html += '<div class="ws-run-l1" role="button" tabindex="0" aria-expanded="' + expanded + '" ' +
+      'title="' + escHtml(g.cwd || g.name) + ' — click to ' + (expanded ? 'collapse' : 'expand') + '" ' +
+      'onclick="_wsToggleRunGroup(this)" onkeydown="_wsRunGroupKeydown(event, this)">' +
+      '<span class="ws-run-l1-chevron">&#9656;</span>' +
       '<span class="ws-run-dot"></span><span class="ws-run-name">' + escHtml(g.name) + '</span>' +
       '<span class="ws-run-count">' + g.count + '</span></div>';
 
+    html += '<div class="ws-run-l1-body">';
     g.subgroups.forEach(function (sg) {
       if (sg.sessions.length === 1) {
         // Single session in this project+agent pair — the subgroup row IS the
@@ -511,6 +542,7 @@ function _wsRenderRunningTree() {
           'onclick="' + _wsRunJumpAttr(x) + '">' + escHtml(leafLabel) + '</div>';
       });
     });
+    html += '</div></div>'; // .ws-run-l1-body, .ws-run-group
   });
   el.innerHTML = html;
   el.style.display = '';

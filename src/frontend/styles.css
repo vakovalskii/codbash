@@ -3095,11 +3095,22 @@ body[data-view="overview"] .toolbar { display: none; }
 .ws-run-mode-btn + .ws-run-mode-btn { border-left: 1px solid var(--border); }
 .ws-run-mode-btn:hover { color: var(--text-primary); background: rgba(255,255,255,0.05); }
 .ws-run-mode-btn.active { color: #fff; background: var(--accent-blue); }
+/* Accordion wrapper for one L1 group + its body. Collapsed by default (see
+   _wsRunExpanded) — .ws-run-l1-body is hidden until the header is clicked. */
+.ws-run-group + .ws-run-group { margin-top: 1px; }
+.ws-run-l1-body { display: block; }
+.ws-run-group.collapsed .ws-run-l1-body { display: none; }
+.ws-run-l1-chevron {
+    font-size: 8px; color: var(--text-muted); flex-shrink: 0;
+    transition: transform 0.15s; transform: rotate(90deg); /* expanded: pointing down */
+}
+.ws-run-group.collapsed .ws-run-l1-chevron { transform: rotate(0deg); } /* collapsed: pointing right */
 /* Level 1 — outer group (project, or agent kind in agent-mode). */
 .ws-run-l1 {
     display: flex; align-items: center; gap: 6px; padding: 4px 8px;
     font-size: 12px; color: var(--text-primary); cursor: pointer; border-radius: 6px;
 }
+.ws-run-l1:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: -2px; }
 .ws-run-l1:hover { background: rgba(255,255,255,0.06); }
 .ws-run-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-green); flex-shrink: 0; }
 .ws-run-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: Menlo, Monaco, monospace; }

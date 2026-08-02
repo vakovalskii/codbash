@@ -191,6 +191,21 @@ not a server setting — it's a per-browser display toggle, not something that
 needs to sync across machines. A compact 2-button segmented control sits in
 the tree header (`.ws-run-mode`).
 
+### Accordion (L1 collapsed by default)
+
+Top-level groups start collapsed; clicking a project (project-mode) or agent
+kind (agent-mode) header expands it to reveal its running sessions. Expand
+state is in-memory only (`_wsRunExpanded`, resets on reload), keyed
+`mode|groupKey` so project-mode and agent-mode expand choices don't collide.
+Toggling flips a `collapsed` class directly on the group's wrapper DOM node
+(`.ws-run-group`) rather than forcing a full tree rebuild — cheap, and a later
+rebuild triggered by a real `activeSessions` change re-reads `_wsRunExpanded`
+so the user's open/closed choices survive it. Because the header's click now
+means "toggle", the "jump to a session" action moved entirely to leaf rows
+(`.ws-run-l2.ws-run-leaf` / `.ws-run-l3`) — there is no single-click shortcut
+from an L1 header to a specific session anymore, by design (an accordion
+header disclosing multiple children has no unambiguous single default action).
+
 ### "No ghost sessions"
 
 The tree was never actually showing ghosts in the sense of dead processes —

@@ -112,6 +112,33 @@ test('a subgroup with a single session collapses instead of adding a redundant l
   assert.match(src, /sg\.sessions\.length === 1/, 'render must special-case the single-session subgroup');
 });
 
+// ── Accordion (L1 groups collapsed by default) ──────────────────────────────
+
+test('top-level groups render collapsed by default', () => {
+  const src = wsSource();
+  const fn = src.match(/function _wsRenderRunningTree\(\)[\s\S]*?\n\}/);
+  assert.ok(fn, '_wsRenderRunningTree should exist');
+  assert.match(fn[0], /_wsRunExpanded\[key\] === true/, 'a group must be expanded only when explicitly recorded true — collapsed is the default');
+});
+
+test('the L1 header toggles the accordion instead of jumping to a session', () => {
+  const src = wsSource();
+  const fn = src.match(/function _wsRenderRunningTree\(\)[\s\S]*?\n\}/);
+  assert.ok(fn, '_wsRenderRunningTree should exist');
+  const l1Row = fn[0].match(/<div class="ws-run-l1"[\s\S]*?<\/div>/);
+  assert.ok(l1Row, 'the L1 row markup should exist');
+  assert.match(l1Row[0], /_wsToggleRunGroup\(this\)/, 'clicking the L1 header must toggle expand/collapse');
+  assert.doesNotMatch(l1Row[0], /jumpToRunningAgent/, 'the L1 header must not jump — that action lives on leaf rows');
+});
+
+test('_wsToggleRunGroup flips the collapsed class and records the choice', () => {
+  const src = wsSource();
+  const fn = src.match(/function _wsToggleRunGroup\([\s\S]*?\n\}/);
+  assert.ok(fn, '_wsToggleRunGroup should exist');
+  assert.match(fn[0], /classList\.toggle\('collapsed'\)/, 'must toggle the collapsed class on the group wrapper');
+  assert.match(fn[0], /_wsRunExpanded\[key\]/, 'must record the expand choice for later rebuilds');
+});
+
 test('the grouping mode preference persists to localStorage', () => {
   const src = wsSource();
   assert.match(src, /function _wsSetRunningGroupMode/, '_wsSetRunningGroupMode should exist');
