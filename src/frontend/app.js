@@ -2154,7 +2154,7 @@ function renderLauncherCard(projKey, projInfo) {
         'aria-label="' + escHtml(recloneAria) + '">↓ Re-clone</button>';
     }
     if (projInfo.manualId) {
-      missingActions += '<button class="git-project-launch-btn" data-proj-id="' + escHtml(projInfo.manualId) + '" data-proj-name="' + escHtml(projName) + '" onclick="unregisterProject(this.dataset.projId,this.dataset.projName)" title="Remove from registry (does not delete files)" aria-label="Remove ' + escHtml(projName) + ' from the list">× Remove</button>';
+      missingActions += '<button class="git-project-launch-btn remove-btn" data-proj-id="' + escHtml(projInfo.manualId) + '" data-proj-name="' + escHtml(projName) + '" onclick="unregisterProject(this.dataset.projId,this.dataset.projName)" title="Remove from registry (does not delete files)" aria-label="Remove ' + escHtml(projName) + ' from the list">× Remove</button>';
     }
     if (missingActions) html += '<div class="launcher-card-actions">' + missingActions + '</div>';
     // Keep History drill-in available even when the folder is gone (sessions
@@ -2165,6 +2165,7 @@ function renderLauncherCard(projKey, projInfo) {
     html += '</div>';
     return html;
   }
+  html += '<div class="launcher-card-actions">';
   if (canLaunch && preferredTool) {
     var newAria = 'Start new ' + agentLabel(preferredTool) + ' session in ' + projName;
     var pickerAria = 'Pick a different agent for ' + projName;
@@ -2211,7 +2212,7 @@ function renderLauncherCard(projKey, projInfo) {
       '</select>';
   }
   if (projInfo.manualId) {
-    html += '<button class="git-project-launch-btn" data-proj-id="' + escHtml(projInfo.manualId) + '" data-proj-name="' + escHtml(projName) + '" onclick="unregisterProject(this.dataset.projId,this.dataset.projName)" title="Remove from registry (does not delete files)">&times;</button>';
+    html += '<button class="git-project-launch-btn remove-btn" data-proj-id="' + escHtml(projInfo.manualId) + '" data-proj-name="' + escHtml(projName) + '" onclick="unregisterProject(this.dataset.projId,this.dataset.projName)" title="Remove from registry (does not delete files)" aria-label="Remove ' + escHtml(projName) + ' from the list">&times;</button>';
   }
   html += '</div>';
 

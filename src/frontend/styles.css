@@ -4650,14 +4650,28 @@ body[data-view="overview"] .toolbar { display: none; }
 [data-theme="light"] .launcher-card-actions .split-btn .new-btn {
     border-right-color: rgba(0, 0, 0, 0.2);
 }
-.launcher-card-actions button.git-project-launch-btn {
+.launcher-card-actions .git-project-launch-btn {
     margin: 0;
     padding: 6px 12px;
     font-size: 12px;
 }
-.launcher-card-actions button.git-project-launch-btn:focus-visible {
+.launcher-card-actions .git-project-launch-btn:focus-visible {
     outline: 2px solid var(--accent-blue);
     outline-offset: 2px;
+}
+.launcher-card-actions select.git-project-launch-btn {
+    padding-right: 8px;
+}
+/* Remove is destructive-but-rare — push it to the end of the row and keep it
+   visually quiet so it doesn't compete with the launch/resume actions. */
+.launcher-card-actions .remove-btn {
+    margin-left: auto;
+    color: var(--text-muted);
+    padding: 6px 9px;
+}
+.launcher-card-actions .remove-btn:hover {
+    color: var(--accent-red, #f87171);
+    border-color: var(--accent-red, #f87171);
 }
 .launcher-card-link {
     margin-top: auto;
