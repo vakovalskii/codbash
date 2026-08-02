@@ -8,6 +8,7 @@ const CHANGELOG = [
     changes: [
       'Running agents now lists every agent that is actually running — the ones inside codbash\'s own terminal panes as well as the ones in external terminals (iTerm, Terminal.app, Warp, cmux). Previously an agent running in an in-app pane vanished from the tree, so a project with both showed only half the picture. Rows are colored by where they run and grouped project → agent → session (switchable to agent → project → session), with top-level groups collapsed by default. Thanks @NovakPAai',
       'Fixed the Projects launcher cards: an unbalanced tag left every button and dropdown stretched to full card width on its own row instead of a compact action row. Thanks @NovakPAai',
+      'Accessibility: calendar days, session cards and Add-project tabs are now reachable and operable from the keyboard, dialogs close on Escape and return focus where you left it, and screen readers announce the selected tab and day correctly. Thanks @NovakPAai',
     ],
   },
   {
