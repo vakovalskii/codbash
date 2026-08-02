@@ -72,10 +72,10 @@ function renderGlobalBoard() {
     html += '<span class="lb-rank' + (i < 3 ? ' lb-rank-' + (i+1) : '') + '">#' + (i+1) + '</span>';
     html += '<img class="lb-global-avatar" src="' + escHtml(u.avatar || '') + '" alt="">';
     html += '<div class="lb-global-info">';
-    html += '<div class="lb-global-name"><a href="https://github.com/' + escHtml(u.username) + '" target="_blank">' + escHtml(u.name || u.username) + '</a>';
+    html += '<div class="lb-global-name"><a href="https://github.com/' + escHtml(u.username) + '" target="_blank" rel="noopener noreferrer">' + escHtml(u.name || u.username) + '</a>';
     if (u.verified) html += ' <span class="lb-verified">&#10003;</span>';
     html += '</div>';
-    html += '<div class="lb-global-handle"><a href="https://github.com/' + escHtml(u.username) + '" target="_blank" style="color:var(--text-muted);text-decoration:none">@' + escHtml(u.username) + '</a>';
+    html += '<div class="lb-global-handle"><a href="https://github.com/' + escHtml(u.username) + '" target="_blank" rel="noopener noreferrer" style="color:var(--text-muted);text-decoration:none">@' + escHtml(u.username) + '</a>';
     if (u.deviceCount > 1) html += ' <span class="lb-devices">' + u.deviceCount + ' devices</span>';
     html += '</div>';
     // Top agents
@@ -134,7 +134,7 @@ async function githubConnect() {
         '<h3>Connect GitHub</h3>' +
         '<p style="font-size:13px;margin:12px 0">Copy this code and enter it at:</p>' +
         '<div class="lb-auth-code" id="githubAuthCode"></div>' +
-        '<a id="githubAuthLink" href="" target="_blank" class="lb-github-btn" style="display:inline-flex;margin:12px 0">Open GitHub</a>' +
+        '<a id="githubAuthLink" href="" target="_blank" rel="noopener noreferrer" class="lb-github-btn" style="display:inline-flex;margin:12px 0">Open GitHub</a>' +
         '<p style="font-size:12px;color:var(--text-muted)" id="githubAuthStatus">Waiting for authorization...</p>' +
         '<button class="btn-cancel" onclick="this.parentElement.parentElement.style.display=\'none\'" style="margin-top:8px">Cancel</button>' +
         '</div>';
@@ -287,7 +287,7 @@ async function renderLeaderboard(container) {
     html += '</div>';
     html += '<div id="globalBoard"><div class="loading">Loading...</div></div>';
 
-    html += '<div class="lb-footer">Active days: ' + data.activeDays + ' | <a href="https://leaderboard.neuraldeep.ru" target="_blank" style="color:var(--accent-blue)">View public leaderboard</a></div>';
+    html += '<div class="lb-footer">Active days: ' + data.activeDays + ' | <a href="https://leaderboard.neuraldeep.ru" target="_blank" rel="noopener noreferrer" style="color:var(--accent-blue)">View public leaderboard</a></div>';
     html += '</div>';
 
     container.innerHTML = html;
