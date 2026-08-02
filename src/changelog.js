@@ -2,6 +2,15 @@
 
 const CHANGELOG = [
   {
+    version: '7.18.0',
+    date: '2026-08-02',
+    title: 'Running agents: one tree for every agent — plus a Projects layout fix',
+    changes: [
+      'Running agents now lists every agent that is actually running — the ones inside codbash\'s own terminal panes as well as the ones in external terminals (iTerm, Terminal.app, Warp, cmux). Previously an agent running in an in-app pane vanished from the tree, so a project with both showed only half the picture. Rows are colored by where they run and grouped project → agent → session (switchable to agent → project → session), with top-level groups collapsed by default. Thanks @NovakPAai',
+      'Fixed the Projects launcher cards: an unbalanced tag left every button and dropdown stretched to full card width on its own row instead of a compact action row. Thanks @NovakPAai',
+    ],
+  },
+  {
     version: '7.17.0',
     date: '2026-07-30',
     title: 'Name your terminals — and dimmed text is readable again',
