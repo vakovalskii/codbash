@@ -91,17 +91,25 @@ function wsSource() {
 
 test('running-agents tree includes both local and external agents', () => {
   const src = wsSource();
-  const fn = src.match(/function _wsRunningGroups\(mode\)[\s\S]*?\n\}/);
-  assert.ok(fn, '_wsRunningGroups should exist');
+  const fn = src.match(/function _wsRunningTree\(mode\)[\s\S]*?\n\}/);
+  assert.ok(fn, '_wsRunningTree should exist');
   assert.doesNotMatch(fn[0], /if\s*\(a\.local/, 'must not filter out local (codbash-pane) agents');
   assert.doesNotMatch(fn[0], /return;\s*\/\/.*local/i, 'must not early-return on local agents');
 });
 
-test('_wsRunningGroups supports grouping by project or by agent kind', () => {
+test('_wsRunningTree supports grouping by project or by agent kind, 3 levels deep', () => {
   const src = wsSource();
-  const fn = src.match(/function _wsRunningGroups\(mode\)[\s\S]*?\n\}/);
-  assert.ok(fn, '_wsRunningGroups should exist');
+  const fn = src.match(/function _wsRunningTree\(mode\)[\s\S]*?\n\}/);
+  assert.ok(fn, '_wsRunningTree should exist');
   assert.match(fn[0], /mode === 'agent'/, 'must branch on the agent grouping mode');
+  assert.match(fn[0], /subgroups/, 'must nest an inner group under the outer group (3-level tree)');
+  assert.match(fn[0], /sessions:/, 'each subgroup must carry its individual sessions, not just a flat label');
+});
+
+test('a subgroup with a single session collapses instead of adding a redundant leaf row', () => {
+  const src = wsSource();
+  assert.match(src, /ws-run-leaf/, 'single-session subgroups must render with the collapsed leaf style');
+  assert.match(src, /sg\.sessions\.length === 1/, 'render must special-case the single-session subgroup');
 });
 
 test('the grouping mode preference persists to localStorage', () => {

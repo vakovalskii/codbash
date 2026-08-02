@@ -302,35 +302,78 @@ function _wsFindLivePaneForCwd(cwd) {
   return null;
 }
 
-// Group *every currently-running agent* (from the live /api/active map, which
-// is a fresh `ps` scan each poll — an agent whose process has actually exited
-// simply isn't in it, so there is no "ghost" entry to filter) by either their
-// real project folder or their agent kind, depending on `mode`. Each agent
-// carries `local` (server-tagged: true = running inside a codbash browser-pty
-// pane, false = an external native terminal) so the render step can color and
-// route clicks correctly. See docs/design/running-agents-external.md for the
-// external-focus half of this; the local half jumps to the matching pane.
-function _wsRunningGroups(mode) {
+// Plain two-key groupBy: returns [{key, items}] in first-seen order.
+function _wsGroupBy(items, keyFn) {
+  var map = {}, order = [];
+  items.forEach(function (it) {
+    var k = keyFn(it);
+    if (!Object.prototype.hasOwnProperty.call(map, k)) { map[k] = []; order.push(k); }
+    map[k].push(it);
+  });
+  return order.map(function (k) { return { key: k, items: map[k] }; });
+}
+
+// A short, stable per-instance label for a running-agent leaf row — needed
+// once a project+agent pair has more than one live session, so the rows read
+// as distinct sessions instead of the same label repeated. Prefers a pane's
+// user-given name (local agents), falls back to the session id prefix (same
+// convention as the session cards' "Resume last session (id12345)"), then a
+// bare pid.
+function _wsSessionLeafLabel(x) {
+  var a = x.agent;
+  if (a.local) {
+    var hit = _wsFindLivePaneForCwd(x.cwd);
+    if (hit && hit.pane && hit.pane.name) return hit.pane.name;
+  }
+  if (a.sessionId) return a.sessionId.slice(0, 8);
+  if (a.pid) return 'pid ' + a.pid;
+  return 'session';
+}
+
+// Build the 3-level running-agents tree: outer group → inner group → individual
+// sessions. `mode: 'project'` (default) nests project → agent → sessions;
+// `mode: 'agent'` nests agent → project → sessions — same data, mirrored
+// nesting order, so switching the toggle re-parents instead of just relabeling
+// a flat list. Built from the live /api/active map (a fresh `ps` scan each
+// poll — an exited agent simply isn't in it, so there is no separate "ghost"
+// entry to filter). Each agent carries `local` (server-tagged: true = running
+// inside a codbash browser-pty pane, false = an external native terminal) so
+// the render step can color and route clicks correctly. See
+// docs/design/running-agents-external.md for the external-focus half of this;
+// the local half jumps to the matching pane.
+function _wsRunningTree(mode) {
   var map = (typeof activeSessions === 'object' && activeSessions) || {};
-  var groups = {}, order = [];
+  var items = [];
   Object.keys(map).forEach(function (k) {
     var a = map[k];
     var cwd = (a && a.cwd) || '';
-    // Only skip entries with no known folder — nothing to group or act on.
-    if (!cwd) return;
+    if (!cwd) return; // nothing to group or act on without a known folder
     var isHome = /^(\/Users\/[^/]+|\/home\/[^/]+|\/root)\/?$/.test(cwd);
-    var projName = isHome ? '~' : _wsProjectBasename(cwd);
-    var kind = (a && a.kind) || '';
-    var key = mode === 'agent' ? (kind || 'agent') : cwd;
-    if (!groups[key]) {
-      groups[key] = mode === 'agent'
-        ? { name: _wsToolLabel(kind), kind: kind, items: [] }
-        : { name: projName, cwd: cwd, items: [] };
-      order.push(key);
-    }
-    groups[key].items.push({ agent: a, cwd: cwd, projName: projName, kind: kind });
+    items.push({ agent: a, cwd: cwd, projName: isHome ? '~' : _wsProjectBasename(cwd), kind: a.kind || '' });
   });
-  return order.map(function (k) { return groups[k]; });
+
+  var outerKeyFn = mode === 'agent' ? function (it) { return it.kind || 'agent'; } : function (it) { return it.cwd; };
+  var innerKeyFn = mode === 'agent' ? function (it) { return it.cwd; } : function (it) { return it.kind || 'agent'; };
+
+  return _wsGroupBy(items, outerKeyFn).map(function (outer) {
+    var rep = outer.items[0];
+    return {
+      name: mode === 'agent' ? _wsToolLabel(rep.kind) : rep.projName,
+      cwd: mode === 'agent' ? '' : rep.cwd,
+      kind: mode === 'agent' ? rep.kind : '',
+      count: outer.items.length,
+      rep: rep,
+      subgroups: _wsGroupBy(outer.items, innerKeyFn).map(function (inner) {
+        var rep2 = inner.items[0];
+        return {
+          name: mode === 'agent' ? rep2.projName : _wsToolLabel(rep2.kind),
+          count: inner.items.length,
+          rep: rep2,
+          sessions: inner.items,
+        };
+      }),
+    };
+  });
 }
 
 // Sanitize a pid for an inline onclick arg: a positive integer, else 0. Mirrors
@@ -383,64 +426,90 @@ function jumpToRunningAgent(cwd, sessionId, kind, pid, local) {
     });
 }
 
-// Render a compact tree at the bottom of the sidebar of every currently-running
-// agent, grouped by project or by agent kind (user's choice, see
-// _wsGetRunningGroupMode). Each row is colored by where it runs — blue for
-// inside codbash, orange for an external native terminal — and clicking jumps
-// straight to it.
+// One <div> for a jumpToRunningAgent(...) call bound to a specific agent instance.
+function _wsRunJumpAttr(x) {
+  var a = x.agent;
+  return 'jumpToRunningAgent(' + _wsJsStr(x.cwd) + ',' + _wsJsStr(a.sessionId || '') + ',' +
+    _wsJsStr(x.kind || '') + ',' + _wsPidArg(a.pid) + ',' + (a.local === true) + ')';
+}
+
+// Render a compact 3-level tree at the bottom of the sidebar: outer group →
+// inner group → individual sessions (project → agent → sessions, or the
+// mirror — agent → project → sessions — depending on the user's toggle, see
+// _wsGetRunningGroupMode). A subgroup with a single session collapses its
+// leaf row into the subgroup row itself (no redundant 1-child nesting); once
+// a project+agent pair has 2+ live sessions, each gets its own leaf row so
+// they read as distinct sessions instead of the same label repeated. Rows are
+// colored by where the agent runs — blue inside codbash, orange external —
+// and clicking any row jumps straight to that instance.
 var _wsRunTreeSig = '';
 function _wsRenderRunningTree() {
   var el = document.getElementById('wsRunningTree');
   if (!el) return;
   var mode = _wsGetRunningGroupMode();
-  var groups = _wsRunningGroups(mode);
-  // Fold in the live-pane set so a tab opened/closed for a `local` agent's
-  // folder forces a rebuild even though activeSessions itself didn't change —
-  // otherwise a freshly-opened pane wouldn't become clickable until the next
-  // unrelated agent-state change.
+  var tree = _wsRunningTree(mode);
+  // Fold in the live-pane set (incl. names, for the leaf-label lookup) so a
+  // tab opened/closed/renamed for a `local` agent's folder forces a rebuild
+  // even though activeSessions itself didn't change.
   var paneSig = (typeof _wsAllPanes === 'function' ? _wsAllPanes() : [])
     .filter(function (x) { return x.pane && !x.pane.exited; })
-    .map(function (x) { return x.tab.id + '/' + x.pane.id + '=' + x.pane.cwd; }).join(',');
-  var sig = mode + '|' + paneSig + '|' + groups.map(function (g) {
-    return (g.cwd || g.kind) + ':' + g.items.map(function (x) {
-      return (x.agent.sessionId || x.agent.pid) + '=' + x.kind + '/' + x.agent.status + '/' + x.agent.local;
-    }).join(',');
+    .map(function (x) { return x.tab.id + '/' + x.pane.id + '=' + x.pane.cwd + '/' + (x.pane.name || ''); }).join(',');
+  var sig = mode + '|' + paneSig + '|' + tree.map(function (g) {
+    return (g.cwd || g.kind) + ':' + g.subgroups.map(function (sg) {
+      return sg.sessions.map(function (x) {
+        return (x.agent.sessionId || x.agent.pid) + '=' + x.kind + '/' + x.agent.status + '/' + x.agent.local;
+      }).join(',');
+    }).join(';');
   }).join('|');
   if (sig === _wsRunTreeSig) return;   // no change → no rebuild
   _wsRunTreeSig = sig;
 
-  if (!groups.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  if (!tree.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
 
   var html = '<div class="ws-run-head">' +
     '<span class="ws-run-title" title="Every agent currently running — inside codbash or a native terminal — click to jump to it">Running agents</span>' +
     '<span class="ws-run-mode" role="group" aria-label="Group running agents by">' +
     '<button type="button" class="ws-run-mode-btn' + (mode === 'project' ? ' active' : '') + '" ' +
-    'aria-pressed="' + (mode === 'project') + '" title="Group by project" onclick="_wsSetRunningGroupMode(\'project\')">Project</button>' +
+    'aria-pressed="' + (mode === 'project') + '" title="Project → agent → sessions" onclick="_wsSetRunningGroupMode(\'project\')">Project</button>' +
     '<button type="button" class="ws-run-mode-btn' + (mode === 'agent' ? ' active' : '') + '" ' +
-    'aria-pressed="' + (mode === 'agent') + '" title="Group by agent" onclick="_wsSetRunningGroupMode(\'agent\')">Agent</button>' +
+    'aria-pressed="' + (mode === 'agent') + '" title="Agent → project → sessions" onclick="_wsSetRunningGroupMode(\'agent\')">Agent</button>' +
     '</span></div>';
 
-  groups.forEach(function (g) {
-    var first = g.items[0];
-    // The header focuses/jumps to the first item — a reasonable default when a
-    // group holds several agents.
-    html += '<div class="ws-run-proj" title="' + escHtml(g.cwd || g.name) + '" ' +
-      'onclick="jumpToRunningAgent(' + _wsJsStr(first.cwd) + ',' + _wsJsStr(first.agent.sessionId || '') + ',' +
-      _wsJsStr(first.kind || '') + ',' + _wsPidArg(first.agent.pid) + ',' + (first.agent.local === true) + ')">' +
+  tree.forEach(function (g) {
+    html += '<div class="ws-run-l1" title="' + escHtml(g.cwd || g.name) + '" onclick="' + _wsRunJumpAttr(g.rep) + '">' +
       '<span class="ws-run-dot"></span><span class="ws-run-name">' + escHtml(g.name) + '</span>' +
-      '<span class="ws-run-count">' + g.items.length + '</span></div>';
-    g.items.forEach(function (x) {
-      var a = x.agent;
-      var waiting = a.status === 'waiting';
-      var local = a.local === true;
-      var label = mode === 'agent' ? x.projName : _wsToolLabel(x.kind);
-      var whereLabel = local ? 'inside codbash' : 'external terminal';
-      html += '<div class="ws-run-term' + (waiting ? ' ws-run-idle' : '') + (local ? ' ws-run-local' : '') + '" ' +
-        'title="' + escHtml((mode === 'agent' ? x.projName : _wsToolLabel(x.kind)) +
-          (waiting ? ' — idle' : ' — active') + ' — ' + whereLabel + ' — click to jump to it') + '" ' +
-        'onclick="jumpToRunningAgent(' + _wsJsStr(x.cwd) + ',' + _wsJsStr(a.sessionId || '') + ',' +
-        _wsJsStr(x.kind || '') + ',' + _wsPidArg(a.pid) + ',' + local + ')">' +
-        escHtml(label) + '</div>';
+      '<span class="ws-run-count">' + g.count + '</span></div>';
+
+    g.subgroups.forEach(function (sg) {
+      if (sg.sessions.length === 1) {
+        // Single session in this project+agent pair — the subgroup row IS the
+        // leaf, so it takes the leaf's true color/idle state directly instead
+        // of an extra indistinguishable child row underneath.
+        var only = sg.sessions[0];
+        var a0 = only.agent;
+        var waiting0 = a0.status === 'waiting';
+        var local0 = a0.local === true;
+        html += '<div class="ws-run-l2 ws-run-leaf' + (waiting0 ? ' ws-run-idle' : '') + (local0 ? ' ws-run-local' : '') + '" ' +
+          'title="' + escHtml(sg.name + (waiting0 ? ' — idle' : ' — active') + ' — ' + (local0 ? 'inside codbash' : 'external terminal') + ' — click to jump to it') + '" ' +
+          'onclick="' + _wsRunJumpAttr(only) + '">' +
+          '<span class="ws-run-l2-dot"></span><span class="ws-run-l2-name">' + escHtml(sg.name) + '</span></div>';
+        return;
+      }
+      // Multiple sessions — the subgroup is a real header (neutral color),
+      // and each session gets its own leaf row underneath.
+      html += '<div class="ws-run-l2" title="' + escHtml(sg.name) + '" onclick="' + _wsRunJumpAttr(sg.rep) + '">' +
+        '<span class="ws-run-l2-dot"></span><span class="ws-run-l2-name">' + escHtml(sg.name) + '</span>' +
+        '<span class="ws-run-count">' + sg.sessions.length + '</span></div>';
+      sg.sessions.forEach(function (x) {
+        var a = x.agent;
+        var waiting = a.status === 'waiting';
+        var local = a.local === true;
+        var leafLabel = _wsSessionLeafLabel(x);
+        html += '<div class="ws-run-l3' + (waiting ? ' ws-run-idle' : '') + (local ? ' ws-run-local' : '') + '" ' +
+          'title="' + escHtml(sg.name + ' — ' + leafLabel + (waiting ? ' — idle' : ' — active') + ' — ' +
+            (local ? 'inside codbash' : 'external terminal') + ' — click to jump to it') + '" ' +
+          'onclick="' + _wsRunJumpAttr(x) + '">' + escHtml(leafLabel) + '</div>';
+      });
     });
   });
   el.innerHTML = html;

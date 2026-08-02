@@ -3095,35 +3095,52 @@ body[data-view="overview"] .toolbar { display: none; }
 .ws-run-mode-btn + .ws-run-mode-btn { border-left: 1px solid var(--border); }
 .ws-run-mode-btn:hover { color: var(--text-primary); background: rgba(255,255,255,0.05); }
 .ws-run-mode-btn.active { color: #fff; background: var(--accent-blue); }
-.ws-run-proj {
+/* Level 1 — outer group (project, or agent kind in agent-mode). */
+.ws-run-l1 {
     display: flex; align-items: center; gap: 6px; padding: 4px 8px;
     font-size: 12px; color: var(--text-primary); cursor: pointer; border-radius: 6px;
 }
-.ws-run-proj:hover { background: rgba(255,255,255,0.06); }
+.ws-run-l1:hover { background: rgba(255,255,255,0.06); }
 .ws-run-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-green); flex-shrink: 0; }
 .ws-run-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: Menlo, Monaco, monospace; }
 .ws-run-count {
     font-size: 10px; color: var(--text-muted); background: var(--bg-hover);
     border-radius: 8px; padding: 0 6px; min-width: 16px; text-align: center;
 }
-/* Per-agent row — dot color is the terminal-type legend: orange = running in
-   an external native terminal (default), blue = running inside codbash itself. */
-.ws-run-term {
-    position: relative;
-    padding: 2px 8px 2px 22px; font-size: 11px; color: var(--text-secondary);
+/* Level 2 — inner group (agent kind, or project in agent-mode). Neutral green
+   dot while it holds 2+ sessions (a real subheader); collapses to the leaf's
+   own color (.ws-run-leaf) when it holds exactly one, so a single running
+   instance doesn't get a redundant extra row underneath it. */
+.ws-run-l2 {
+    display: flex; align-items: center; gap: 6px; padding: 3px 8px 3px 20px;
+    font-size: 11px; color: var(--text-secondary); cursor: pointer; border-radius: 6px;
+}
+.ws-run-l2:hover { background: rgba(255,255,255,0.05); color: var(--text-primary); }
+.ws-run-l2-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent-green); flex-shrink: 0; }
+.ws-run-l2-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Level 3 — one row per individual running session. Also reused by .ws-run-l2
+   when it collapses to a single-session leaf. Dot color is the terminal-type
+   legend: orange = external native terminal (default), blue = inside codbash. */
+.ws-run-l3, .ws-run-l2.ws-run-leaf .ws-run-l2-dot { position: relative; }
+.ws-run-l3 {
+    padding: 2px 8px 2px 32px; font-size: 10.5px; color: var(--text-secondary);
     cursor: pointer; border-radius: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.ws-run-term::before {
-    content: ''; position: absolute; left: 11px; top: 50%; transform: translateY(-50%);
+.ws-run-l3::before {
+    content: ''; position: absolute; left: 21px; top: 50%; transform: translateY(-50%);
     width: 5px; height: 5px; border-radius: 50%; background: var(--accent-orange, #f59e0b);
 }
-.ws-run-term.ws-run-local::before { background: var(--accent-blue); }
-.ws-run-term:hover { background: rgba(255,255,255,0.05); color: var(--text-primary); }
+.ws-run-l3.ws-run-local::before { background: var(--accent-blue); }
+.ws-run-l3:hover { background: rgba(255,255,255,0.05); color: var(--text-primary); }
+.ws-run-l2.ws-run-leaf .ws-run-l2-dot { background: var(--accent-orange, #f59e0b); }
+.ws-run-l2.ws-run-leaf.ws-run-local .ws-run-l2-dot { background: var(--accent-blue); }
 /* Idle (waiting for input, still a live process — not "gone") always wins over
    the terminal-type color so a dimmed dot reliably means "idle", not a second
    meaning collision with local/external. */
-.ws-run-term.ws-run-idle { color: var(--text-muted); }
-.ws-run-term.ws-run-idle::before { background: var(--text-muted); }
+.ws-run-l3.ws-run-idle,
+.ws-run-l2.ws-run-leaf.ws-run-idle { color: var(--text-muted); }
+.ws-run-l3.ws-run-idle::before,
+.ws-run-l2.ws-run-leaf.ws-run-idle .ws-run-l2-dot { background: var(--text-muted); }
 
 /* In-app prompt (codbashPrompt) — replaces window.prompt (no-op in Electron). */
 .cb-prompt-overlay {

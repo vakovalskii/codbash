@@ -146,20 +146,34 @@ in-app Claude session and an iTerm one saw only half the picture. Merge them
 into one tree, colored by where each agent runs, and let the user pick whether
 the tree groups by project (default) or by agent kind.
 
+A first pass grouped project/agent as a flat 2-level list — one header, then
+every session underneath as a same-labeled row ("Claude", "Claude", …). Users
+found that read as noise/duplication rather than a real hierarchy, so it grew
+a third level: outer group → inner group → individual sessions.
+
 ### Data model
 
 No server change: `getActiveSessions()` already tags every live agent with
 `local`. The frontend just stops dropping `local:true` entries.
 
-`_wsRunningGroups(mode)` (`workspace.js`) replaces `_wsRunningByProject()`:
-- `mode: 'project'` (default) — groups by `cwd`, same as before, but items now
-  include local agents too.
-- `mode: 'agent'` — groups by `kind` (tool), items are the projects that tool
-  is running in.
+`_wsRunningTree(mode)` (`workspace.js`) builds a 3-level tree:
+- `mode: 'project'` (default) — project → agent kind → sessions.
+- `mode: 'agent'` — agent kind → project → sessions (the mirror nesting, not
+  just a relabel — switching the toggle re-parents the whole tree).
 
-Each item carries `{agent, cwd, projName, kind}` so either grouping can label
-its rows correctly (tool name in project-mode rows, project name in
-agent-mode rows).
+Built via a small generic `_wsGroupBy(items, keyFn)` applied twice (outer key,
+then inner key within each outer group). Each item carries `{agent, cwd,
+projName, kind}` so either grouping direction can label its rows correctly.
+
+A subgroup (project+agent pair) holding exactly one live session collapses
+its leaf row into the subgroup row itself — no redundant single-child row —
+and takes that session's true color/idle state directly (`.ws-run-leaf`).
+Once a subgroup holds 2+ sessions, it renders as a real subheader (neutral
+green dot, session count) with one leaf row per session underneath, each
+labeled by `_wsSessionLeafLabel` (a live pane's user-given name if local and
+matched, else the session id prefix — same convention as the session cards'
+"Resume last session (id12345)" — else a bare pid) so same-project,
+same-agent sessions read as distinct instead of repeating the same label.
 
 ### Click dispatch
 
