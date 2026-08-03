@@ -116,61 +116,143 @@ async function loadGlobalLeaderboard() {
   } catch { if (board) board.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted)">Could not load global leaderboard</div>'; }
 }
 
+// The device-code modal is built once and reused. Kept self-contained (its own
+// Escape/Tab handling rather than app.js's _installModalFocusTrap) because that
+// helper dispatches Escape through a hardcoded if-chain of overlay ids — worth
+// generalizing into a shared close-callback, but that's a cross-cutting change
+// to a file several in-flight PRs already touch.
+function _lbBuildAuthModal() {
+  var modal = document.createElement('div');
+  modal.id = 'githubAuthModal';
+  modal.className = 'confirm-overlay';
+  modal.setAttribute('role', 'dialog');
+  modal.setAttribute('aria-modal', 'true');
+  modal.setAttribute('aria-labelledby', 'githubAuthTitle');
+  modal.innerHTML = '<div class="confirm-box" style="max-width:380px;text-align:center">' +
+    '<h3 id="githubAuthTitle">Connect GitHub</h3>' +
+    '<p style="font-size:13px;margin:12px 0">Copy this code and enter it at:</p>' +
+    '<div class="lb-auth-code" id="githubAuthCode"></div>' +
+    '<a id="githubAuthLink" href="" target="_blank" rel="noopener noreferrer" class="lb-github-btn" style="display:inline-flex;margin:12px 0">Open GitHub</a>' +
+    // aria-live so a screen reader hears "Code expired" / "Connection error"
+    // without the user having to go hunting for the status line.
+    '<p style="font-size:12px;color:var(--text-muted)" id="githubAuthStatus" role="status" aria-live="polite">Waiting for authorization...</p>' +
+    '<button class="btn-cancel" id="githubAuthCancel" style="margin-top:8px">Cancel</button>' +
+    '</div>';
+  document.body.appendChild(modal);
+  modal.querySelector('#githubAuthCancel').addEventListener('click', function () { _lbCloseAuthModal(); });
+  modal.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') { e.stopPropagation(); _lbCloseAuthModal(); return; }
+    if (e.key !== 'Tab') return;
+    // Keep Tab inside the dialog — it's aria-modal, so tabbing onto the page
+    // behind it would contradict what a screen reader just announced.
+    var nodes = Array.prototype.filter.call(
+      modal.querySelectorAll('a[href], button, [tabindex]:not([tabindex="-1"])'),
+      function (el) { return !el.disabled && el.offsetParent !== null; }
+    );
+    if (!nodes.length) return;
+    var first = nodes[0], last = nodes[nodes.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  });
+  return modal;
+}
+
+var _lbAuthFocusReturn = null;
+
+function _lbCloseAuthModal() {
+  var modal = document.getElementById('githubAuthModal');
+  if (modal) modal.style.display = 'none';
+  // Return focus to whatever opened the dialog, unless it's since been
+  // re-rendered away (render() replaces the leaderboard markup on success).
+  if (_lbAuthFocusReturn && _lbAuthFocusReturn.focus && document.body.contains(_lbAuthFocusReturn)) {
+    try { _lbAuthFocusReturn.focus(); } catch (e) {}
+  }
+  _lbAuthFocusReturn = null;
+}
+
+function _lbAuthStatus(text) {
+  var el = document.getElementById('githubAuthStatus');
+  if (el) el.textContent = text;
+}
+
 async function githubConnect() {
+  var modal = null;
   try {
     showToast('Starting GitHub auth...');
     var resp = await fetch('/api/github/device-code', { method: 'POST' });
     var data = await resp.json();
     if (data.error) { showToast('Error: ' + data.error); return; }
 
-    // Show modal with code
-    var modal = document.getElementById('githubAuthModal');
-    if (!modal) {
-      modal = document.createElement('div');
-      modal.id = 'githubAuthModal';
-      modal.className = 'confirm-overlay';
-      modal.style.display = 'flex';
-      modal.innerHTML = '<div class="confirm-box" style="max-width:380px;text-align:center">' +
-        '<h3>Connect GitHub</h3>' +
-        '<p style="font-size:13px;margin:12px 0">Copy this code and enter it at:</p>' +
-        '<div class="lb-auth-code" id="githubAuthCode"></div>' +
-        '<a id="githubAuthLink" href="" target="_blank" class="lb-github-btn" style="display:inline-flex;margin:12px 0">Open GitHub</a>' +
-        '<p style="font-size:12px;color:var(--text-muted)" id="githubAuthStatus">Waiting for authorization...</p>' +
-        '<button class="btn-cancel" onclick="this.parentElement.parentElement.style.display=\'none\'" style="margin-top:8px">Cancel</button>' +
-        '</div>';
-      document.body.appendChild(modal);
-    } else {
-      modal.style.display = 'flex';
-    }
+    _lbAuthFocusReturn = document.activeElement;
+    modal = document.getElementById('githubAuthModal') || _lbBuildAuthModal();
+    modal.style.display = 'flex';
     document.getElementById('githubAuthCode').textContent = data.user_code;
     document.getElementById('githubAuthLink').href = data.verification_uri;
+    _lbAuthStatus('Waiting for authorization...');
+    // Move focus into the dialog so keyboard users land inside it.
+    var link = document.getElementById('githubAuthLink');
+    if (link) link.focus();
 
     copyText(data.user_code, 'Copied GitHub code');
 
-    // Poll for token
+    // Poll for the token. Mirrors pollRepoScopeOnce() in app.js: honour
+    // slow_down per RFC 8628 §3.5, surface a persistent network failure
+    // instead of spinning silently, and never leave the user staring at
+    // "Waiting for authorization..." with no idea anything went wrong.
     var interval = (data.interval || 5) * 1000;
-    var maxTries = Math.ceil((data.expires_in || 900) / (interval / 1000));
-    for (var i = 0; i < maxTries; i++) {
-      await new Promise(function(r) { setTimeout(r, interval); });
+    var deadline = Date.now() + ((data.expires_in || 900) * 1000);
+    var errorStreak = 0;
+
+    while (Date.now() < deadline) {
+      await new Promise(function (r) { setTimeout(r, interval); });
       if (modal.style.display === 'none') return; // cancelled
+
+      var pollData;
       try {
         var pollResp = await fetch('/api/github/poll-token', {
-          method: 'POST', headers: {'Content-Type':'application/json'},
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ device_code: data.device_code })
         });
-        var pollData = await pollResp.json();
-        if (pollData.status === 'ok') {
-          modal.style.display = 'none';
-          showToast('Connected as @' + pollData.profile.username);
-          render();
-          return;
-        } else if (pollData.status === 'expired') {
-          document.getElementById('githubAuthStatus').textContent = 'Code expired. Try again.';
+        pollData = await pollResp.json();
+      } catch (e) {
+        // Transient failures shouldn't kill the flow; persistent ones must
+        // not be swallowed (the old bare `catch {}` polled on in silence).
+        errorStreak += 1;
+        if (errorStreak >= 3) {
+          _lbAuthStatus('Connection error — check your network and try again.');
           return;
         }
-      } catch {}
+        _lbAuthStatus('Network hiccup, retrying…');
+        continue;
+      }
+      errorStreak = 0;
+
+      if (pollData.error) {
+        _lbAuthStatus('Error: ' + pollData.error);
+        return;
+      }
+      if (pollData.status === 'ok') {
+        _lbCloseAuthModal();
+        showToast('Connected as @' + pollData.profile.username);
+        render();
+        return;
+      }
+      if (pollData.status === 'expired') {
+        _lbAuthStatus('Code expired. Close this and click Connect to try again.');
+        return;
+      }
+      if (pollData.status === 'slow_down') {
+        interval += 5000;      // RFC 8628 §3.5
+        _lbAuthStatus('Waiting for authorization…');
+        continue;
+      }
+      _lbAuthStatus('Waiting for authorization...');
     }
-  } catch (e) { showToast('Auth error: ' + e.message); }
+    _lbAuthStatus('Code expired. Close this and click Connect to try again.');
+  } catch (e) {
+    if (modal) _lbAuthStatus('Auth error: ' + e.message);
+    showToast('Auth error: ' + e.message);
+  }
 }
 
 async function githubLogout() {

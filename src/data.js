@@ -5954,10 +5954,16 @@ function findQwenSessionByPid(pid, cwd, allSessions) {
   const byCwd = [];
 
   try {
-    const lsofOut = execSync(`lsof -a -p ${pid} -Fn 2>/dev/null`, {
+    // argv form, not a shell string: `pid` reaches here from parsed `ps`
+    // output so it's numeric today, but the shell-interpolated version was
+    // one refactor away from being a real injection. (The sibling lsof call
+    // in getActiveSessions already uses execFileSync — this was the outlier.)
+    // stderr is ignored via stdio instead of a `2>/dev/null` redirect, which
+    // needed a shell in the first place.
+    const lsofOut = execFileSync('lsof', ['-a', '-p', String(pid), '-Fn'], {
       encoding: 'utf8',
       timeout: 2000,
-      stdio: ['pipe', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'ignore'],
     });
     for (const line of lsofOut.split('\n')) {
       const match = line.match(/(\/.*\.qwen\/projects\/.*\/(?:chats|sessions)\/([0-9a-f-]{36})\.jsonl)$/i);
