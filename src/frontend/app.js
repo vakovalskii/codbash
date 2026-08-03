@@ -1006,7 +1006,16 @@ function loadLLMSettings() {
     var k = document.getElementById('llmApiKey');
     var m = document.getElementById('llmModel');
     if (u) u.value = c.url || '';
-    if (k) k.value = c.apiKey || '';
+    // The server never returns the raw key (only hasKey + a ••••1234 hint) —
+    // show the hint as a placeholder so the user can see a key is stored
+    // without the secret ever landing in the DOM. Leaving the field empty on
+    // save keeps the stored key; typing replaces it.
+    if (k) {
+      k.value = '';
+      k.placeholder = c.hasKey
+        ? c.keyHint + ' (saved — type to replace)'
+        : 'API Key (sk-...)';
+    }
     if (m) m.value = c.model || '';
   });
 }
@@ -1014,6 +1023,8 @@ function loadLLMSettings() {
 function saveLLMSettings() {
   var config = {
     url: document.getElementById('llmUrl').value.trim(),
+    // Empty field = keep the key already stored server-side (the input is
+    // never pre-filled with the secret, so empty is the common case).
     apiKey: document.getElementById('llmApiKey').value.trim(),
     model: document.getElementById('llmModel').value.trim(),
   };
@@ -1021,8 +1032,12 @@ function saveLLMSettings() {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(config),
-  }).then(function() {
+  }).then(function(r) { return r.json(); }).then(function(d) {
+    if (d && d.ok === false) { showToast('Save failed: ' + (d.error || 'unknown error')); return; }
     showToast('LLM settings saved');
+    loadLLMSettings(); // refresh the ••••hint placeholder after a key change
+  }).catch(function() {
+    showToast('Save failed — is the server running?');
   });
 }
 
@@ -3442,7 +3457,7 @@ function _renderSettingsIntegrations() {
   html += '<p style="font-size:12px;color:var(--text-muted);margin:0 0 12px">OpenAI-compatible API for session title generation</p>';
   html += '<div style="display:flex;flex-direction:column;gap:8px">';
   html += '<input type="text" id="llmUrl" class="settings-select" placeholder="http://host:port/v1">';
-  html += '<input type="password" id="llmApiKey" class="settings-select" placeholder="API Key (sk-...)">';
+  html += '<input type="password" id="llmApiKey" class="settings-select" placeholder="API Key (sk-...)" autocomplete="new-password" aria-label="LLM API key">';
   html += '<input type="text" id="llmModel" class="settings-select" placeholder="Model (gpt-4o-mini)">';
   html += '</div>';
   html += '<div style="display:flex;gap:8px;margin-top:12px">';
