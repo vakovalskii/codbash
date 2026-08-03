@@ -690,8 +690,11 @@ function startServer(host, port, openBrowser = true) {
     else if (req.method === 'GET' && pathname === '/api/search') {
       const q = parsed.searchParams.get('q') || '';
       const sessions = loadSessions();
-      const results = searchFullText(q, sessions);
-      json(res, results);
+      // searchFullText is async: the index build yields to the event loop
+      // between chunks so a cold rebuild can't stall the terminal WebSocket.
+      searchFullText(q, sessions)
+        .then(results => json(res, results))
+        .catch(e => json(res, { error: e.message }, 500));
     }
 
     // ── Session cost ──────────────────────

@@ -4839,118 +4839,167 @@ let searchIndex = null;
 let searchIndexBuiltAt = 0;
 const INDEX_TTL = 60000; // rebuild every 60s
 
-function buildSearchIndex(sessions) {
+const SEARCH_SNIPPET_LEN = 500;
+
+// Formats whose messages come from a bespoke loader rather than the generic
+// JSONL reader. Each entry takes (sessionId, file) — loaders that don't need
+// the file simply ignore it — and returns `{ messages: [{role, content}] }`.
+// A lookup table instead of six near-identical if/else branches: the branches
+// differed only by loader name, so a fix to one (snippet length, the
+// isSystemMessage filter) silently missed the other five.
+const SEARCH_DETAIL_LOADERS = {
+  qwen:           (id, file) => loadQwenDetail(id, file),
+  kilo:           (id)       => loadKiloCliDetail(id),
+  opencode:       (id)       => loadOpenCodeDetail(id),
+  kiro:           (id)       => loadKiroDetail(id),
+  'kiro-cli':     (id)       => loadKiroCliDetail(id),
+  cursor:         (id)       => loadCursorDetail(id),
+  pi:             (id, file) => loadPiDetail(id, file),
+  // Copilot Chat (VS Code JSON) and Copilot CLI need their own loaders; the
+  // generic JSONL branch would mis-parse them and index nothing.
+  copilot:        (id)       => loadCopilotCliDetail(id),
+  'copilot-chat': (id)       => loadCopilotDetail(id),
+};
+
+// Indexable {role, content} pairs from a loader's messages: drop empties and
+// system noise, cap each message at SEARCH_SNIPPET_LEN. (isSystemMessage only
+// tests short prefixes/exact strings, so filtering before or after the slice
+// is equivalent — the pre-refactor qwen branch did it in the other order.)
+function _searchTextsFromMessages(messages) {
+  const texts = [];
+  for (const msg of (messages || [])) {
+    if (msg.content && !isSystemMessage(msg.content)) {
+      texts.push({ role: msg.role, content: msg.content.slice(0, SEARCH_SNIPPET_LEN) });
+    }
+  }
+  return texts;
+}
+
+// One JSONL line → an indexable {role, content} pair, or null. Shared by the
+// sync and streaming readers so the two can't drift.
+function _searchTextFromJsonlLine(line, format) {
+  try {
+    const entry = JSON.parse(line);
+    let role, content;
+
+    if (format === 'claude') {
+      if (entry.type !== 'user' && entry.type !== 'assistant') return null;
+      role = entry.type;
+      content = extractContent((entry.message || {}).content);
+    } else {
+      if (entry.type !== 'response_item' || !entry.payload) return null;
+      role = entry.payload.role;
+      if (role !== 'user' && role !== 'assistant') return null;
+      content = extractContent(entry.payload.content);
+    }
+
+    if (content && !isSystemMessage(content)) {
+      return { role, content: content.slice(0, SEARCH_SNIPPET_LEN) };
+    }
+  } catch {}
+  return null;
+}
+
+// Indexable pairs straight from a raw JSONL file (claude / codex formats).
+function _searchTextsFromJsonl(file, format) {
+  const texts = [];
+  for (const line of readLines(file)) {
+    const t = _searchTextFromJsonlLine(line, format);
+    if (t) texts.push(t);
+  }
+  return texts;
+}
+
+// Above which a JSONL session is read as a stream instead of slurped whole.
+// Chunking the index *per session* still leaves one stall as long as the
+// biggest single session takes: real histories have a heavy tail (a median
+// session is ~0.1MB but codex transcripts run to tens of MB), and slurping one
+// of those via readLines — whole file into a string, split, filter — blocks
+// for seconds no matter how small the outer chunk is.
+const SEARCH_STREAM_THRESHOLD = 4 * 1024 * 1024;
+
+// Same as _searchTextsFromJsonl but reads line-by-line off a stream and yields
+// to the event loop periodically, so indexing one huge transcript can't freeze
+// the terminal WebSocket. Nothing is truncated — this is purely about *when*
+// the work happens, so search results are identical either way.
+async function _searchTextsFromJsonlStreaming(file, format) {
+  const readline = require('readline');
+  const texts = [];
+  let sinceYield = 0;
+  const rl = readline.createInterface({
+    input: fs.createReadStream(file, { encoding: 'utf8' }),
+    crlfDelay: Infinity,
+  });
+  try {
+    for await (const raw of rl) {
+      const line = raw.replace(/\r$/, '');
+      if (!line) continue;
+      const t = _searchTextFromJsonlLine(line, format);
+      if (t) texts.push(t);
+      if (++sinceYield >= 2000) {
+        sinceYield = 0;
+        await new Promise(r => setImmediate(r));
+      }
+    }
+  } finally {
+    rl.close();
+  }
+  return texts;
+}
+
+// One session's index entry, or null when it has nothing searchable. Async so
+// an oversized JSONL transcript can be streamed with yields rather than
+// slurped in one blocking read.
+async function _indexSession(s) {
+  const found = findSessionFile(s.id, s.project);
+  if (!found) return null;
+  try {
+    const loader = SEARCH_DETAIL_LOADERS[found.format];
+    let texts;
+    if (loader) {
+      texts = _searchTextsFromMessages(loader(s.id, found.file).messages);
+    } else if (_fileSize(found.file) > SEARCH_STREAM_THRESHOLD) {
+      texts = await _searchTextsFromJsonlStreaming(found.file, found.format);
+    } else {
+      texts = _searchTextsFromJsonl(found.file, found.format);
+    }
+    if (texts.length === 0) return null;
+    // Pre-compute lowercase full text for fast matching
+    return { sessionId: s.id, texts, fullText: texts.map(t => t.content).join(' ').toLowerCase() };
+  } catch {
+    return null;
+  }
+}
+
+function _fileSize(file) {
+  try { return fs.statSync(file).size; } catch { return 0; }
+}
+
+// Build the index in small chunks, yielding to the event loop between them.
+//
+// Each session here means a findSessionFile() lookup plus a full detail
+// load (sync fs reads + JSON.parse per line). Doing all of them in one
+// synchronous tick froze the loop for seconds on a large history — stalling
+// every other request AND the terminal WebSocket data pump. Same chunk+yield
+// shape as _scheduleAnalyticsRecompute, for the same reason.
+async function buildSearchIndex(sessions) {
   const startMs = Date.now();
   const index = [];
+  // Small chunk on purpose: each item is a whole detail load, an order of
+  // magnitude heavier than the computeSessionCost calls the analytics job
+  // batches 80-at-a-time. Oversized JSONL sessions additionally yield from
+  // *inside* _indexSession (see SEARCH_STREAM_THRESHOLD).
+  const CHUNK = 8;
 
-  for (const s of sessions) {
-    if (!s.has_detail) continue;
-
-    const found = findSessionFile(s.id, s.project);
-    if (!found) continue;
-
-    try {
-      if (found.format === 'qwen') {
-        const detail = loadQwenDetail(s.id, found.file);
-        const texts = (detail.messages || []).map(function(m) {
-          return { role: m.role, content: (m.content || '').slice(0, 500) };
-        }).filter(function(m) {
-          return m.content && !isSystemMessage(m.content);
-        });
-        if (texts.length > 0) {
-          const fullText = texts.map(t => t.content).join(' ').toLowerCase();
-          index.push({ sessionId: s.id, texts, fullText });
-        }
-        continue;
-      }
-
-      const texts = [];
-
-      if (found.format === 'kilo') {
-        const detail = loadKiloCliDetail(s.id);
-        for (const msg of detail.messages) {
-          if (msg.content && !isSystemMessage(msg.content)) {
-            texts.push({ role: msg.role, content: msg.content.slice(0, 500) });
-          }
-        }
-      } else if (found.format === 'opencode') {
-        const detail = loadOpenCodeDetail(s.id);
-        for (const msg of detail.messages) {
-          if (msg.content && !isSystemMessage(msg.content)) {
-            texts.push({ role: msg.role, content: msg.content.slice(0, 500) });
-          }
-        }
-      } else if (found.format === 'kiro') {
-        const detail = loadKiroDetail(s.id);
-        for (const msg of detail.messages) {
-          if (msg.content && !isSystemMessage(msg.content)) {
-            texts.push({ role: msg.role, content: msg.content.slice(0, 500) });
-          }
-        }
-      } else if (found.format === 'kiro-cli') {
-        const detail = loadKiroCliDetail(s.id);
-        for (const msg of detail.messages) {
-          if (msg.content && !isSystemMessage(msg.content)) {
-            texts.push({ role: msg.role, content: msg.content.slice(0, 500) });
-          }
-        }
-      } else if (found.format === 'cursor') {
-        const detail = loadCursorDetail(s.id);
-        for (const msg of detail.messages) {
-          if (msg.content && !isSystemMessage(msg.content)) {
-            texts.push({ role: msg.role, content: msg.content.slice(0, 500) });
-          }
-        }
-      } else if (found.format === 'pi') {
-        const detail = loadPiDetail(s.id, found.file);
-        for (const msg of detail.messages) {
-          if (msg.content && !isSystemMessage(msg.content)) {
-            texts.push({ role: msg.role, content: msg.content.slice(0, 500) });
-          }
-        }
-      } else if (found.format === 'copilot-chat' || found.format === 'copilot') {
-        // Copilot Chat (VS Code JSON) and Copilot CLI use bespoke loaders; the
-        // generic JSONL branch below would mis-parse them and index nothing.
-        const detail = found.format === 'copilot'
-          ? loadCopilotCliDetail(s.id)
-          : loadCopilotDetail(s.id);
-        for (const msg of (detail.messages || [])) {
-          if (msg.content && !isSystemMessage(msg.content)) {
-            texts.push({ role: msg.role, content: msg.content.slice(0, 500) });
-          }
-        }
-      } else {
-        const lines = readLines(found.file);
-
-        for (const line of lines) {
-          try {
-            const entry = JSON.parse(line);
-            let role, content;
-
-            if (found.format === 'claude') {
-              if (entry.type !== 'user' && entry.type !== 'assistant') continue;
-              role = entry.type;
-              content = extractContent((entry.message || {}).content);
-            } else {
-              if (entry.type !== 'response_item' || !entry.payload) continue;
-              role = entry.payload.role;
-              if (role !== 'user' && role !== 'assistant') continue;
-              content = extractContent(entry.payload.content);
-            }
-
-            if (content && !isSystemMessage(content)) {
-              texts.push({ role, content: content.slice(0, 500) });
-            }
-          } catch {}
-        }
-      }
-
-      if (texts.length > 0) {
-        // Pre-compute lowercase full text for fast matching
-        const fullText = texts.map(t => t.content).join(' ').toLowerCase();
-        index.push({ sessionId: s.id, texts, fullText });
-      }
-    } catch {}
+  for (let i = 0; i < sessions.length; i += CHUNK) {
+    const chunk = sessions.slice(i, i + CHUNK);
+    for (const s of chunk) {
+      if (!s.has_detail) continue;
+      const entry = await _indexSession(s);
+      if (entry) index.push(entry);
+    }
+    // Yield so terminal output and other API calls stay responsive.
+    await new Promise(r => setImmediate(r));
   }
 
   const elapsed = Date.now() - startMs;
@@ -4958,19 +5007,36 @@ function buildSearchIndex(sessions) {
   return index;
 }
 
-function getSearchIndex(sessions) {
-  const now = Date.now();
-  if (!searchIndex || (now - searchIndexBuiltAt) > INDEX_TTL) {
-    searchIndex = buildSearchIndex(sessions);
-    searchIndexBuiltAt = now;
-  }
+// In-flight build, so a burst of searches during a rebuild shares one job
+// instead of queueing N duplicate full-history scans.
+let _searchIndexBuilding = null;
+
+function _rebuildSearchIndex(sessions) {
+  if (_searchIndexBuilding) return _searchIndexBuilding;
+  _searchIndexBuilding = buildSearchIndex(sessions)
+    .then(index => {
+      searchIndex = index;
+      searchIndexBuiltAt = Date.now();
+      return index;
+    })
+    .finally(() => { _searchIndexBuilding = null; });
+  return _searchIndexBuilding;
+}
+
+// Stale-while-revalidate, mirroring getCostAnalytics: a >60s-old index is
+// still overwhelmingly accurate for search, so serve it instantly and refresh
+// in the background. Only the very first build (nothing cached yet) awaits —
+// and even that now yields between chunks rather than blocking outright.
+async function getSearchIndex(sessions) {
+  if (!searchIndex) return await _rebuildSearchIndex(sessions);
+  if ((Date.now() - searchIndexBuiltAt) > INDEX_TTL) _rebuildSearchIndex(sessions);
   return searchIndex;
 }
 
-function searchFullText(query, sessions) {
+async function searchFullText(query, sessions) {
   if (!query || query.length < 2) return [];
   const q = query.toLowerCase();
-  const index = getSearchIndex(sessions);
+  const index = await getSearchIndex(sessions);
   const results = [];
 
   for (const entry of index) {
