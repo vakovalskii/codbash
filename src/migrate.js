@@ -3,7 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { execSync, execFileSync } = require('child_process');
+const { execFileSync } = require('child_process');
 
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const CODEX_DIR = path.join(os.homedir(), '.codex');
@@ -96,21 +96,29 @@ function exportArchive(outPath) {
     return;
   }
 
-  // Calculate sizes
-  let totalSize = 0;
+  // Count files. execFileSync with an argument array (not a shell string) for
+  // the same reason the tar call below spells it out: a home path containing
+  // quotes/backticks/$ must not be able to break quoting. Counting lines here
+  // also drops the `| wc -l` pipe, which needed a shell to begin with.
+  //
+  // A `du -sb … || du -sk …` total used to be summed alongside this and then
+  // never printed. Dead, and wrong on macOS besides: BSD du has no -b, so it
+  // always fell through to -sk and added KILOBYTES to a byte total.
   let totalFiles = 0;
   for (const p of paths) {
     const full = path.join(os.homedir(), p);
     if (fs.existsSync(full)) {
-      const stat = fs.statSync(full);
-      if (stat.isDirectory()) {
-        const output = execSync(`find "${full}" -type f | wc -l`, { encoding: 'utf8' }).trim();
-        totalFiles += parseInt(output) || 0;
-        const sizeOut = execSync(`du -sb "${full}" 2>/dev/null || du -sk "${full}"`, { encoding: 'utf8' }).trim();
-        totalSize += parseInt(sizeOut) || 0;
+      if (fs.statSync(full).isDirectory()) {
+        try {
+          const output = execFileSync('find', [full, '-type', 'f'], {
+            encoding: 'utf8',
+            maxBuffer: 64 * 1024 * 1024,
+            stdio: ['pipe', 'pipe', 'ignore'],
+          });
+          totalFiles += output.split('\n').filter(Boolean).length;
+        } catch { /* unreadable subtree — the count is cosmetic, keep going */ }
       } else {
         totalFiles++;
-        totalSize += stat.size;
       }
     }
   }
