@@ -5949,24 +5949,55 @@ function findPiSessionByResumeTarget(resumeTarget, allSessions) {
   return (allSessions || []).find(s => s.tool === 'pi' && s.resume_target && path.resolve(s.resume_target) === resolvedTarget) || null;
 }
 
+// Which Qwen transcript a pid currently has open, keyed by pid.
+// `lsof` is the only precise signal (cwd-matching can't tell two sessions in the
+// same folder apart), but it used to run through execSync RIGHT ON the
+// /api/active path — which the dashboard polls every 5s. With a 2000ms timeout,
+// per pid, that stalled the whole event loop, and the terminal WebSocket data
+// pump with it: typing froze while the poll ran. So the lookup is now a cache
+// refreshed OFF the loop; callers never wait for lsof.
+const _qwenOpenFileCache = new Map();      // pid -> { ts, ids: string[] }
+const _qwenOpenFileInflight = new Set();   // pids with a refresh in progress
+const QWEN_LSOF_TTL = 30000;               // an agent keeps its transcript open
+
+function _refreshQwenOpenFiles(pid) {
+  if (_qwenOpenFileInflight.has(pid)) return;
+  _qwenOpenFileInflight.add(pid);
+  _execFileAsync('lsof', ['-a', '-p', String(pid), '-Fn'], { timeout: 2000, maxBuffer: 8 * 1024 * 1024 })
+    .then(({ stdout }) => {
+      const ids = [];
+      for (const line of String(stdout || '').split('\n')) {
+        const m = line.match(/(\/.*\.qwen\/projects\/.*\/(?:chats|sessions)\/([0-9a-f-]{36})\.jsonl)$/i);
+        if (m) ids.push(m[2]);
+      }
+      _qwenOpenFileCache.set(pid, { ts: Date.now(), ids });
+    })
+    .catch(() => { _qwenOpenFileCache.set(pid, { ts: Date.now(), ids: [] }); })
+    .finally(() => {
+      _qwenOpenFileInflight.delete(pid);
+      // Bound the map: pids are recycled and agents come and go.
+      if (_qwenOpenFileCache.size > 256) {
+        for (const [k, v] of _qwenOpenFileCache) {
+          if (Date.now() - v.ts > QWEN_LSOF_TTL) _qwenOpenFileCache.delete(k);
+        }
+      }
+    });
+}
+
 function findQwenSessionByPid(pid, cwd, allSessions) {
   const byOpenFile = [];
   const byCwd = [];
 
-  try {
-    const lsofOut = execSync(`lsof -a -p ${pid} -Fn 2>/dev/null`, {
-      encoding: 'utf8',
-      timeout: 2000,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    for (const line of lsofOut.split('\n')) {
-      const match = line.match(/(\/.*\.qwen\/projects\/.*\/(?:chats|sessions)\/([0-9a-f-]{36})\.jsonl)$/i);
-      if (!match) continue;
-      const sessionId = match[2];
+  const cached = _qwenOpenFileCache.get(pid);
+  if (!cached || (Date.now() - cached.ts) > QWEN_LSOF_TTL) _refreshQwenOpenFiles(pid);
+  // Until the first refresh lands we simply fall through to the cwd match below,
+  // which is the same answer lsof would give for a single session in a folder.
+  if (cached) {
+    for (const sessionId of cached.ids) {
       const session = allSessions.find(s => s.id === sessionId);
       if (session) byOpenFile.push(session);
     }
-  } catch {}
+  }
 
   if (cwd) {
     for (const session of allSessions) {
