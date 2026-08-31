@@ -2,67 +2,85 @@
 //
 // Extracted from main.js (which requires electron and can't be unit-tested
 // under `node --test`). The resolution order is: explicit override → bundled
-// node → common install locations → nvm-installed versions → the user's login
-// shell → bare "node" as a last resort.
+// node → common install locations → nvm-installed versions (the user's
+// default alias first) → the user's login-shell PATH → bare "node" as a last
+// resort.
 //
-// The login-shell probe deliberately mirrors src/shell-path.js: rc files
-// freely print to stdout (oh-my-zsh warnings, iTerm2 OSC 1337 escape
-// sequences without a trailing newline), so "take the last line of stdout"
-// returned the node path glued to escape garbage and the fallback silently
-// failed. Wrapping the answer in \x01 sentinels and extracting by regex makes
-// the probe immune to any rc noise.
+// The login-shell step deliberately reuses src/shell-path.js rather than
+// spawning its own probe: rc files freely print to stdout (oh-my-zsh
+// warnings, iTerm2 OSC 1337 escape sequences without a trailing newline), so
+// the old `$SHELL -lic 'command -v node'` + "take the last line" approach
+// returned the node path glued to escape garbage and silently failed.
+// shell-path.js already solves this with an \x01-sentinel probe, logs probe
+// failures, and caches the ~1s interactive shell spawn on disk for a day —
+// duplicating that machinery here would just drift.
 'use strict';
 
-const { execFileSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const PROBE_SCRIPT = 'printf "\\1CBN\\1%s\\1CBE\\1" "$(command -v node 2>/dev/null)"';
-
-function extractProbedNodePath(raw) {
-  const m = /\x01CBN\x01([\s\S]*?)\x01CBE\x01/.exec(raw || '');
-  if (!m) return '';
-  const p = m[1].trim();
-  return p && path.isAbsolute(p) ? p : '';
+// First PATH entry that holds a node binary ('' when none). Relative entries
+// are skipped — a poisoned PATH must not make us spawn ./node.
+function findNodeInPathString(pathString, exists) {
+  for (const dir of String(pathString || '').split(path.delimiter)) {
+    if (!dir || !path.isAbsolute(dir)) continue;
+    const p = path.join(dir, 'node');
+    try { if (exists(p)) return p; } catch (_e) {}
+  }
+  return '';
 }
 
-// Installed nvm nodes (~/.nvm/versions/node/vX.Y.Z/bin/node), highest version
-// first. Numeric compare — lexicographic would rank v8 above v20.
+// Installed nvm nodes (~/.nvm/versions/node/vX.Y.Z/bin/node). The version the
+// user actually runs — ~/.nvm/alias/default, exact ("v20.20.0") or prefix
+// ("20", "20.3") form — comes first so we never silently override their
+// default with a newer install (the prebuilt node-pty ABI may not match it);
+// the rest follow highest-first (numeric compare — lexicographic would rank
+// v8 above v20). Existence of bin/node is left to the caller's candidate
+// loop, which owns the injected existsSync seam.
 function listNvmNodes(home) {
   const root = path.join(home, '.nvm', 'versions', 'node');
   let entries;
   try { entries = fs.readdirSync(root); } catch (_e) { return []; }
-  return entries
+
+  const versions = entries
     .map((name) => ({ name, parts: /^v(\d+)\.(\d+)\.(\d+)$/.exec(name) }))
     .filter((e) => e.parts)
     .sort((a, b) =>
-      (b.parts[1] - a.parts[1]) || (b.parts[2] - a.parts[2]) || (b.parts[3] - a.parts[3]))
-    .map((e) => path.join(root, e.name, 'bin', 'node'))
-    .filter((p) => { try { return fs.existsSync(p); } catch (_e) { return false; } });
+      (b.parts[1] - a.parts[1]) || (b.parts[2] - a.parts[2]) || (b.parts[3] - a.parts[3]));
+
+  let alias = '';
+  try { alias = fs.readFileSync(path.join(home, '.nvm', 'alias', 'default'), 'utf8').trim(); } catch (_e) {}
+  if (alias) {
+    const want = alias.replace(/^v/, '');
+    // Highest install matching the alias exactly or by prefix ("20" → v20.20.0).
+    const i = versions.findIndex((e) => {
+      const have = e.name.slice(1);
+      return have === want || have.startsWith(want + '.');
+    });
+    if (i > 0) versions.unshift(versions.splice(i, 1)[0]);
+  }
+
+  return versions.map((e) => path.join(root, e.name, 'bin', 'node'));
 }
 
-// Ask the user's login shell where node lives (picks up nvm/conda/asdf shims a
-// plain env misses). Flags and limits follow src/shell-path.js: `-i -l -c` so
-// PATH matches a real terminal, SIGKILL because an rc that traps SIGTERM could
-// outlive the timeout, stderr ignored so rc noise doesn't leak into our logs.
-function probeLoginShellForNode(env) {
-  const shell = (env.SHELL && path.isAbsolute(env.SHELL)) ? env.SHELL : '/bin/zsh';
-  try {
-    const raw = execFileSync(shell, ['-i', '-l', '-c', PROBE_SCRIPT], {
-      encoding: 'utf8',
-      timeout: 6000,
-      killSignal: 'SIGKILL',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    return extractProbedNodePath(raw);
-  } catch (_e) {
-    return '';
+// src/shell-path.js ships beside the server: repo layout in dev,
+// extraResources (app/src) when packaged — mirroring resolveServerEntry in
+// main.js. Electron can require() it from outside the asar.
+function loadShellPathModule(o) {
+  const candidates = [
+    o.isPackaged && o.resourcesPath ? path.join(o.resourcesPath, 'app', 'src', 'shell-path.js') : null,
+    path.join(__dirname, '..', 'src', 'shell-path.js'),
+  ].filter(Boolean);
+  for (const c of candidates) {
+    try { return require(c); } catch (_e) {}
   }
+  return null;
 }
 
 // Options exist for tests only; production callers pass the real process/app
-// values (see main.js). `existsSync` and `probe` default to the real thing.
+// values (see main.js). `existsSync` and `shellPathModule` default to the
+// real thing.
 function resolveNodeBin(o) {
   o = o || {};
   const env = o.env || process.env;
@@ -89,10 +107,15 @@ function resolveNodeBin(o) {
     try { if (exists(c)) return c; } catch (_e) {}
   }
 
-  const probed = (o.probe || probeLoginShellForNode)(env);
-  try { if (probed && exists(probed)) return probed; } catch (_e) {}
+  const shellPath = 'shellPathModule' in o ? o.shellPathModule : loadShellPathModule(o);
+  if (shellPath) {
+    try {
+      const found = findNodeInPathString(shellPath.captureLoginShellPath(), exists);
+      if (found) return found;
+    } catch (_e) {} // probe failures are logged inside shell-path.js
+  }
 
   return 'node';
 }
 
-module.exports = { PROBE_SCRIPT, extractProbedNodePath, listNvmNodes, resolveNodeBin };
+module.exports = { findNodeInPathString, listNvmNodes, resolveNodeBin };

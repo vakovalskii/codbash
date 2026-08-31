@@ -15,6 +15,7 @@ const path = require('path');
 const { resolveNodeBin } = require('./node-resolve.js');
 
 let serverProc = null;
+let serverSpawnFailed = false; // set by the spawn 'error' handler; suppresses the later waitForServer dialog
 let win = null;
 let serverPort = 0;
 const SMOKE = !!process.env.CODBASH_SMOKE; // launch, verify, auto-quit (CI/local test)
@@ -89,14 +90,21 @@ function startServer(port) {
   // 'exit' — without this handler they surface as an Uncaught Exception dialog.
   serverProc.on('error', function (err) {
     serverProc = null;
-    if (!app.isQuitting && !SMOKE) {
-      dialog.showErrorBox(
-        'codbash could not start',
-        'Failed to launch the codbash server with "' + nodeBin + '": ' + err.message +
-        '\n\nInstall Node.js 18+ (https://nodejs.org), or point the CODBASH_NODE ' +
-        'environment variable at your node binary, then relaunch codbash.'
-      );
+    serverSpawnFailed = true;
+    if (app.isQuitting) return;
+    if (SMOKE) {
+      // A silent green smoke run for a broken launch would be worse than the
+      // crash — fail loudly and nonzero.
+      process.stderr.write('[desktop] SMOKE FAIL — server spawn error: ' + err.message + '\n');
+      app.exit(1);
+      return;
     }
+    dialog.showErrorBox(
+      'codbash could not start',
+      'Failed to launch the codbash server with "' + nodeBin + '": ' + err.message +
+      '\n\nInstall Node.js 18+ (https://nodejs.org), or point the CODBASH_NODE ' +
+      'environment variable at your node binary, then relaunch codbash.'
+    );
     app.quit();
   });
   serverProc.on('exit', function (code) {
@@ -347,7 +355,12 @@ app.whenReady().then(async function () {
     await createWindow();
     initAutoUpdater();
   } catch (e) {
-    dialog.showErrorBox('codbash failed to start', String((e && e.message) || e));
+    // The spawn 'error' handler already showed a specific dialog (missing node
+    // binary) — a second "did not become ready" dialog would point the user at
+    // a nonexistent server problem. Same for a quit already in progress.
+    if (!app.isQuitting && !serverSpawnFailed) {
+      dialog.showErrorBox('codbash failed to start', String((e && e.message) || e));
+    }
     app.isQuitting = true;
     app.quit();
     return;
