@@ -12,9 +12,7 @@ const { spawn } = require('child_process');
 const http = require('http');
 const net = require('net');
 const path = require('path');
-const fs = require('fs');
-const os = require('os');
-const { execFileSync } = require('child_process');
+const { resolveNodeBin } = require('./node-resolve.js');
 
 let serverProc = null;
 let win = null;
@@ -66,49 +64,17 @@ function resolveServerEntry() {
   return app.isPackaged ? packaged : dev;
 }
 
-// The Node binary used to run the server. We deliberately avoid Electron's own
-// Node (ELECTRON_RUN_AS_NODE) because its ABI differs from the prebuilt
-// node-pty.
-//
-// A Finder/`open`-launched macOS app inherits only a minimal PATH
-// (/usr/bin:/bin:/usr/sbin:/sbin), so bare "node" (installed via nvm, Homebrew,
-// conda, etc.) usually isn't found. We therefore resolve an absolute path:
-// explicit override → bundled node → common install locations → the user's
-// login shell → bare "node" as a last resort.
-function resolveNodeBin() {
-  if (process.env.CODBASH_NODE) return process.env.CODBASH_NODE;
-
-  const bundled = path.join(process.resourcesPath || '', process.platform === 'win32' ? 'node.exe' : 'node');
-  try { if (app.isPackaged && fs.existsSync(bundled)) return bundled; } catch (_e) {}
-
-  if (process.platform === 'win32') return 'node.exe';
-
-  const home = os.homedir();
-  const candidates = [
-    '/opt/homebrew/bin/node',
-    '/usr/local/bin/node',
-    '/usr/bin/node',
-    path.join(home, '.local/bin/node'),
-    path.join(home, '.volta/bin/node'),
-  ];
-  for (const c of candidates) {
-    try { if (fs.existsSync(c)) return c; } catch (_e) {}
-  }
-
-  // Ask the user's login shell (picks up nvm/conda/asdf shims a plain env misses).
-  try {
-    const shell = process.env.SHELL || '/bin/zsh';
-    const out = execFileSync(shell, ['-lic', 'command -v node'], { encoding: 'utf8', timeout: 6000 });
-    const p = out.split('\n').map(function (s) { return s.trim(); }).filter(Boolean).pop();
-    if (p && fs.existsSync(p)) return p;
-  } catch (_e) {}
-
-  return 'node';
-}
-
 function startServer(port) {
   const entry = resolveServerEntry();
-  const nodeBin = resolveNodeBin();
+  // We deliberately avoid Electron's own Node (ELECTRON_RUN_AS_NODE) because
+  // its ABI differs from the prebuilt node-pty. See node-resolve.js for the
+  // resolution order and the rc-noise-proof login-shell probe.
+  const nodeBin = resolveNodeBin({
+    env: process.env,
+    platform: process.platform,
+    resourcesPath: process.resourcesPath,
+    isPackaged: app.isPackaged,
+  });
   serverProc = spawn(nodeBin, [entry, 'run', '--port=' + port, '--host=127.0.0.1', '--no-browser'], {
     // CODBASH_DESKTOP=1 tells the server it runs inside the Electron shell, so the
     // web self-update route (`POST /api/update` → `npm i -g`) refuses: it would
@@ -119,6 +85,20 @@ function startServer(port) {
   });
   serverProc.stdout.on('data', function (d) { process.stdout.write('[codbash] ' + d); });
   serverProc.stderr.on('data', function (d) { process.stderr.write('[codbash] ' + d); });
+  // spawn failures (ENOENT when no node binary was found) emit 'error', not
+  // 'exit' — without this handler they surface as an Uncaught Exception dialog.
+  serverProc.on('error', function (err) {
+    serverProc = null;
+    if (!app.isQuitting && !SMOKE) {
+      dialog.showErrorBox(
+        'codbash could not start',
+        'Failed to launch the codbash server with "' + nodeBin + '": ' + err.message +
+        '\n\nInstall Node.js 18+ (https://nodejs.org), or point the CODBASH_NODE ' +
+        'environment variable at your node binary, then relaunch codbash.'
+      );
+    }
+    app.quit();
+  });
   serverProc.on('exit', function (code) {
     serverProc = null;
     if (!app.isQuitting && !SMOKE) {
