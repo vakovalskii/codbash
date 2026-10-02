@@ -32,6 +32,7 @@
     "afterSign": "scripts/notarize.js",
     "files": [
       "main.js",
+      "node-resolve.js",
       "preload.js"
     ],
     "extraResources": [
