@@ -176,3 +176,12 @@ test('the pid is passed to jumpToRunningAgent as a numeric argument', () => {
   assert.ok(fn, 'jumpToRunningAgent should exist');
   assert.match(fn[1], /pid/, 'signature should accept a pid parameter');
 });
+
+test('local agent carries ptyPid of the pane shell it descends from', () => {
+  // Two panes (100, 110) in the same cwd: each agent must map to ITS pane.
+  const live = new Set([100, 110]);
+  const ppidOf = new Map([[200, 100], [210, 205], [205, 110], [300, 1]]);
+  const out = data._tagLocalAgents(
+    [{ pid: 200, cwd: '/p' }, { pid: 210, cwd: '/p' }, { pid: 300, cwd: '/p' }], live, ppidOf);
+  assert.deepEqual(out.map(a => a.ptyPid), [100, 110, undefined]);
+});
