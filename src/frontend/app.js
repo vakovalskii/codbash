@@ -1680,6 +1680,9 @@ function onCardKeydown(e) {
   if (e.target !== e.currentTarget) return;
   if (e.key === 'Enter' || e.key === ' ') {
     e.preventDefault();
+    // Stop here: the global keydown handler would otherwise ALSO see this
+    // Enter and run openFocusedCard(), opening the detail a second time.
+    e.stopPropagation();
     e.currentTarget.click(); // reuses the card's own onclick handler
   }
 }
@@ -4051,15 +4054,28 @@ let _modalTrapFn = null;
 // keyboard users can't accidentally tab onto the page behind the overlay.
 function _installModalFocusTrap(overlay) {
   if (!overlay) return;
-  _modalFocusReturn = document.activeElement;
+  // Re-installing (e.g. openDetail while the panel is already open) must drop
+  // the previous listener — an orphaned capture-phase trap would swallow
+  // every Escape for the rest of the session. Keep the original return target.
+  if (_modalTrapFn) {
+    document.removeEventListener('keydown', _modalTrapFn, true);
+    _modalTrapFn = null;
+  } else {
+    _modalFocusReturn = document.activeElement;
+  }
   var focusableSel = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
-  var nodes = Array.from(overlay.querySelectorAll(focusableSel))
-    .filter(function(el) { return !el.disabled && el.offsetParent !== null; });
-  if (nodes.length === 0) return;
-  var first = nodes[0];
-  var last = nodes[nodes.length - 1];
+  function focusables() {
+    return Array.from(overlay.querySelectorAll(focusableSel))
+      .filter(function(el) { return !el.disabled && el.offsetParent !== null; });
+  }
+  var initial = focusables();
+  if (initial.length === 0) return;
   _modalTrapFn = function(e) {
     if (e.key === 'Escape') {
+      // A confirm dialog stacked on top (e.g. Delete from the detail panel)
+      // gets this Escape first — let the global handler close it instead.
+      var confirmOverlay = document.getElementById('confirmOverlay');
+      if (confirmOverlay && confirmOverlay.style.display === 'flex' && !overlay.contains(confirmOverlay)) return;
       e.stopPropagation();
       // All three modals route close through the same callback chain.
       if (overlay.id === 'projectsSettingsOverlay') closeProjectsSettings();
@@ -4068,6 +4084,11 @@ function _installModalFocusTrap(overlay) {
       return;
     }
     if (e.key !== 'Tab') return;
+    // Recomputed per Tab: messages load into the panel after it opens.
+    var nodes = focusables();
+    if (nodes.length === 0) return;
+    var first = nodes[0];
+    var last = nodes[nodes.length - 1];
     if (e.shiftKey && document.activeElement === first) {
       e.preventDefault();
       last.focus();
@@ -4077,7 +4098,7 @@ function _installModalFocusTrap(overlay) {
     }
   };
   document.addEventListener('keydown', _modalTrapFn, true);
-  setTimeout(function() { try { first.focus(); } catch (e) {} }, 0);
+  setTimeout(function() { try { initial[0].focus(); } catch (e) {} }, 0);
 }
 
 function _uninstallModalFocusTrap() {
