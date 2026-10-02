@@ -111,8 +111,28 @@ function createRepoRefreshManager(opts = {}) {
   }
 
   // ── Fetch runner ─────────────────────────────────────────
+  // gitRoot must be an absolute, already-normalized path with no NUL bytes
+  // and no leading '-' (which git/execFile could otherwise mistake for an
+  // option). This is defense-in-depth on top of the known-gitRoots gate in
+  // repo-refresh-routes.js, in case this manager is ever wired to a less
+  // careful caller.
+  function isSafeGitRoot(p) {
+    return typeof p === 'string' && p.length > 0 && !p.includes('\0')
+      && path.isAbsolute(p) && path.normalize(p) === p
+      && !path.basename(p).startsWith('-');
+  }
+
   function runFetch(gitRoot) {
     return new Promise((resolve) => {
+      if (!isSafeGitRoot(gitRoot)) {
+        resolve(setState(gitRoot, {
+          status: 'error',
+          startedAt: null,
+          lastError: truncateErr('invalid gitRoot'),
+          lastErrorAt: Date.now(),
+        }));
+        return;
+      }
       let timeoutFired = false;
       let killTimer = null;
       let timeoutTimer = null;
