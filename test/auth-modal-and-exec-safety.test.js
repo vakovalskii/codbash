@@ -88,10 +88,14 @@ test('the cancel button is wired in JS, not by walking parentElement', () => {
 // interpolation, i.e. a value being spliced into a shell command line.
 const INTERPOLATED_EXEC = /execSync\(\s*`[^`]*\$\{/;
 
-test('findQwenSessionByPid runs lsof via argv, not a shell string', () => {
-  const body = fn(src('src/data.js'), 'findQwenSessionByPid');
-  assert.doesNotMatch(body, INTERPOLATED_EXEC, 'must not interpolate the pid into a shell command');
-  assert.match(body, /execFileSync\('lsof', \['-a', '-p', String\(pid\), '-Fn'\]/,
+// The Qwen lsof lookup moved off the event loop into _refreshQwenOpenFiles
+// (#289); it must still pass the pid as argv, never a shell string.
+test('Qwen open-file lookup runs lsof via argv, not a shell string', () => {
+  const source = src('src/data.js');
+  for (const name of ['findQwenSessionByPid', '_refreshQwenOpenFiles']) {
+    assert.doesNotMatch(fn(source, name), INTERPOLATED_EXEC, name + ' must not interpolate the pid into a shell command');
+  }
+  assert.match(fn(source, '_refreshQwenOpenFiles'), /_execFileAsync\('lsof', \['-a', '-p', String\(pid\), '-Fn'\]/,
     'must pass the pid as a separate argv entry');
 });
 
