@@ -1006,7 +1006,16 @@ function loadLLMSettings() {
     var k = document.getElementById('llmApiKey');
     var m = document.getElementById('llmModel');
     if (u) u.value = c.url || '';
-    if (k) k.value = c.apiKey || '';
+    // The server never returns the raw key (only hasKey + a ••••1234 hint) —
+    // show the hint as a placeholder so the user can see a key is stored
+    // without the secret ever landing in the DOM. Leaving the field empty on
+    // save keeps the stored key; typing replaces it.
+    if (k) {
+      k.value = '';
+      k.placeholder = c.hasKey
+        ? c.keyHint + ' (saved — type to replace)'
+        : 'API Key (sk-...)';
+    }
     if (m) m.value = c.model || '';
   });
 }
@@ -1014,6 +1023,8 @@ function loadLLMSettings() {
 function saveLLMSettings() {
   var config = {
     url: document.getElementById('llmUrl').value.trim(),
+    // Empty field = keep the key already stored server-side (the input is
+    // never pre-filled with the secret, so empty is the common case).
     apiKey: document.getElementById('llmApiKey').value.trim(),
     model: document.getElementById('llmModel').value.trim(),
   };
@@ -1021,8 +1032,12 @@ function saveLLMSettings() {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(config),
-  }).then(function() {
+  }).then(function(r) { return r.json(); }).then(function(d) {
+    if (d && d.ok === false) { showToast('Save failed: ' + (d.error || 'unknown error')); return; }
     showToast('LLM settings saved');
+    loadLLMSettings(); // refresh the ••••hint placeholder after a key change
+  }).catch(function() {
+    showToast('Save failed — is the server running?');
   });
 }
 
@@ -1416,7 +1431,8 @@ function renderCard(s, idx) {
     return '<span class="tag-pill tag-' + escHtml(t) + '" onclick="event.stopPropagation();removeTag(\'' + s.id + '\',\'' + t + '\')">' + escHtml(t) + ' &times;</span>';
   }).join('');
 
-  var html = '<div class="' + classes + '" data-id="' + s.id + '" onclick="onCardClick(\'' + s.id + '\', event)">';
+  var cardLabel = escHtml(projName + ': ' + getSessionDisplayName(s).slice(0, 80) + ' — ' + toolLabel + ', ' + timeAgo(s.last_ts));
+  var html = '<div class="' + classes + '" data-id="' + s.id + '" tabindex="0" aria-label="' + cardLabel + '" onclick="onCardClick(\'' + s.id + '\', event)" onkeydown="onCardKeydown(event)">';
   html += '<div class="card-top">';
   html += '<input type="checkbox" class="card-checkbox" style="' + checkboxStyle + '" ' + (isSelected ? 'checked' : '') + ' onclick="toggleSelect(\'' + s.id + '\', event)">';
   html += renderToolBadges(s.tool, s);
@@ -1519,7 +1535,8 @@ function renderListCard(s, idx) {
   if (isSelected) classes += ' selected';
   if (isFocused) classes += ' focused';
 
-  var html = '<div class="' + classes + '" data-id="' + s.id + '" onclick="onCardClick(\'' + s.id + '\', event)">';
+  var listLabel = escHtml(projName + ': ' + getSessionDisplayName(s).slice(0, 80) + ' — ' + getToolLabel(s.tool, true) + ', ' + timeAgo(s.last_ts));
+  var html = '<div class="' + classes + '" data-id="' + s.id + '" tabindex="0" aria-label="' + listLabel + '" onclick="onCardClick(\'' + s.id + '\', event)" onkeydown="onCardKeydown(event)">';
   html += renderToolBadges(s.tool, s);
   if (showBadges && s.mcp_servers && s.mcp_servers.length > 0) {
     s.mcp_servers.forEach(function(m) {
@@ -1649,6 +1666,24 @@ function onCardClick(id, event) {
   } else {
     var s = allSessions.find(function(x) { return x.id === id; });
     if (s) openDetail(s);
+  }
+}
+
+// Session cards (.card / .list-row / .qa-item) are plain divs with nested
+// interactive controls (checkbox, star, tag, launch buttons) — not real
+// <button>s, so Enter/Space don't activate them for free like a native
+// button would. This makes the card itself keyboard-activatable while
+// leaving its nested controls' own native key handling alone: only react
+// when the key event's target IS the card (not a bubbled event from a
+// descendant button/checkbox, which already handles its own Enter/Space).
+function onCardKeydown(e) {
+  if (e.target !== e.currentTarget) return;
+  if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault();
+    // Stop here: the global keydown handler would otherwise ALSO see this
+    // Enter and run openFocusedCard(), opening the detail a second time.
+    e.stopPropagation();
+    e.currentTarget.click(); // reuses the card's own onclick handler
   }
 }
 
@@ -1909,7 +1944,8 @@ function renderQACard(s, idx) {
   var costStr = cost > 0 ? '~$' + cost.toFixed(2) : '';
   var classes = 'qa-item' + (selectedIds.has(s.id) ? ' selected' : '');
 
-  var html = '<div class="' + classes + '" data-id="' + s.id + '" onclick="onCardClick(\'' + s.id + '\', event)">';
+  var qaLabel = escHtml(getSessionDisplayName(s).slice(0, 100) + ' — ' + toolLabel + ', ' + timeAgo(s.last_ts));
+  var html = '<div class="' + classes + '" data-id="' + s.id + '" tabindex="0" aria-label="' + qaLabel + '" onclick="onCardClick(\'' + s.id + '\', event)" onkeydown="onCardKeydown(event)">';
   html += renderToolBadges(s.tool, s);
   html += '<span class="qa-question">' + escHtml(getSessionDisplayName(s).slice(0, 160)) + '</span>';
   html += '<span class="qa-meta">';
@@ -2154,7 +2190,7 @@ function renderLauncherCard(projKey, projInfo) {
         'aria-label="' + escHtml(recloneAria) + '">↓ Re-clone</button>';
     }
     if (projInfo.manualId) {
-      missingActions += '<button class="git-project-launch-btn" data-proj-id="' + escHtml(projInfo.manualId) + '" data-proj-name="' + escHtml(projName) + '" onclick="unregisterProject(this.dataset.projId,this.dataset.projName)" title="Remove from registry (does not delete files)" aria-label="Remove ' + escHtml(projName) + ' from the list">× Remove</button>';
+      missingActions += '<button class="git-project-launch-btn remove-btn" data-proj-id="' + escHtml(projInfo.manualId) + '" data-proj-name="' + escHtml(projName) + '" onclick="unregisterProject(this.dataset.projId,this.dataset.projName)" title="Remove from registry (does not delete files)" aria-label="Remove ' + escHtml(projName) + ' from the list">× Remove</button>';
     }
     if (missingActions) html += '<div class="launcher-card-actions">' + missingActions + '</div>';
     // Keep History drill-in available even when the folder is gone (sessions
@@ -2165,6 +2201,7 @@ function renderLauncherCard(projKey, projInfo) {
     html += '</div>';
     return html;
   }
+  html += '<div class="launcher-card-actions">';
   if (canLaunch && preferredTool) {
     var newAria = 'Start new ' + agentLabel(preferredTool) + ' session in ' + projName;
     var pickerAria = 'Pick a different agent for ' + projName;
@@ -2211,7 +2248,7 @@ function renderLauncherCard(projKey, projInfo) {
       '</select>';
   }
   if (projInfo.manualId) {
-    html += '<button class="git-project-launch-btn" data-proj-id="' + escHtml(projInfo.manualId) + '" data-proj-name="' + escHtml(projName) + '" onclick="unregisterProject(this.dataset.projId,this.dataset.projName)" title="Remove from registry (does not delete files)">&times;</button>';
+    html += '<button class="git-project-launch-btn remove-btn" data-proj-id="' + escHtml(projInfo.manualId) + '" data-proj-name="' + escHtml(projName) + '" onclick="unregisterProject(this.dataset.projId,this.dataset.projName)" title="Remove from registry (does not delete files)" aria-label="Remove ' + escHtml(projName) + ' from the list">&times;</button>';
   }
   html += '</div>';
 
@@ -3423,7 +3460,7 @@ function _renderSettingsIntegrations() {
   html += '<p style="font-size:12px;color:var(--text-muted);margin:0 0 12px">OpenAI-compatible API for session title generation</p>';
   html += '<div style="display:flex;flex-direction:column;gap:8px">';
   html += '<input type="text" id="llmUrl" class="settings-select" placeholder="http://host:port/v1">';
-  html += '<input type="password" id="llmApiKey" class="settings-select" placeholder="API Key (sk-...)">';
+  html += '<input type="password" id="llmApiKey" class="settings-select" placeholder="API Key (sk-...)" autocomplete="new-password" aria-label="LLM API key">';
   html += '<input type="text" id="llmModel" class="settings-select" placeholder="Model (gpt-4o-mini)">';
   html += '</div>';
   html += '<div style="display:flex;gap:8px;margin-top:12px">';
@@ -4017,22 +4054,41 @@ let _modalTrapFn = null;
 // keyboard users can't accidentally tab onto the page behind the overlay.
 function _installModalFocusTrap(overlay) {
   if (!overlay) return;
-  _modalFocusReturn = document.activeElement;
+  // Re-installing (e.g. openDetail while the panel is already open) must drop
+  // the previous listener — an orphaned capture-phase trap would swallow
+  // every Escape for the rest of the session. Keep the original return target.
+  if (_modalTrapFn) {
+    document.removeEventListener('keydown', _modalTrapFn, true);
+    _modalTrapFn = null;
+  } else {
+    _modalFocusReturn = document.activeElement;
+  }
   var focusableSel = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
-  var nodes = Array.from(overlay.querySelectorAll(focusableSel))
-    .filter(function(el) { return !el.disabled && el.offsetParent !== null; });
-  if (nodes.length === 0) return;
-  var first = nodes[0];
-  var last = nodes[nodes.length - 1];
+  function focusables() {
+    return Array.from(overlay.querySelectorAll(focusableSel))
+      .filter(function(el) { return !el.disabled && el.offsetParent !== null; });
+  }
+  var initial = focusables();
+  if (initial.length === 0) return;
   _modalTrapFn = function(e) {
     if (e.key === 'Escape') {
+      // A confirm dialog stacked on top (e.g. Delete from the detail panel)
+      // gets this Escape first — let the global handler close it instead.
+      var confirmOverlay = document.getElementById('confirmOverlay');
+      if (confirmOverlay && confirmOverlay.style.display === 'flex' && !overlay.contains(confirmOverlay)) return;
       e.stopPropagation();
-      // Both modals route close through the same callback chain.
+      // All three modals route close through the same callback chain.
       if (overlay.id === 'projectsSettingsOverlay') closeProjectsSettings();
       else if (overlay.id === 'addProjectOverlay' && typeof closeAddProject === 'function') closeAddProject();
+      else if (overlay.id === 'detailPanel' && typeof closeDetail === 'function') closeDetail();
       return;
     }
     if (e.key !== 'Tab') return;
+    // Recomputed per Tab: messages load into the panel after it opens.
+    var nodes = focusables();
+    if (nodes.length === 0) return;
+    var first = nodes[0];
+    var last = nodes[nodes.length - 1];
     if (e.shiftKey && document.activeElement === first) {
       e.preventDefault();
       last.focus();
@@ -4042,7 +4098,7 @@ function _installModalFocusTrap(overlay) {
     }
   };
   document.addEventListener('keydown', _modalTrapFn, true);
-  setTimeout(function() { try { first.focus(); } catch (e) {} }, 0);
+  setTimeout(function() { try { initial[0].focus(); } catch (e) {} }, 0);
 }
 
 function _uninstallModalFocusTrap() {
@@ -4050,7 +4106,12 @@ function _uninstallModalFocusTrap() {
     document.removeEventListener('keydown', _modalTrapFn, true);
     _modalTrapFn = null;
   }
-  if (_modalFocusReturn && _modalFocusReturn.focus) {
+  // A background poll/re-render (e.g. the 5s active-sessions refresh) can
+  // rebuild the session grid while the modal was open, detaching the node we
+  // captured. Focusing a detached element is a silent no-op that strands
+  // focus wherever it happened to be (often the modal's own now-hidden close
+  // button) — check it's still on the page first.
+  if (_modalFocusReturn && _modalFocusReturn.focus && document.body.contains(_modalFocusReturn)) {
     try { _modalFocusReturn.focus(); } catch (e) {}
   }
   _modalFocusReturn = null;
@@ -4313,7 +4374,14 @@ function closeAddProject() {
 function addProjectSwitchTab(tab) {
   ['local', 'owned', 'contributing'].forEach(function(t) {
     var btn = document.querySelector('.ap-tab[data-tab="' + t + '"]');
-    if (btn) btn.classList.toggle('active', t === tab);
+    if (!btn) return;
+    var isActive = t === tab;
+    btn.classList.toggle('active', isActive);
+    // WAI-ARIA tab pattern: aria-selected + roving tabindex must track the
+    // active tab, not just the visual .active class — otherwise a screen
+    // reader keeps announcing the first tab as selected forever.
+    btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    btn.setAttribute('tabindex', isActive ? '0' : '-1');
   });
   document.getElementById('apPaneLocal').style.display = tab === 'local' ? '' : 'none';
   document.getElementById('apPaneOwned').style.display = tab === 'owned' ? '' : 'none';
@@ -4326,6 +4394,28 @@ function addProjectSwitchTab(tab) {
     if (!_githubReposCache[apiType]) loadGithubRepos(apiType);
     else renderRepoList(apiType);
   }
+}
+
+// Left/Right cycle between the three Add Project tabs, Home/End jump to ends
+// — same WAI-ARIA tablist behavior as the Projects/History subtab strip
+// (onProjectsSubtabKey). Wired via the tablist's onkeydown in index.html.
+var AP_TAB_ORDER = ['local', 'owned', 'contributing'];
+function onAddProjectTabKey(e) {
+  var k = e.key;
+  if (k !== 'ArrowLeft' && k !== 'ArrowRight' && k !== 'Home' && k !== 'End') return;
+  e.preventDefault();
+  var current = document.querySelector('.ap-tab.active');
+  var idx = current ? AP_TAB_ORDER.indexOf(current.getAttribute('data-tab')) : 0;
+  if (idx < 0) idx = 0;
+  var next;
+  if (k === 'Home') next = 0;
+  else if (k === 'End') next = AP_TAB_ORDER.length - 1;
+  else if (k === 'ArrowRight') next = (idx + 1) % AP_TAB_ORDER.length;
+  else next = (idx - 1 + AP_TAB_ORDER.length) % AP_TAB_ORDER.length;
+  var nextTab = AP_TAB_ORDER[next];
+  addProjectSwitchTab(nextTab);
+  var btn = document.querySelector('.ap-tab[data-tab="' + nextTab + '"]');
+  if (btn) btn.focus();
 }
 
 async function submitAddLocalProject() {

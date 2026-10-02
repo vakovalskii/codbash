@@ -690,8 +690,11 @@ function startServer(host, port, openBrowser = true) {
     else if (req.method === 'GET' && pathname === '/api/search') {
       const q = parsed.searchParams.get('q') || '';
       const sessions = loadSessions();
-      const results = searchFullText(q, sessions);
-      json(res, results);
+      // searchFullText is async: the index build yields to the event loop
+      // between chunks so a cold rebuild can't stall the terminal WebSocket.
+      searchFullText(q, sessions)
+        .then(results => json(res, results))
+        .catch(e => json(res, { error: e.message }, 500));
     }
 
     // ── Session cost ──────────────────────
@@ -726,15 +729,30 @@ function startServer(host, port, openBrowser = true) {
 
     // ── LLM Config ────────────────────────────
     else if (req.method === 'GET' && pathname === '/api/llm-config') {
+      // Never vend the raw API key to the browser (same rule as
+      // /api/github/profile) — it would sit unmasked in every network
+      // response and devtools log. The frontend only needs to know whether
+      // a key is stored, plus a short hint to identify which one.
       const config = loadLLMConfig();
-      json(res, config);
+      json(res, {
+        model: config.model || '',
+        url: config.url || '',
+        hasKey: !!config.apiKey,
+        keyHint: config.apiKey ? '••••' + String(config.apiKey).slice(-4) : '',
+      });
     }
 
     else if (req.method === 'POST' && pathname === '/api/llm-config') {
       readBody(req, body => {
         try {
           const config = JSON.parse(body);
-          saveLLMConfig(config);
+          // The GET above no longer round-trips the key, so a settings save
+          // with an empty apiKey field means "keep the stored key", not
+          // "clear it" — otherwise every URL/model tweak would wipe the key.
+          // An explicit { clearApiKey: true } removes it.
+          const existing = loadLLMConfig();
+          const apiKey = config.clearApiKey ? '' : (config.apiKey || existing.apiKey || '');
+          saveLLMConfig({ model: config.model, url: config.url, apiKey });
           log('LLM', 'config saved', { model: config.model, url: config.url });
           json(res, { ok: true });
         } catch (e) {
@@ -1959,7 +1977,10 @@ function saveLLMConfig(config) {
     model: config.model || '',
     url: config.url || '',
     apiKey: config.apiKey || '',
-  }, null, 2));
+  }, null, 2), { mode: 0o600 });
+  // writeFileSync's mode only applies when the file is created — tighten an
+  // existing world-readable file from an older version too.
+  try { fs.chmodSync(LLM_CONFIG_FILE, 0o600); } catch {}
 }
 
 function callLLM(config, conversation, totalMessages) {

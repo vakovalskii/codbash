@@ -695,7 +695,7 @@ body[data-view="overview"] .toolbar { display: none; }
     box-shadow: 0 0 0 1px var(--accent-blue);
 }
 
-.card.focused {
+.card.focused, .card:focus-visible {
     outline: 2px solid var(--accent-blue);
     outline-offset: 2px;
 }
@@ -949,6 +949,7 @@ body[data-view="overview"] .toolbar { display: none; }
     z-index: 50;
 }
 .calendar-popup.open { display: block; }
+.calendar-popup:focus { outline: none; } /* dialog container itself isn't the visible target — the first day/nav control is */
 
 .cal-header {
     display: flex;
@@ -987,8 +988,10 @@ body[data-view="overview"] .toolbar { display: none; }
     cursor: pointer;
     color: var(--text-secondary);
     transition: all 0.1s;
+    background: none; border: none; font-family: inherit; width: 100%;
 }
 .cal-day:hover { background: rgba(255,255,255,0.08); color: var(--text-primary); }
+.cal-day:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: -1px; }
 .cal-day.other-month { color: var(--text-muted); opacity: 0.3; }
 .cal-day.today { font-weight: 700; color: var(--accent-blue); }
 .cal-day.in-range { background: rgba(96,165,250,0.1); }
@@ -2225,6 +2228,7 @@ body[data-view="overview"] .toolbar { display: none; }
 .qa-item:last-child { border-bottom: none; }
 .qa-item:hover { background: var(--bg-card-hover); }
 .qa-item.selected { background: rgba(96, 165, 250, 0.08); }
+.qa-item:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: -2px; }
 
 .qa-question {
     flex: 1;
@@ -3074,33 +3078,84 @@ body[data-view="overview"] .toolbar { display: none; }
 .ws-running-tree {
     margin: 8px 8px 4px; padding-top: 8px; border-top: 1px solid var(--border);
 }
+.ws-run-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 6px;
+    padding: 0 8px 4px;
+}
 .ws-run-title {
     font-size: 10px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase;
-    color: var(--text-muted); padding: 0 8px 4px;
+    color: var(--text-muted);
 }
-.ws-run-proj {
+/* Compact 2-way segmented control — the "grouping" setting the user toggles
+   inline instead of hunting for it in a settings dialog. */
+.ws-run-mode {
+    display: inline-flex; border: 1px solid var(--border); border-radius: 5px; overflow: hidden; flex-shrink: 0;
+}
+.ws-run-mode-btn {
+    font-size: 9px; font-weight: 600; letter-spacing: 0.02em; line-height: 1;
+    padding: 3px 6px; background: transparent; color: var(--text-muted);
+    border: none; cursor: pointer;
+}
+.ws-run-mode-btn + .ws-run-mode-btn { border-left: 1px solid var(--border); }
+.ws-run-mode-btn:hover { color: var(--text-primary); background: rgba(255,255,255,0.05); }
+.ws-run-mode-btn.active { color: #fff; background: var(--accent-blue); }
+/* Accordion wrapper for one L1 group + its body. Collapsed by default (see
+   _wsRunExpanded) — .ws-run-l1-body is hidden until the header is clicked. */
+.ws-run-group + .ws-run-group { margin-top: 1px; }
+.ws-run-l1-body { display: block; }
+.ws-run-group.collapsed .ws-run-l1-body { display: none; }
+.ws-run-l1-chevron {
+    font-size: 8px; color: var(--text-muted); flex-shrink: 0;
+    transition: transform 0.15s; transform: rotate(90deg); /* expanded: pointing down */
+}
+.ws-run-group.collapsed .ws-run-l1-chevron { transform: rotate(0deg); } /* collapsed: pointing right */
+/* Level 1 — outer group (project, or agent kind in agent-mode). */
+.ws-run-l1 {
     display: flex; align-items: center; gap: 6px; padding: 4px 8px;
     font-size: 12px; color: var(--text-primary); cursor: pointer; border-radius: 6px;
 }
-.ws-run-proj:hover { background: rgba(255,255,255,0.06); }
+.ws-run-l1:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: -2px; }
+.ws-run-l1:hover { background: rgba(255,255,255,0.06); }
 .ws-run-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-green); flex-shrink: 0; }
 .ws-run-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: Menlo, Monaco, monospace; }
 .ws-run-count {
     font-size: 10px; color: var(--text-muted); background: var(--bg-hover);
     border-radius: 8px; padding: 0 6px; min-width: 16px; text-align: center;
 }
-.ws-run-term {
-    position: relative;
-    padding: 2px 8px 2px 22px; font-size: 11px; color: var(--text-secondary);
+/* Level 2 — inner group (agent kind, or project in agent-mode). Neutral green
+   dot while it holds 2+ sessions (a real subheader); collapses to the leaf's
+   own color (.ws-run-leaf) when it holds exactly one, so a single running
+   instance doesn't get a redundant extra row underneath it. */
+.ws-run-l2 {
+    display: flex; align-items: center; gap: 6px; padding: 3px 8px 3px 20px;
+    font-size: 11px; color: var(--text-secondary); cursor: pointer; border-radius: 6px;
+}
+.ws-run-l2:hover { background: rgba(255,255,255,0.05); color: var(--text-primary); }
+.ws-run-l2-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent-green); flex-shrink: 0; }
+.ws-run-l2-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Level 3 — one row per individual running session. Also reused by .ws-run-l2
+   when it collapses to a single-session leaf. Dot color is the terminal-type
+   legend: orange = external native terminal (default), blue = inside codbash. */
+.ws-run-l3, .ws-run-l2.ws-run-leaf .ws-run-l2-dot { position: relative; }
+.ws-run-l3 {
+    padding: 2px 8px 2px 32px; font-size: 10.5px; color: var(--text-secondary);
     cursor: pointer; border-radius: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.ws-run-term::before {
-    content: ''; position: absolute; left: 11px; top: 50%; transform: translateY(-50%);
-    width: 5px; height: 5px; border-radius: 50%; background: var(--accent-green);
+.ws-run-l3::before {
+    content: ''; position: absolute; left: 21px; top: 50%; transform: translateY(-50%);
+    width: 5px; height: 5px; border-radius: 50%; background: var(--accent-orange, #f59e0b);
 }
-.ws-run-term.ws-run-idle { color: var(--text-muted); }
-.ws-run-term.ws-run-idle::before { background: var(--text-muted); }
-.ws-run-term:hover { background: rgba(255,255,255,0.05); color: var(--text-primary); }
+.ws-run-l3.ws-run-local::before { background: var(--accent-blue); }
+.ws-run-l3:hover { background: rgba(255,255,255,0.05); color: var(--text-primary); }
+.ws-run-l2.ws-run-leaf .ws-run-l2-dot { background: var(--accent-orange, #f59e0b); }
+.ws-run-l2.ws-run-leaf.ws-run-local .ws-run-l2-dot { background: var(--accent-blue); }
+/* Idle (waiting for input, still a live process — not "gone") always wins over
+   the terminal-type color so a dimmed dot reliably means "idle", not a second
+   meaning collision with local/external. */
+.ws-run-l3.ws-run-idle,
+.ws-run-l2.ws-run-leaf.ws-run-idle { color: var(--text-muted); }
+.ws-run-l3.ws-run-idle::before,
+.ws-run-l2.ws-run-leaf.ws-run-idle .ws-run-l2-dot { background: var(--text-muted); }
 
 /* In-app prompt (codbashPrompt) — replaces window.prompt (no-op in Electron). */
 .cb-prompt-overlay {
@@ -3177,8 +3232,10 @@ body[data-view="overview"] .toolbar { display: none; }
     display: flex; flex-direction: column; gap: 6px; text-align: left;
     padding: 14px; background: var(--bg-card); border: 1px solid var(--border);
     border-radius: 12px; cursor: pointer; transition: border-color 0.15s;
+    font: inherit; width: 100%;
 }
 .ov-card:hover { border-color: var(--accent-blue); }
+.ov-card:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 2px; }
 .ov-card.limit { border-color: var(--accent-red); }
 .ov-card-top { display: flex; align-items: center; gap: 8px; }
 .ov-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); }
@@ -3297,6 +3354,8 @@ body[data-view="overview"] .toolbar { display: none; }
 .ws-resizer-h::before { left: 0; right: 0; top: 50%; height: 2px; transform: translateY(-50%); }
 .ws-resizer:hover::before, .ws-resizer.dragging::before { background: var(--accent-blue); }
 .ws-resizer.dragging::before { box-shadow: 0 0 8px color-mix(in srgb, var(--accent-blue) 60%, transparent); }
+.ws-resizer:focus-visible::before { background: var(--accent-blue); box-shadow: 0 0 8px color-mix(in srgb, var(--accent-blue) 60%, transparent); }
+.ws-resizer:focus-visible { outline: none; } /* the ::before line itself is the focus indicator */
 
 .ws-pane {
     display: flex;
@@ -4417,7 +4476,7 @@ body[data-view="overview"] .toolbar { display: none; }
     border-color: var(--accent-blue);
 }
 
-.list-row.focused {
+.list-row.focused, .list-row:focus-visible {
     outline: 2px solid var(--accent-blue);
     outline-offset: -2px;
 }
@@ -4650,14 +4709,28 @@ body[data-view="overview"] .toolbar { display: none; }
 [data-theme="light"] .launcher-card-actions .split-btn .new-btn {
     border-right-color: rgba(0, 0, 0, 0.2);
 }
-.launcher-card-actions button.git-project-launch-btn {
+.launcher-card-actions .git-project-launch-btn {
     margin: 0;
     padding: 6px 12px;
     font-size: 12px;
 }
-.launcher-card-actions button.git-project-launch-btn:focus-visible {
+.launcher-card-actions .git-project-launch-btn:focus-visible {
     outline: 2px solid var(--accent-blue);
     outline-offset: 2px;
+}
+.launcher-card-actions select.git-project-launch-btn {
+    padding-right: 8px;
+}
+/* Remove is destructive-but-rare — push it to the end of the row and keep it
+   visually quiet so it doesn't compete with the launch/resume actions. */
+.launcher-card-actions .remove-btn {
+    margin-left: auto;
+    color: var(--text-muted);
+    padding: 6px 9px;
+}
+.launcher-card-actions .remove-btn:hover {
+    color: var(--accent-red, #f87171);
+    border-color: var(--accent-red, #f87171);
 }
 .launcher-card-link {
     margin-top: auto;

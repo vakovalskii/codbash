@@ -102,6 +102,10 @@ async function openDetail(s) {
 
   panel.classList.add('open');
   overlay.classList.add('open');
+  // Detail is a real dialog (role="dialog" aria-modal, index.html) — trap Tab
+  // inside it and return focus to whatever opened it on close, same helper
+  // the Add Project / Projects Settings modals use.
+  if (typeof _installModalFocusTrap === 'function') _installModalFocusTrap(panel);
 
   // Load messages
   if (s.has_detail) {
@@ -194,8 +198,10 @@ async function openDetail(s) {
 function closeDetail() {
   var panel = document.getElementById('detailPanel');
   var overlay = document.getElementById('overlay');
-  if (panel) panel.classList.remove('open');
+  if (!panel || !panel.classList.contains('open')) return; // already closed — don't steal focus back a 2nd time
+  panel.classList.remove('open');
   if (overlay) overlay.classList.remove('open');
+  if (typeof _uninstallModalFocusTrap === 'function') _uninstallModalFocusTrap();
 }
 
 var structuredMessageRenderers = {

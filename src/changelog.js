@@ -2,6 +2,21 @@
 
 const CHANGELOG = [
   {
+    version: '7.18.0',
+    date: '2026-10-02',
+    title: 'One Running-agents tree, no more search/poll freezes, accessibility & security fixes',
+    changes: [
+      'Running agents now lists every agent that is actually running — the ones inside codbash\'s own terminal panes as well as the ones in external terminals (iTerm, Terminal.app, Warp, cmux). Previously an agent running in an in-app pane vanished from the tree, so a project with both showed only half the picture. Rows are colored by where they run and grouped project → agent → session (switchable to agent → project → session), with top-level groups collapsed by default. Thanks @NovakPAai',
+      'Fixed the Projects launcher cards: an unbalanced tag left every button and dropdown stretched to full card width on its own row instead of a compact action row. Thanks @NovakPAai',
+      'Accessibility: calendar days, session cards and Add-project tabs are now reachable and operable from the keyboard, dialogs close on Escape and return focus where you left it, and screen readers announce the selected tab and day correctly. Thanks @NovakPAai',
+      'Security: your LLM API key is no longer sent back to the browser when Settings loads — the dashboard now shows only a masked hint of the stored key. Saving other settings keeps the key; clearing it is now an explicit action. Thanks @NovakPAai',
+      'Performance: searching no longer freezes the app. Building the search index re-read every session in one synchronous burst — a multi-second stall that also froze the terminal; it now works in small chunks and streams large transcripts instead of loading them whole. Thanks @NovakPAai',
+      'The GitHub connect dialog is now keyboard-navigable and announces failures instead of silently waiting: network errors during authorization used to be swallowed, leaving "Waiting for authorization…" on screen with nothing happening. Thanks @NovakPAai',
+      'Performance: the 5-second running-agents poll no longer stalls the app — a blocking lsof lookup for Qwen sessions ran right on the server loop and froze terminal typing while it ran; it now runs in the background and is cached',
+      'Desktop app: launching from Finder/Dock no longer crashes with "spawn node ENOENT" on machines where Node is installed only through nvm — the app now finds nvm\'s default Node (and Volta/~/.local installs) and shows a clear dialog if no Node is found at all. Thanks @dapsychyoo',
+    ],
+  },
+  {
     version: '7.17.0',
     date: '2026-07-30',
     title: 'Name your terminals — and dimmed text is readable again',

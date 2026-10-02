@@ -170,10 +170,14 @@ switch (command) {
       process.exit(1);
     }
     const sessions = loadSessions();
-    const results = searchFullText(query, sessions);
-    if (results.length === 0) {
-      console.log(`\n  No results for "${query}"\n`);
-    } else {
+    // searchFullText is async (the index build yields between chunks). This
+    // switch is top-level CJS, so no top-level await — run it in an IIFE.
+    (async () => {
+      const results = await searchFullText(query, sessions);
+      if (results.length === 0) {
+        console.log(`\n  No results for "${query}"\n`);
+        return;
+      }
       console.log(`\n  \x1b[36m\x1b[1m${results.length} sessions\x1b[0m matching "${query}"\n`);
       for (const r of results.slice(0, 15)) {
         const s = sessions.find(x => x.id === r.sessionId);
@@ -188,7 +192,10 @@ switch (command) {
       }
       if (results.length > 15) console.log(`\n  \x1b[2m... and ${results.length - 15} more\x1b[0m`);
       console.log('');
-    }
+    })().catch(e => {
+      console.error(`  Search failed: ${e.message}`);
+      process.exit(1);
+    });
     break;
   }
 
