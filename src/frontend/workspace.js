@@ -314,9 +314,20 @@ function _wsRunGroupKeydown(ev, rowEl) {
 // Find a live (connected, not exited) Workspace pane whose shell sits in `cwd`.
 // Used to make an agent tagged `local:true` (running inside a codbash pty)
 // clickable — jump straight to its tab/pane instead of the external-focus path.
-function _wsFindLivePaneForCwd(cwd) {
-  if (!cwd || typeof _wsAllPanes !== 'function') return null;
+// `ptyPid` (the pane shell the agent descends from, set by the server) wins:
+// with two agents in the same project, cwd alone would send both rows to the
+// first pane. cwd is only the fallback when the pid isn't known.
+function _wsFindLivePaneForCwd(cwd, ptyPid) {
+  if (typeof _wsAllPanes !== 'function') return null;
   var all = _wsAllPanes();
+  var n = typeof ptyPid === 'number' ? ptyPid : parseInt(ptyPid, 10);
+  if (Number.isInteger(n) && n > 0) {
+    for (var j = 0; j < all.length; j++) {
+      var y = all[j];
+      if (y.pane && !y.pane.exited && y.pane.pid === n) return y;
+    }
+  }
+  if (!cwd) return null;
   for (var i = 0; i < all.length; i++) {
     var x = all[i];
     if (x.pane && !x.pane.exited && x.pane.cwd === cwd) return x;
@@ -344,7 +355,7 @@ function _wsGroupBy(items, keyFn) {
 function _wsSessionLeafLabel(x) {
   var a = x.agent;
   if (a.local) {
-    var hit = _wsFindLivePaneForCwd(x.cwd);
+    var hit = _wsFindLivePaneForCwd(x.cwd, a.ptyPid);
     if (hit && hit.pane && hit.pane.name) return hit.pane.name;
   }
   if (a.sessionId) return a.sessionId.slice(0, 8);
@@ -415,9 +426,9 @@ function _wsPidArg(pid) {
 //     session cards' "Focus Terminal" uses). We deliberately do NOT open a blank
 //     in-app terminal as a stand-in: an empty shell is not the agent, and
 //     resuming (claude --continue) would spawn a SECOND instance of a live agent.
-function jumpToRunningAgent(cwd, sessionId, kind, pid, local) {
+function jumpToRunningAgent(cwd, sessionId, kind, pid, local, ptyPid) {
   if (local) {
-    var hit = _wsFindLivePaneForCwd(cwd);
+    var hit = _wsFindLivePaneForCwd(cwd, ptyPid);
     if (hit) { jumpToWorkspacePane(hit.tab.id, hit.pane.id); return; }
     // The agent is tagged local but we can't find its pane (e.g. a stale tag
     // right after a tab closed) — land on Workspace rather than doing nothing.
@@ -452,7 +463,7 @@ function jumpToRunningAgent(cwd, sessionId, kind, pid, local) {
 function _wsRunJumpAttr(x) {
   var a = x.agent;
   return 'jumpToRunningAgent(' + _wsJsStr(x.cwd) + ',' + _wsJsStr(a.sessionId || '') + ',' +
-    _wsJsStr(x.kind || '') + ',' + _wsPidArg(a.pid) + ',' + (a.local === true) + ')';
+    _wsJsStr(x.kind || '') + ',' + _wsPidArg(a.pid) + ',' + (a.local === true) + ',' + _wsPidArg(a.ptyPid) + ')';
 }
 
 // Render a compact 3-level accordion tree at the bottom of the sidebar: outer

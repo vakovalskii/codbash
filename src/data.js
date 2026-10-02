@@ -6209,8 +6209,8 @@ async function getActiveSessions() {
   // Tag each live agent with `local`: true when its process tree descends from
   // a codbash browser-pty pane, false when it runs in an EXTERNAL native
   // terminal (iTerm/Terminal.app/Warp/cmux…). Nothing is dropped — the Workspace
-  // "Running agents" tree shows the external ones (they have no other UI home),
-  // while codbash panes are already visible as tabs. See
+  // "Running agents" tree shows both: local rows jump to their pane (matched by
+  // `ptyPid`), external rows raise the real window via /api/focus. See
   // docs/design/running-agents-external.md.
   return await _tagCodbashAgents(Array.from(deduped.values()));
 }
@@ -6219,6 +6219,9 @@ async function getActiveSessions() {
 // `local=true` iff walking its pid→ppid chain reaches a live codbash-pty pid
 // in `live` (Set<number>); otherwise `local=false` (external terminal). Never
 // mutates inputs; the walk is depth-bounded so a ppid cycle can't hang.
+// A local agent also carries `ptyPid` — the codbash pane shell it descends
+// from — so the frontend can jump to that exact pane even when several panes
+// share one cwd.
 function _tagLocalAgents(active, live, ppidOf) {
   return active.map(a => {
     let pid = a.pid, depth = 0, local = false;
@@ -6227,7 +6230,7 @@ function _tagLocalAgents(active, live, ppidOf) {
       pid = ppidOf.get(pid);
       depth++;
     }
-    return { ...a, local };
+    return local ? { ...a, local, ptyPid: pid } : { ...a, local };
   });
 }
 
