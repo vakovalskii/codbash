@@ -4951,9 +4951,11 @@ async function _searchTextsFromJsonlStreaming(file, format) {
 // an oversized JSONL transcript can be streamed with yields rather than
 // slurped in one blocking read.
 async function _indexSession(s) {
-  const found = findSessionFile(s.id, s.project);
-  if (!found) return null;
   try {
+    // Inside the try: findSessionFile walks agent dirs with readdirSync and
+    // can throw; one unreadable dir must skip a session, not fail the build.
+    const found = findSessionFile(s.id, s.project);
+    if (!found) return null;
     const loader = SEARCH_DETAIL_LOADERS[found.format];
     let texts;
     if (loader) {
@@ -5029,7 +5031,13 @@ function _rebuildSearchIndex(sessions) {
 // and even that now yields between chunks rather than blocking outright.
 async function getSearchIndex(sessions) {
   if (!searchIndex) return await _rebuildSearchIndex(sessions);
-  if ((Date.now() - searchIndexBuiltAt) > INDEX_TTL) _rebuildSearchIndex(sessions);
+  if ((Date.now() - searchIndexBuiltAt) > INDEX_TTL) {
+    // Fire-and-forget: an unhandled rejection here would kill the process
+    // (Node 15+). Keep serving the stale index; the next search retries.
+    _rebuildSearchIndex(sessions).catch(e => {
+      console.error('  Search index rebuild failed:', e && e.message);
+    });
+  }
   return searchIndex;
 }
 
